@@ -1,0 +1,20 @@
+{
+  "name": "@undrift/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Core contract extraction, matching and drift detection engine for UNDRIFT.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"Core tests not configured yet\"",
+    "lint": "echo \"Core lint not configured yet\""
+  },
+  "dependencies": {
+    "ts-morph": "^27.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "undrift-vscode",
+  "displayName": "UNDRIFT",
+  "description": "Live frontend-backend API contract drift detection inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "undrift",
+  "engines": {
+    "vscode": ">=1.100.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "undrift.scanWorkspace",
+        "title": "UNDRIFT: Scan Workspace"
+      },
+      {
+        "command": "undrift.showReport",
+        "title": "UNDRIFT: Show Integration Report"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "undrift.integrationView",
+          "name": "UNDRIFT"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --format=cjs --outfile=dist/extension.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"Extension tests not configured yet\"",
+    "lint": "echo \"Extension lint not configured yet\""
+  },
+  "dependencies": {
+    "@undrift/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.2"
+  }
+}
