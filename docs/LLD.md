@@ -1,219 +1,207 @@
 # UNDRIFT — Low-Level Design (LLD)
 
-**Document:** LLD.md  
-**Project:** UNDRIFT  
-**Version:** 0.1 — Hackathon MVP  
-**Status:** Implementation-level design  
-**Primary Runtime:** Node.js + TypeScript  
-**Primary IDE:** VS Code  
-**Primary Supported Stack:** React + TypeScript + Node.js/Express + TypeScript  
-**Optional Database Awareness:** Prisma schema
+**Document:** `LLD.md`  
+**Version:** 1.0-draft  
+**Status:** Implementation design for review  
+**Date:** 2026-10-15  
+**Project:** UNDRIFT — personal developer-tool project  
+**Primary interface:** VS Code extension  
+**Parser architecture:** Tree-sitter syntax layer + pluggable language/framework analyzers  
+**Related documents:** `PRD.md`, `TRD.md`, `HLD.md`  
+**Supersedes:** Earlier hackathon-oriented LLD and compiler-centric assumptions
 
 ---
 
-# 1. Purpose
+## 1. Purpose
 
-This document defines the low-level implementation design for UNDRIFT.
+This document converts the current UNDRIFT PRD, TRD, and HLD into concrete implementation boundaries: package responsibilities, domain models, interfaces, analysis stages, matching/detection behavior, fix proposal semantics, extension responsibilities, error handling, and test requirements.
 
-The LLD translates the PRD, TRD, and HLD into concrete implementation units including:
-
-- package and module responsibilities;
-- domain interfaces and types;
-- source extraction strategies;
-- AST traversal behavior;
-- contract normalization;
-- route and schema matching;
-- drift rules;
-- state transitions;
-- fix proposal representation;
-- VS Code provider behavior;
-- live analysis orchestration;
-- caching;
-- error handling;
-- testing fixtures;
-- implementation sequencing.
-
-The LLD is intentionally implementation-oriented. Exact code may evolve during the hackathon, but the module boundaries and domain contracts should remain stable unless a technical issue requires redesign.
-
----
-
-# 2. Implementation Boundary
-
-UNDRIFT is composed of three executable/application surfaces:
+The central implementation loop is:
 
 ```text
-apps/
-├── vscode-extension
-└── cli
-
-packages/
-└── core
+SOURCE SNAPSHOT
+      ↓
+PARSE → EXTRACT → RESOLVE SUPPORTED REFERENCES
+      ↓
+NORMALIZE → MATCH → DETECT
+      ↓
+EXPLAIN → PROPOSE → REVIEW/APPLY
+      ↓
+RE-ANALYZE → VERIFY
 ```
 
-The dependency direction is:
+The first vertical slice targets supported JavaScript/TypeScript frontend calls—including JSX/TSX projects—and Node.js/Express backend routes. The design keeps the analysis core independent of VS Code and of any individual programming-language compiler API.
 
-```text
-                    ┌────────────────────┐
-                    │    @undrift/core   │
-                    └─────────┬──────────┘
-                              │
-                  ┌───────────┴───────────┐
-                  │                       │
-                  ▼                       ▼
-        VS Code Extension               CLI
-```
+This is a concrete implementation plan, not a claim that every difficult static-analysis case has been solved. In particular, the Tree-sitter binding, the amount of TypeScript semantic resolution required, and the achievable incremental-analysis performance remain proof-of-concept gates identified in the TRD.
 
-The extension and CLI consume Core.
+### 1.1 Authority and alignment
 
-Core never imports VS Code-specific APIs.
+- **PRD:** Product vision, user needs, first release boundaries, expected developer workflow, and product acceptance outcomes.
+- **TRD:** Selected stack, technical constraints, architecture-level decisions, initial supported ecosystem, and proof-of-concept gates.
+- **HLD:** Logical components, data flow, runtime flows, and component responsibilities.
+- **LLD:** Concrete domain types, ports/interfaces, algorithms, state transitions, module organization, and test cases.
+
+If an old scaffold or previous LLD conflicts with these documents, the current PRD/TRD/HLD sequence takes precedence. Do not carry forward the former compiler-first parsing design, hackathon-specific assumptions, or a CLI requirement merely because an earlier scaffold contained them.
+
+### 1.2 Requirement language
+
+**MUST** denotes a required behavior for the described implementation. **SHOULD** denotes a preferred behavior that may be adjusted with documented reasoning. **MAY** denotes an optional or later capability. Items marked **POC GATE** require evidence before they are finalized.
 
 ---
 
-# 3. Recommended Package Structure
+## 2. Low-Level Design Principles
+
+1. **Language-neutral core:** contract types, matching, drift classification, explanation data, and fix proposal semantics must not depend on a Tree-sitter object, VS Code API, or TypeScript compiler type.
+2. **Syntax is not semantics:** parsers provide structure and spans; extractors and optional resolvers determine what can be supported from that structure.
+3. **Evidence travels with facts:** extracted values retain the source range, extraction method, evidence strength, and limitations that support them.
+4. **Unknown is not false:** unresolved/dynamic values must not be treated as absent or incompatible by default.
+5. **No false certainty from scope gaps:** a provider with no discovered consumer is “no known consumer in the analyzed scope,” not globally unused.
+6. **Deterministic first:** common route and shape comparisons must not require an LLM, API key, network call, or external service.
+7. **Editor-independent core:** VS Code adapts input/output but does not implement the drift rules.
+8. **Reviewed edits only:** all source modifications go through the editor adapter after explicit user acceptance.
+9. **Verification is analysis-based:** applying an edit is not evidence that a mismatch is repaired; current source must be analyzed again.
+10. **Correctness before incremental cleverness:** use a scoped/full re-analysis whenever dependency invalidation cannot be proven correct.
+11. **Add adapters, not engines:** language and framework support is added by producing the normalized evidence model and reusing the same matching/detection workflow.
+12. **Keep V0 small:** no database, hosted backend, required LLM, Prisma dependency, separate language server, or CLI requirement for the first end-to-end version.
+
+---
+
+## 3. Proposed Repository Organization
+
+The repository should use npm workspaces and a compact package layout. The exact source tree can be simplified during implementation, but the dependency direction below MUST be preserved.
 
 ```text
 undrift/
-│
 ├── apps/
-│   │
-│   ├── vscode-extension/
-│   │   ├── src/
-│   │   │   ├── commands/
-│   │   │   │   ├── analyzeWorkspace.ts
-│   │   │   │   ├── showReport.ts
-│   │   │   │   ├── refresh.ts
-│   │   │   │   └── verifyCurrentFile.ts
-│   │   │   │
-│   │   │   ├── providers/
-│   │   │   │   ├── diagnosticProvider.ts
-│   │   │   │   ├── hoverProvider.ts
-│   │   │   │   ├── codeActionProvider.ts
-│   │   │   │   └── inlineCompletionProvider.ts
-│   │   │   │
-│   │   │   ├── services/
-│   │   │   │   ├── coreService.ts
-│   │   │   │   ├── workspaceService.ts
-│   │   │   │   ├── analysisCoordinator.ts
-│   │   │   │   └── editService.ts
-│   │   │   │
-│   │   │   ├── views/
-│   │   │   │   ├── undriftTreeProvider.ts
-│   │   │   │   └── reportPanel.ts
-│   │   │   │
-│   │   │   ├── utils/
-│   │   │   ├── extension.ts
-│   │   │   └── types.ts
-│   │   │
-│   │   ├── media/
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   │
-│   └── cli/
+│   └── vscode-extension/
 │       ├── src/
+│       │   ├── activation/
 │       │   ├── commands/
-│       │   ├── formatters/
-│       │   └── index.ts
-│       └── package.json
-│
-├── packages/
-│   └── core/
-│       ├── src/
-│       │   ├── contracts/
-│       │   │   ├── contract.ts
-│       │   │   ├── schemas.ts
-│       │   │   ├── field.ts
-│       │   │   └── states.ts
-│       │   │
-│       │   ├── extractors/
-│       │   │   ├── base/
-│       │   │   ├── frontend/
-│       │   │   ├── backend/
-│       │   │   └── prisma/
-│       │   │
-│       │   ├── parser/
-│       │   │   ├── project.ts
-│       │   │   ├── source.ts
-│       │   │   └── typeResolver.ts
-│       │   │
-│       │   ├── normalizer/
-│       │   │   ├── pathNormalizer.ts
-│       │   │   ├── typeNormalizer.ts
-│       │   │   └── schemaNormalizer.ts
-│       │   │
-│       │   ├── matcher/
-│       │   │   ├── routeMatcher.ts
-│       │   │   ├── requestMatcher.ts
-│       │   │   ├── responseMatcher.ts
-│       │   │   ├── fieldMatcher.ts
-│       │   │   └── contractMatcher.ts
-│       │   │
-│       │   ├── graph/
-│       │   │   ├── graph.ts
-│       │   │   ├── nodes.ts
-│       │   │   └── edges.ts
-│       │   │
-│       │   ├── drift/
-│       │   │   ├── drift.ts
-│       │   │   ├── detectors/
-│       │   │   └── severity.ts
-│       │   │
-│       │   ├── fixes/
-│       │   │   ├── fix.ts
-│       │   │   ├── fixBuilder.ts
-│       │   │   └── fixRules.ts
-│       │   │
-│       │   ├── semantic/
-│       │   │   ├── semanticResolver.ts
-│       │   │   └── heuristicResolver.ts
-│       │   │
 │       │   ├── workspace/
-│       │   │   ├── workspaceState.ts
-│       │   │   ├── changeSet.ts
-│       │   │   └── revision.ts
-│       │   │
-│       │   ├── store/
-│       │   │   ├── contractStore.ts
-│       │   │   ├── sourceStore.ts
-│       │   │   └── graphStore.ts
-│       │   │
-│       │   ├── engine/
-│       │   │   ├── engine.ts
-│       │   │   └── coordinator.ts
-│       │   │
-│       │   ├── reporting/
-│       │   │   └── reportBuilder.ts
-│       │   │
-│       │   └── index.ts
-│       │
-│       ├── tests/
+│       │   ├── analysis/
+│       │   ├── diagnostics/
+│       │   ├── providers/
+│       │   ├── views/
+│       │   ├── fixes/
+│       │   ├── logging/
+│       │   └── extension.ts
+│       ├── media/
 │       ├── package.json
 │       └── tsconfig.json
-│
-├── examples/
-│   └── ecommerce-demo/
-│
+├── packages/
+│   ├── core/
+│   │   ├── src/
+│   │   │   ├── domain/
+│   │   │   ├── ports/
+│   │   │   ├── config/
+│   │   │   ├── pipeline/
+│   │   │   ├── normalization/
+│   │   │   ├── matching/
+│   │   │   ├── rules/
+│   │   │   ├── explanations/
+│   │   │   ├── fixes/
+│   │   │   ├── reporting/
+│   │   │   └── index.ts
+│   │   └── package.json
+│   ├── parser-tree-sitter/
+│   │   ├── src/
+│   │   │   ├── runtime/
+│   │   │   ├── grammar-registry/
+│   │   │   ├── syntax-view/
+│   │   │   ├── parser.ts
+│   │   │   └── position-mapping.ts
+│   │   └── package.json
+│   └── analyzer-js-ts/
+│       ├── src/
+│       │   ├── registry/
+│       │   ├── project-index/
+│       │   ├── shared/
+│       │   ├── frontend/
+│       │   ├── backend/
+│       │   ├── shapes/
+│       │   ├── references/
+│       │   └── support-matrix.ts
+│       └── package.json
 ├── tests/
 │   ├── fixtures/
-│   └── scenarios/
-│
+│   ├── scenarios/
+│   ├── golden/
+│   └── extension-host/
+├── examples/
+│   └── api-drift-sample/
 ├── docs/
 ├── package.json
+├── package-lock.json
 └── tsconfig.base.json
 ```
 
-The exact folder names can be simplified during implementation, but the logical module boundaries should be preserved.
+### 3.1 Package responsibilities
+
+| Package | Owns | Must not own |
+|---|---|---|
+| `apps/vscode-extension` | VS Code activation, workspace events, diagnostics, views, commands, accepted edits | Contract comparison rules or parser-specific extraction |
+| `packages/core` | Domain model, pipeline coordination contracts, normalization, matching, drift rules, explanations, fix proposals, reports | VS Code imports or Tree-sitter runtime objects |
+| `packages/parser-tree-sitter` | Tree-sitter binding and grammar lifecycle; syntax-node facade; source position conversion | API contract semantics or drift classification |
+| `packages/analyzer-js-ts` | Supported JavaScript/TypeScript patterns; frontend and Express extraction; local reference/shape extraction | VS Code UI or independent duplicate drift engine |
+| `tests` | Cross-package fixtures, golden outputs, end-to-end scenarios | Production behavior not reachable through supported interfaces |
+
+Package boundaries are logical boundaries first. It is acceptable to keep an analyzer inside the core package temporarily if dependency boundaries and tests stay clear. Do not split packages merely to maximize folder count.
+
+### 3.2 Dependency direction
+
+```text
+apps/vscode-extension
+       │ wires adapters and displays results
+       ▼
+packages/core ◄──────── packages/analyzer-js-ts
+       ▲                           ▲
+       │                           │ consumes SyntaxDocument facade
+       │                           │
+       └──── packages/parser-tree-sitter
+                implements ParserPort
+```
+
+The intended compile-time dependency graph should avoid cycles. The core declares interfaces/ports. The parser package implements the parser port. The language analyzer implements the analyzer port and consumes the parser's binding-neutral syntax facade. The extension composes the concrete implementations and supplies workspace snapshots.
+
+### 3.3 Workspace scripts
+
+The repository should have predictable root scripts equivalent to:
+
+```json
+{
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc --build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:extension": "npm run test:extension --workspace apps/vscode-extension",
+    "lint": "eslint .",
+    "format:check": "prettier --check ."
+  }
+}
+```
+
+This is an illustrative script contract; exact workspace names and build commands must match the final `package.json` files. esbuild bundling MUST remain separate from TypeScript type-checking.
 
 ---
 
-# 4. Domain Model
+## 4. Shared Domain Model
 
-The domain model is the most important shared contract between all Core modules.
+All core contracts below are illustrative canonical types for the LLD. Implementations may refine field names before coding, but must preserve the semantics described here.
 
----
+Domain interfaces MUST be serializable where practical, stable enough for tests, and free of binding-specific or editor-specific objects.
 
-# 5. Primitive Domain Types
+### 4.1 Primitive aliases
 
 ```ts
+export type WorkspaceId = string;
+export type DocumentUri = string;
+export type ObservationId = string;
+export type RelationshipId = string;
+export type FindingId = string;
+export type FixProposalId = string;
+export type RuleId = string;
+
 export type HttpMethod =
   | "GET"
   | "POST"
@@ -224,4046 +212,1681 @@ export type HttpMethod =
   | "HEAD";
 ```
 
-Source location:
+Normalize HTTP methods to this uppercase set when the method is known. Unknown or unsupported method expressions remain unresolved evidence rather than being forced into the union.
+
+### 4.2 Snapshot identity and source ranges
 
 ```ts
-export interface SourceLocation {
-  file: string;
-  startLine: number;
-  startColumn: number;
-  endLine: number;
-  endColumn: number;
+export interface TextRange {
+  /** Absolute UTF-16 code-unit offsets into the exact source snapshot. */
+  start: number;
+  end: number;
+}
+
+export interface Position {
+  /** Zero-based line number. */
+  line: number;
+  /** Zero-based UTF-16 character offset within the line. */
+  character: number;
+}
+
+export interface SourceSpan {
+  uri: DocumentUri;
+  range: TextRange;
+  start: Position;
+  end: Position;
+  /** Optional parser-native byte offsets for internal mapping/debugging. */
+  byteRange?: { start: number; end: number };
+}
+
+export interface SourceSnapshotRef {
+  uri: DocumentUri;
+  contentHash: string;
+  /** Present for editor buffers; absent for disk-only input. */
+  documentVersion?: number;
 }
 ```
 
-Source reference:
+Source positions MUST refer to the exact source snapshot that was parsed. The Tree-sitter layer may report byte offsets; a tested position-mapping layer converts these to UTF-16 offsets and line/character positions used by JavaScript strings and VS Code. Do not pass raw Tree-sitter byte offsets to `WorkspaceEdit` as though they were VS Code positions.
+
+### 4.3 Provenance and evidence
 
 ```ts
-export interface SourceReference {
-  location: SourceLocation;
-  symbol?: string;
-  kind?: string;
+export type EvidenceStrength =
+  | "direct"
+  | "resolved"
+  | "inferred"
+  | "unknown";
+
+export type EvidenceSourceKind =
+  | "literal-syntax"
+  | "explicit-annotation"
+  | "local-declaration"
+  | "imported-declaration"
+  | "framework-convention"
+  | "project-configuration"
+  | "semantic-adapter"
+  | "heuristic";
+
+export interface EvidenceRef {
+  id: string;
+  kind: EvidenceSourceKind;
+  strength: EvidenceStrength;
+  source: SourceSpan;
+  description?: string;
 }
-```
 
----
-
-# 6. Type Representation
-
-Avoid storing raw TypeScript type syntax everywhere.
-
-Use a normalized representation.
-
-```ts
-export type NormalizedType =
+export type ObservedValue<T> =
   | {
-      kind: "primitive";
-      name:
-        | "string"
-        | "number"
-        | "boolean"
-        | "bigint"
-        | "null"
-        | "undefined"
-        | "unknown";
+      state: "known";
+      value: T;
+      strength: Exclude<EvidenceStrength, "unknown">;
+      evidence: EvidenceRef[];
     }
   | {
-      kind: "array";
-      element: NormalizedType;
+      state: "dynamic";
+      expression?: string;
+      reason: string;
+      evidence: EvidenceRef[];
     }
   | {
-      kind: "object";
-      name?: string;
-      fields: Record<string, FieldDefinition>;
-    }
-  | {
-      kind: "union";
-      members: NormalizedType[];
-    }
-  | {
-      kind: "reference";
-      name: string;
-      resolved?: NormalizedType;
-    }
-  | {
-      kind: "unknown";
-      raw?: string;
+      state: "unknown";
+      reason: string;
+      evidence: EvidenceRef[];
     };
 ```
 
-This allows the matcher to compare types without coupling itself to AST syntax.
+The `ObservedValue<T>` union is used when knowledge state matters for a decision. It prevents the analyzer from confusing an unresolved path with a known missing path. It is not necessary to wrap every optional domain property: the wrapper is for a value that was sought but may be unknown or dynamic.
 
----
+Evidence strengths are qualitative classes rather than claims of statistical probability:
 
-# 7. Field Definition
+- `direct`: value is visible in a literal or direct supported construct;
+- `resolved`: value is obtained through a supported local/imported reference or deterministic framework rule;
+- `inferred`: value or relationship depends on a conservative inference;
+- `unknown`: represented as the state of an observation, never as proof that a value is absent.
+
+### 4.4 Source document and analysis request
 
 ```ts
-export interface FieldDefinition {
-  name: string;
-  type: NormalizedType;
+export interface SourceDocument {
+  uri: DocumentUri;
+  languageId: string;
+  text: string;
+  contentHash: string;
+  documentVersion?: number;
+  isDirty?: boolean;
+}
 
-  optional: boolean;
-  nullable: boolean;
-
-  source?: SourceLocation;
+export interface AnalysisRequest {
+  workspaceId: WorkspaceId;
+  workspaceRootUris: string[];
+  generation: number;
+  documents: SourceDocument[];
+  config: ResolvedUndriftConfig;
+  changedUris?: DocumentUri[];
+  mode: "workspace" | "scoped";
 }
 ```
 
-Example:
+The extension owns file discovery and workspace access. The core receives a finite snapshot of included documents, not VS Code's `WorkspaceFolder`, `TextDocument`, filesystem objects, or UI classes.
 
-```text
-userName
-type: string
-optional: false
-nullable: false
-```
+Open-document text takes precedence over disk content. The generation number is monotonic per workspace session and is used to prevent stale analysis output from replacing a newer state.
 
----
-
-# 8. Object Schema
+### 4.5 Route model
 
 ```ts
-export interface ObjectSchema {
-  kind: "object";
-  name?: string;
+export type RouteSegment =
+  | { kind: "static"; value: string }
+  | { kind: "parameter"; name?: string }
+  | { kind: "wildcard"; name?: string }
+  | { kind: "unresolved"; sourceText: string };
 
-  fields: FieldDefinition[];
-
-  source?: SourceLocation;
+export interface RoutePattern {
+  segments: RouteSegment[];
+  trailingSlash: "present" | "absent" | "unknown";
+  queryHandling: "excluded-from-path" | "unknown";
+  rawPath: string;
 }
 ```
 
-Nested objects are represented recursively.
+The route model intentionally distinguishes static segments from parameters/wildcards. Two routes may share a structural pattern even when local parameter variable names differ. The route matcher MUST NOT silently pluralize or singularize segments, remove meaningful prefixes, or equate unrelated paths through generic string similarity.
 
----
-
-# 9. Request Contract
+### 4.6 Type and shape model
 
 ```ts
-export interface RequestContract {
-  pathParams: FieldDefinition[];
-  queryParams: FieldDefinition[];
-  headers: FieldDefinition[];
+export type PrimitiveTypeName =
+  | "string"
+  | "number"
+  | "boolean"
+  | "bigint"
+  | "symbol"
+  | "null"
+  | "undefined"
+  | "void"
+  | "unknown"
+  | "never";
 
-  body?: ObjectSchema;
-}
-```
-
----
-
-# 10. Response Contract
-
-```ts
-export interface ResponseContract {
-  statusCode?: number;
-
-  body?: ObjectSchema;
-}
-```
-
-For the MVP, one primary response shape may be represented for each API relationship.
-
-Future versions may support multiple status-code-specific schemas.
-
----
-
-# 11. Consumer Contract
-
-```ts
-export interface ConsumerContract {
-  id: string;
-
-  method: HttpMethod;
-  path: string;
-
-  request?: RequestContract;
-  response?: ResponseContract;
-
-  source: SourceReference;
-
-  extractor: string;
-}
-```
-
-Example:
-
-```json
-{
-  "method": "GET",
-  "path": "/users/:id",
-  "response": {
-    "body": {
-      "fields": {
-        "id": "string",
-        "userName": "string",
-        "email": "string"
-      }
+export type TypeShape =
+  | {
+      kind: "primitive";
+      name: PrimitiveTypeName;
     }
-  }
+  | {
+      kind: "literal";
+      value: string | number | boolean | null;
+    }
+  | {
+      kind: "array";
+      element: TypeShape;
+    }
+  | {
+      kind: "object";
+      properties: FieldShape[];
+      additionalProperties: "allowed" | "forbidden" | "unknown";
+    }
+  | {
+      kind: "union";
+      members: TypeShape[];
+    }
+  | {
+      kind: "reference";
+      displayName: string;
+      resolution: "resolved" | "unresolved";
+      targetId?: string;
+      resolvedShape?: TypeShape;
+    }
+  | {
+      kind: "unknown";
+      reason:
+        | "dynamic-expression"
+        | "unsupported-syntax"
+        | "unresolved-reference"
+        | "incomplete-source"
+        | "complex-type"
+        | "not-observed";
+    };
+
+export interface FieldShape {
+  name: string;
+  type: TypeShape;
+  presence: "required" | "optional" | "unknown";
+  nullable: "yes" | "no" | "unknown";
+  evidence: EvidenceRef[];
+}
+
+export interface ShapeObservation {
+  shape: TypeShape;
+  completeness: "complete" | "partial" | "unknown";
+  evidence: EvidenceRef[];
 }
 ```
 
----
+Semantics that MUST remain distinct:
 
-# 12. Provider Contract
+- a field not present in a **complete** observed shape;
+- a field not present in a **partial** observed shape;
+- a declared optional field;
+- a field whose value may be null;
+- an unknown type;
+- an unresolved type reference;
+- a known type that the current comparator does not support.
+
+Do not replace all of these with `undefined`, an empty field list, or a guessed primitive. `additionalProperties: "unknown"` is not equivalent to `"forbidden"`.
+
+### 4.7 Request and response observations
 
 ```ts
-export interface ProviderContract {
-  id: string;
+export interface RequestShapeObservation {
+  pathParams?: ShapeObservation;
+  queryParams?: ShapeObservation;
+  headers?: ShapeObservation;
+  body?: ShapeObservation;
+}
 
-  method: HttpMethod;
-  path: string;
+export interface ResponseShapeObservation {
+  statusCode?: ObservedValue<number>;
+  body?: ShapeObservation;
+  source: SourceSpan[];
+}
 
-  request?: RequestContract;
-  response?: ResponseContract;
-
-  source: SourceReference;
-
-  extractor: string;
+export interface EndpointObservation {
+  method: ObservedValue<HttpMethod>;
+  path: ObservedValue<RoutePattern>;
+  request?: RequestShapeObservation;
+  responses?: ResponseShapeObservation[];
 }
 ```
 
-Consumer and provider structures are deliberately similar so they can be normalized and compared.
+The initial slice may populate only a subset of request/response dimensions. Absence of an observation is not proof that the corresponding runtime behavior does not exist. The extractor must expose partiality through `ShapeObservation.completeness` and relevant analysis warnings.
 
----
-
-# 13. Contract Entity
-
-The matched logical entity combines observations.
+### 4.8 API observations
 
 ```ts
-export type ContractState =
+export type ObservationRole = "consumer" | "provider";
+
+export interface ApiObservation {
+  id: ObservationId;
+  role: ObservationRole;
+  languageId: string;
+  framework?: string;
+  extractorId: string;
+  source: SourceSpan[];
+  snapshot: SourceSnapshotRef;
+  endpoint: EndpointObservation;
+  limitations: AnalysisWarning[];
+}
+```
+
+A consumer represents an observed client call and its visible expectations/supplied values. A provider represents an observed server route and its visible accepted input/produced output. An observation is a local fact, not yet a confirmed consumer/provider relationship.
+
+### 4.9 Contract relationship and status
+
+```ts
+export type RelationshipState =
   | "discovered"
   | "waiting"
   | "matched"
   | "verified"
   | "drifted"
-  | "repaired"
-  | "orphaned";
+  | "orphaned"
+  | "unresolved"
+  | "ignored";
 
-export interface ApiContract {
-  id: string;
+export type MatchKind =
+  | "exact"
+  | "method-conflict"
+  | "suspected-route-conflict"
+  | "ambiguous"
+  | "unmatched";
 
-  method: HttpMethod;
-  path: string;
-
-  consumer?: ConsumerContract;
-  provider?: ProviderContract;
-
-  request?: RequestContract;
-  response?: ResponseContract;
-
-  state: ContractState;
-
-  match?: MatchResult;
-
-  drifts: string[];
-
-  createdAt: number;
-  updatedAt: number;
-}
-```
-
----
-
-# 14. Contract Identity
-
-Contract IDs should be stable across re-analysis whenever the same source relationship can be identified.
-
-Initial deterministic identity:
-
-```text
-<method>:<normalized-path>:<consumer/provider role>
-```
-
-Example:
-
-```text
-consumer:GET:/users/:id
-provider:GET:/users/:id
-```
-
-Where collisions are possible, append a stable source-derived hash.
-
-The ID must not depend only on array position.
-
----
-
-# 15. Match Result
-
-```ts
-export interface MatchResult {
-  matched: boolean;
-
-  score: number;
-
+export interface ContractRelationship {
+  id: RelationshipId;
+  consumerId?: ObservationId;
+  providerId?: ObservationId;
+  state: RelationshipState;
+  matchKind: MatchKind;
+  evidence: EvidenceRef[];
   reasons: string[];
-
-  routeScore?: number;
-  requestScore?: number;
-  responseScore?: number;
+  limitations: AnalysisWarning[];
+  findingIds: FindingId[];
 }
 ```
 
-The score is an internal confidence value.
+`verified` means that the implemented supported checks found no unresolved mismatch for the relationship; it does not prove runtime behavior or unobserved contract dimensions. `orphaned` means a provider has no known consumer in the analyzed scope. The extension may show a transient “repair applied” event, but final state derives from a new analysis.
 
----
-
-# 16. Drift Domain Model
+### 4.10 Findings
 
 ```ts
-export type DriftType =
-  | "missing-endpoint"
-  | "orphan-endpoint"
-  | "route-mismatch"
-  | "method-mismatch"
-  | "request-mismatch"
-  | "response-mismatch"
-  | "type-mismatch"
-  | "nullability-mismatch"
-  | "semantic-mismatch";
+export type FindingSeverity = "error" | "warning" | "info";
 
-export type DriftSeverity =
-  | "critical"
-  | "warning"
-  | "info";
-```
+export type FindingState =
+  | "active"
+  | "suppressed"
+  | "resolved";
 
-Drift entity:
-
-```ts
-export interface Drift {
-  id: string;
-
-  contractId: string;
-
-  type: DriftType;
-  severity: DriftSeverity;
-
+export interface Finding {
+  id: FindingId;
+  ruleId: RuleId;
+  category:
+    | "existence"
+    | "route"
+    | "request-shape"
+    | "response-shape"
+    | "type"
+    | "analysis-limit";
+  severity: FindingSeverity;
+  state: FindingState;
   title: string;
-  message: string;
+  summary: string;
   explanation: string;
-
+  evidenceStrength: EvidenceStrength;
+  relationshipId?: RelationshipId;
+  observationIds: ObservationId[];
+  sourceLocations: SourceSpan[];
   expected?: unknown;
-  actual?: unknown;
-
-  locations: SourceLocation[];
-
-  confidence?: number;
-
-  fixIds: string[];
-
-  createdAt: number;
-  updatedAt: number;
+  observed?: unknown;
+  impactStatement?: string;
+  limitations: AnalysisWarning[];
+  fixProposalIds: FixProposalId[];
 }
 ```
 
----
+Findings MUST include factual comparison data and preserve uncertainty. The `expected` and `observed` fields are display/report payloads, not an invitation for rule implementations to store arbitrary parser objects. Their values should be normalized serializable structures.
 
-# 17. Fix Model
-
-Core returns structured edits.
+### 4.11 Analysis warnings
 
 ```ts
-export interface FileEdit {
-  file: string;
+export type WarningCode =
+  | "PARSE_ERROR"
+  | "UNSUPPORTED_PATTERN"
+  | "UNRESOLVED_REFERENCE"
+  | "DYNAMIC_ROUTE"
+  | "PARTIAL_SHAPE"
+  | "INCOMPLETE_SCOPE"
+  | "CONFIGURATION_ERROR"
+  | "ANALYZER_FAILURE";
 
-  startLine: number;
-  startColumn: number;
-
-  endLine: number;
-  endColumn: number;
-
-  replacement: string;
+export interface AnalysisWarning {
+  code: WarningCode;
+  message: string;
+  source?: SourceSpan;
+  analyzerId?: string;
+  affectsCompleteness: boolean;
 }
 ```
 
-Fix proposal:
+Warnings indicate limits in the available analysis. They are not automatically drift findings and should not all become error-level diagnostics.
+
+### 4.12 Fix proposal model
 
 ```ts
+export type FixRisk = "mechanical" | "review-required" | "manual";
+
+export interface ProposedTextEdit {
+  uri: DocumentUri;
+  range: TextRange;
+  newText: string;
+  expectedContentHash: string;
+  expectedDocumentVersion?: number;
+}
+
 export interface FixProposal {
-  id: string;
-
-  driftId: string;
-
+  id: FixProposalId;
+  findingId: FindingId;
   title: string;
-  description: string;
-
-  confidence: number;
-
-  edits: FileEdit[];
-
-  risk:
-    | "safe"
-    | "review"
-    | "manual";
-
-  affectedFiles: string[];
+  rationale: string;
+  risk: FixRisk;
+  affectedUris: DocumentUri[];
+  edits: ProposedTextEdit[];
+  assumptions: string[];
+  requiresTargetChoice: boolean;
+  targetChoiceDescription?: string;
 }
 ```
 
----
+The core proposes structured edit intents. It MUST NOT write files. `mechanical` means the edit is deterministic given the stated assumptions, not that it may be applied silently. A finding where either side could be authoritative may need a target choice or manual resolution and should not receive a fabricated one-click fix.
 
-# 18. Analysis Result
-
-```ts
-export interface AnalysisResult {
-  revision: number;
-
-  contracts: ApiContract[];
-  drifts: Drift[];
-
-  graph: ContractGraph;
-
-  statistics: AnalysisStatistics;
-
-  warnings: AnalysisWarning[];
-
-  timestamp: number;
-}
-```
-
----
-
-# 19. Analysis Statistics
+### 4.13 Analysis result
 
 ```ts
 export interface AnalysisStatistics {
-  filesAnalyzed: number;
-  contractsDiscovered: number;
-
-  verified: number;
-  drifted: number;
-  waiting: number;
-  orphaned: number;
-
+  filesConsidered: number;
+  filesParsed: number;
+  filesWithWarnings: number;
+  consumerObservations: number;
+  providerObservations: number;
+  relationships: number;
+  activeFindings: number;
+  unresolvedPatterns: number;
   durationMs: number;
 }
+
+export interface AnalysisResult {
+  workspaceId: WorkspaceId;
+  generation: number;
+  generatedAt: number;
+  complete: boolean;
+  observations: ApiObservation[];
+  relationships: ContractRelationship[];
+  findings: Finding[];
+  warnings: AnalysisWarning[];
+  statistics: AnalysisStatistics;
+}
 ```
+
+The result has an explicit `complete` indicator because an empty findings array from incomplete analysis must not look equivalent to a clean, completed supported scan.
 
 ---
 
-# 20. Analysis Warning
+## 5. Core Ports and Interfaces
+
+The core declares the interfaces that concrete parser, analyzer, workspace, or presentation adapters implement. Only the VS Code application layer may import VS Code-specific types.
+
+### 5.1 Parser port
 
 ```ts
-export interface AnalysisWarning {
-  file?: string;
+export interface ParseRequest {
+  document: SourceDocument;
+  previous?: ParsedDocument;
+}
 
-  type:
-    | "parse-error"
-    | "unsupported-pattern"
-    | "unresolved-type"
-    | "unresolved-route";
+export interface ParsedDocument {
+  source: SourceDocument;
+  root: SyntaxNode;
+  issues: ParseIssue[];
+  dispose(): void;
+}
 
+export interface ParseIssue {
   message: string;
-
-  source?: SourceLocation;
+  source?: SourceSpan;
+  isError: boolean;
 }
-```
 
-Warnings must not cause workspace-wide failure.
+export interface SyntaxNode {
+  readonly kind: string;
+  readonly range: TextRange;
+  readonly byteRange?: { start: number; end: number };
 
----
-
-# 21. Workspace State
-
-```ts
-export interface WorkspaceState {
-  rootPath: string;
-
-  revision: number;
-
-  files: Map<string, SourceFileState>;
-
-  consumers: Map<string, ConsumerContract>;
-  providers: Map<string, ProviderContract>;
-
-  contracts: Map<string, ApiContract>;
-
-  drifts: Map<string, Drift>;
-
-  graph: ContractGraph;
+  text(): string;
+  children(): readonly SyntaxNode[];
+  namedChildren(): readonly SyntaxNode[];
+  childForField(name: string): SyntaxNode | undefined;
+  parent(): SyntaxNode | undefined;
 }
-```
 
----
-
-# 22. Source File State
-
-```ts
-export interface SourceFileState {
-  path: string;
-
-  contentHash: string;
-
-  lastModified?: number;
-
-  sourceKind:
-    | "frontend"
-    | "backend"
-    | "prisma"
-    | "unknown";
-
-  extractedConsumerIds: string[];
-  extractedProviderIds: string[];
-
-  analyzed: boolean;
-}
-```
-
----
-
-# 23. Contract Graph
-
-The graph should be implemented with ordinary in-memory maps.
-
-No graph database is needed.
-
-```ts
-export interface ContractGraph {
-  nodes: Map<string, GraphNode>;
-  edges: Map<string, GraphEdge>;
-}
-```
-
-Node:
-
-```ts
-export interface GraphNode {
-  id: string;
-
-  type:
-    | "frontend-consumer"
-    | "backend-provider"
-    | "api-contract"
-    | "type-definition"
-    | "database-model"
-    | "schema-definition";
-
-  source?: SourceReference;
-
-  metadata: Record<string, unknown>;
-}
-```
-
-Edge:
-
-```ts
-export type GraphEdgeType =
-  | "CONSUMES"
-  | "PROVIDES"
-  | "MATCHES"
-  | "EXPECTS"
-  | "RETURNS"
-  | "READS_FROM"
-  | "WRITES_TO";
-
-export interface GraphEdge {
-  id: string;
-
-  from: string;
-  to: string;
-
-  type: GraphEdgeType;
-
-  confidence?: number;
-
-  metadata?: Record<string, unknown>;
-}
-```
-
----
-
-# 24. Core Engine Interface
-
-The main entry point:
-
-```ts
-export interface UndriftEngine {
-  initialize(
-    config?: UndriftConfig
-  ): Promise<void>;
-
-  analyzeWorkspace(
-    input?: WorkspaceInput
-  ): Promise<AnalysisResult>;
-
-  analyzeChanges(
-    changes: SourceChange[]
-  ): Promise<AnalysisResult>;
-
-  getContracts(): ApiContract[];
-
-  getDrifts(): Drift[];
-
-  getReport(): IntegrationReport;
-
-  getFixes(
-    driftId: string
-  ): FixProposal[];
-
+export interface ParserPort {
+  readonly id: string;
+  supports(languageId: string, uri: DocumentUri): boolean;
+  parse(request: ParseRequest, signal?: AbortSignal): Promise<ParsedDocument>;
   dispose(): void;
 }
 ```
 
----
+`SyntaxNode` is an internal facade over concrete syntax. It must not expose the actual `web-tree-sitter` or Node-binding node type. The exact implementation may use a wrapper/handle rather than copying entire parse trees. `ParsedDocument.dispose()` releases parser/tree resources according to the selected binding's lifecycle.
 
-# 25. Core Configuration
+### 5.2 Analyzer port
 
 ```ts
-export interface UndriftConfig {
-  rootPath: string;
+export interface AnalyzerInput {
+  document: SourceDocument;
+  parsed: ParsedDocument;
+  projectIndex: ProjectIndexView;
+  config: ResolvedUndriftConfig;
+}
 
-  frontend?: {
-    enabled: boolean;
-    clients?: string[];
-  };
+export interface AnalyzerOutput {
+  observations: ApiObservation[];
+  warnings: AnalysisWarning[];
+}
 
-  backend?: {
-    enabled: boolean;
-    frameworks?: string[];
-  };
-
-  prisma?: {
-    enabled: boolean;
-  };
-
-  analysis?: {
-    debounceMs?: number;
-    maxSchemaDepth?: number;
-  };
+export interface LanguageAnalyzerPort {
+  readonly id: string;
+  supports(languageId: string, uri: DocumentUri): boolean;
+  analyze(input: AnalyzerInput, signal?: AbortSignal): Promise<AnalyzerOutput>;
 }
 ```
 
-The default configuration should target:
+An analyzer extracts supported observations from one document. It does not match consumers against providers and does not render diagnostics. If it cannot resolve a construct, it returns the evidence it has and an appropriate warning instead of silently inventing a value.
+
+### 5.3 Semantic resolver port
+
+```ts
+export interface SemanticResolutionRequest {
+  document: SourceDocument;
+  referenceName: string;
+  fromRange: TextRange;
+  projectIndex: ProjectIndexView;
+}
+
+export type SemanticResolutionResult =
+  | {
+      state: "resolved";
+      shape?: TypeShape;
+      declaration?: SourceSpan;
+      evidence: EvidenceRef[];
+    }
+  | {
+      state: "ambiguous" | "unresolved" | "unsupported";
+      reason: string;
+      evidence: EvidenceRef[];
+    };
+
+export interface SemanticResolverPort {
+  readonly id: string;
+  resolveType(
+    request: SemanticResolutionRequest,
+    signal?: AbortSignal
+  ): Promise<SemanticResolutionResult>;
+}
+```
+
+This port is optional. A lightweight local declaration resolver can support straightforward references. A deeper TypeScript resolver may be implemented using the TypeScript Compiler API or `ts-morph` only if the proof of concept demonstrates that it is needed. The core must treat its output as evidence with provenance, not as a compiler-owned object.
+
+### 5.4 Engine port
+
+```ts
+export interface AnalysisEnginePort {
+  analyze(
+    request: AnalysisRequest,
+    signal?: AbortSignal
+  ): Promise<AnalysisResult>;
+
+  dispose(): Promise<void>;
+}
+```
+
+The first implementation may analyze the supplied snapshot with a scoped/full pass. A later incremental implementation can reuse cached parse/extraction results, but the public result semantics must remain the same.
+
+### 5.5 Fix generator port
+
+```ts
+export interface FixGeneratorPort {
+  readonly id: string;
+  supports(finding: Finding): boolean;
+  propose(
+    finding: Finding,
+    context: FixGenerationContext
+  ): Promise<FixProposal[]>;
+}
+
+export interface FixGenerationContext {
+  documents: ReadonlyMap<DocumentUri, SourceDocument>;
+  observations: ReadonlyMap<ObservationId, ApiObservation>;
+  relationships: ReadonlyMap<RelationshipId, ContractRelationship>;
+  config: ResolvedUndriftConfig;
+}
+```
+
+Fix generators create proposals only. They must not mutate source or call VS Code APIs.
+
+---
+
+## 6. Parser and Position Mapping
+
+### 6.1 Grammar selection
+
+Initial file mapping:
+
+| File extension / language | Grammar family | Initial scope |
+|---|---|---|
+| `.js`, `.mjs`, `.cjs` | JavaScript | Supported JS call/route patterns |
+| `.jsx` | JavaScript grammar with JSX support | Supported client calls in JSX projects |
+| `.ts` | TypeScript | Explicit declarations, calls, route handlers |
+| `.tsx` | TypeScript TSX grammar | Supported source patterns within React/TSX files |
+
+The mapping must be verified against the exact grammar packages and binding version selected by the POC. File extension alone does not imply every syntax pattern is supported.
+
+### 6.2 Binding-neutral parser lifecycle
+
+The parser package contains:
+
+- `ParserRuntime`: initializes and owns the concrete Tree-sitter runtime;
+- `GrammarRegistry`: maps supported language/file kinds to compatible grammar assets;
+- `TreeSitterParserAdapter`: implements `ParserPort`;
+- `SyntaxNodeFacade`: wraps binding-specific nodes;
+- `PositionMapper`: maps byte offsets to UTF-16 offsets and line/character positions;
+- `ParseIssueMapper`: converts parser errors/missing nodes into `ParseIssue`.
+
+The runtime/binding must load lazily where appropriate so users who open an unsupported file do not pay the startup cost of every possible grammar.
+
+**POC GATE:** Compare `web-tree-sitter` with packaged WASM grammars against the official Node.js binding for bundle packaging, version compatibility, startup, source spans, parser error recovery, and edit parsing. Concrete initialization calls remain implementation details until the binding is chosen.
+
+### 6.3 Parsing incomplete documents
+
+A document during typing may be syntactically invalid. The parser should return the available syntax tree and issues when supported by the runtime. Extractors must avoid interpreting malformed partial nodes as reliable completed calls/routes.
+
+When a required parent or argument is missing, skip the observation or mark relevant values `dynamic`/`unknown`; attach a warning with the source range where possible.
+
+### 6.4 Position mapping
+
+Tree-sitter may represent ranges in UTF-8 bytes; JavaScript strings and VS Code positions use UTF-16 code units. `PositionMapper` must:
+
+1. receive the exact `SourceDocument.text` snapshot;
+2. map parser byte offsets to valid source string offsets;
+3. map source offsets to zero-based `{ line, character }`;
+4. handle CRLF and LF line endings;
+5. handle Unicode characters outside the Basic Multilingual Plane;
+6. clamp or reject invalid ranges instead of generating unsafe edits;
+7. round-trip test ranges used in accepted fixes.
+
+The implementation must not perform conversion by assuming one byte equals one character.
+
+---
+
+## 7. JavaScript/TypeScript Analyzer
+
+### 7.1 Analyzer registry
+
+The initial analyzer is registered for supported JavaScript and TypeScript file kinds. It coordinates sub-extractors and returns normalized observations plus warnings.
+
+Proposed sub-extractors:
 
 ```text
-React/TypeScript
-Express/TypeScript
-Prisma
+JsTsAnalyzer
+├── FrontendCallExtractorRegistry
+│   ├── FetchExtractor
+│   ├── AxiosMethodExtractor
+│   └── ConfiguredClientExtractor (only implemented patterns)
+├── ExpressRouteExtractor
+├── RequestShapeExtractor
+├── ResponseShapeExtractor
+├── TypeShapeExtractor
+├── LocalDeclarationIndex
+└── UnsupportedPatternDetector
 ```
 
----
+These may be separate classes or focused modules. They must share helpers for source ranges, literal extraction, call-chain inspection, evidence creation, and normalized shape construction.
 
-# 26. Workspace Input
+### 7.2 Frontend call extraction
+
+Initial target patterns include:
 
 ```ts
-export interface WorkspaceInput {
-  rootPath: string;
+fetch("/api/users");
 
-  overlays?: Map<string, string>;
-}
-```
-
-`overlays` represent unsaved editor content.
-
-Example:
-
-```text
-disk:
-old code
-
-overlay:
-new code currently being typed
-```
-
-The overlay should take precedence during analysis.
-
----
-
-# 27. Source Change
-
-```ts
-export interface SourceChange {
-  path: string;
-
-  content?: string;
-
-  changeType:
-    | "created"
-    | "modified"
-    | "deleted";
-}
-```
-
----
-
-# 28. Extraction Architecture
-
-All extractors implement a common abstraction.
-
-```ts
-export interface ExtractorContext {
-  project: AnalysisProject;
-
-  sourceFile: SourceFileHandle;
-
-  config: UndriftConfig;
-}
-```
-
----
-
-# 29. Frontend Extractor Interface
-
-```ts
-export interface FrontendApiExtractor {
-  name: string;
-
-  canHandle(
-    node: CallExpressionNode
-  ): boolean;
-
-  extract(
-    node: CallExpressionNode,
-    context: ExtractorContext
-  ): ConsumerContract | null;
-}
-```
-
----
-
-# 30. Backend Extractor Interface
-
-```ts
-export interface BackendRouteExtractor {
-  name: string;
-
-  canHandle(
-    node: CallExpressionNode
-  ): boolean;
-
-  extract(
-    node: CallExpressionNode,
-    context: ExtractorContext
-  ): ProviderContract | null;
-}
-```
-
----
-
-# 31. Prisma Extractor Interface
-
-```ts
-export interface PrismaExtractor {
-  name: string;
-
-  canHandle(file: SourceFileHandle): boolean;
-
-  extract(
-    file: SourceFileHandle
-  ): DatabaseModelObservation[];
-}
-```
-
----
-
-# 32. Frontend API Discovery
-
-The initial frontend extraction pipeline:
-
-```text
-TypeScript source
-      ↓
-AST
-      ↓
-CallExpression nodes
-      ↓
-API-client candidate
-      ↓
-method/path extraction
-      ↓
-request extraction
-      ↓
-response type extraction
-      ↓
-ConsumerContract
-```
-
----
-
-# 33. Supported Frontend Patterns
-
-Initial supported patterns:
-
-```ts
-fetch("/api/users")
-
-fetch("/api/users", {
-  method: "POST"
-})
-
-axios.get("/api/users")
-
-axios.post("/api/users", payload)
-
-api.get<User>("/api/users/:id")
-
-api.post<LoginResponse>(
-  "/api/auth/login",
-  payload
-)
-```
-
-Support for arbitrary custom clients is optional.
-
----
-
-# 34. Fetch Extraction
-
-For:
-
-```ts
 fetch("/api/users", {
   method: "POST",
   body: JSON.stringify(payload)
 });
+
+axios.get("/api/users");
+axios.post("/api/users", payload);
+
+api.get<User>("/api/users/:id");
 ```
 
-extract:
+These examples define intended supported shapes, not universal guarantees. Each pattern must have a matching fixture. Equivalent forms involving aliases, wrapper functions, custom client instances, or dynamic arguments are only supported after explicit implementation and testing.
 
-```text
-method = POST
-path = /api/users
-request body reference = payload
+`FetchExtractor` should:
+
+1. identify a call expression whose callee resolves to the supported `fetch` identifier;
+2. inspect the first argument for a string literal, supported template literal, or resolvable supported constant;
+3. inspect the options argument for a literal HTTP method when present; default to GET only when the standard fetch semantics are clearly applicable;
+4. inspect known body serialization forms where the argument shape can be safely recognized;
+5. capture an explicit response type expectation only when visible from supported declarations/annotations;
+6. preserve the call and argument source spans;
+7. mark dynamic paths, methods, or payloads as unresolved and emit an appropriate warning.
+
+`AxiosMethodExtractor` should recognize supported method-member calls and extract a path, method, and explicit body/response generic where available. Do not assume every identifier named `axios` or `api` is the library client. If import/alias evidence is not available, the configured/supported pattern must be explicit and confidence reduced appropriately.
+
+### 7.3 Express route extraction
+
+Initial examples:
+
+```ts
+app.get("/api/users", handler);
+router.post("/api/users", handler);
+app.patch("/api/users/:id", handler);
 ```
 
-If the method property is absent:
+The extractor should:
 
-```text
-method = GET
-```
+1. identify a supported call expression for `app.<method>` or `router.<method>`;
+2. check that the method is in the supported HTTP-method set;
+3. extract a literal or deterministically resolved path;
+4. retain the route registration and handler spans;
+5. recognize supported chained response patterns such as `res.status(200).json(body)` or direct `res.json(body)` only when the chain is explicit;
+6. infer a response shape from visible literals or supported response annotations;
+7. inspect supported request schema/type declarations without claiming that Express's runtime body parser validates those types;
+8. emit a warning for dynamic paths, unsupported router composition, unknown response branches, or unsupported response forms.
 
-consistent with standard fetch semantics.
+Router mount prefixes may be joined only when both mount path and nested route are statically supported and the implementation can prove the composition. Otherwise retain the raw route and mark the effective path unresolved.
+
+### 7.4 Method and path extraction
+
+Method extraction normalizes supported literal methods to uppercase. Non-literal method expressions remain unknown/dynamic.
+
+Path extraction distinguishes:
+
+- static paths;
+- template literals with no dynamic substitutions;
+- template literals where a whole segment is a supported dynamic parameter;
+- mixed/dynamic expressions which cannot be normalized safely;
+- configured base URL/path evidence where explicitly supported;
+- unsupported path construction.
+
+Do not convert arbitrary expressions into placeholder parameters. For example, a template literal whose interpolation is embedded inside a static segment should not be normalized as though it were a complete path parameter unless that case has a deliberately supported rule.
+
+### 7.5 Shape extraction
+
+`RequestShapeExtractor` initially supports explicitly visible object literals and narrowly defined serialization forms. `ResponseShapeExtractor` supports direct object literals and supported typed declarations that can be resolved safely.
+
+When shapes are assembled from multiple conditional branches, helper calls, mapping functions, arrays, serializer middleware, or dynamic data, the analyzer must either implement that exact supported case and include tests, or mark the shape partial/unknown.
+
+`TypeShapeExtractor` should support direct primitive annotations, arrays, object/interface declarations, type literals, literal types, unions of supported members, and straightforward local references as implemented. Complex mapped/conditional/generic types must be marked unsupported or unresolved rather than flattened incorrectly.
+
+### 7.6 Local declaration index
+
+`LocalDeclarationIndex` is a limited symbol index, not a replacement for a compiler type checker. It may index type aliases, interfaces, variable declarations, and import declarations needed by the supported patterns.
+
+The initial implementation should resolve only cases whose correctness can be tested. Imported declarations, alias chains, re-exports and project path aliases are **POC GATE** cases. If they cannot be resolved deterministically, return an unresolved reference. Do not make TypeScript compiler support a dependency of the language-neutral core.
+
+### 7.7 Support matrix
+
+Every supported pattern must be documented in `support-matrix.ts` or an equivalent source of truth, with fields such as:
+
+- `patternId`;
+- source role (consumer/provider);
+- supported language/framework;
+- examples or fixture identifiers;
+- fields reliably extracted;
+- known limitations;
+- whether evidence is direct/resolved;
+- current test status.
+
+UI/report text can use this metadata to explain why analysis might be incomplete. A documentation change and a fixture should accompany every claim that a new pattern is supported.
 
 ---
 
-# 35. Axios Extraction
+## 8. Analysis Pipeline
 
-Recognize:
+### 8.1 Engine orchestration
 
-```ts
-axios.get(path)
-axios.post(path, body)
-axios.put(path, body)
-axios.patch(path, body)
-axios.delete(path)
-```
-
-Also support a generic axios request configuration where practical:
-
-```ts
-axios({
-  method: "POST",
-  url: "/users",
-  data: payload
-})
-```
-
-Generic object-config extraction can be lower priority if time is limited.
-
----
-
-# 36. Typed API Extraction
-
-For:
-
-```ts
-api.get<User>("/users/:id")
-```
-
-the extractor should:
-
-1. identify the call;
-2. identify the path;
-3. infer method from the function name;
-4. resolve generic type `User`;
-5. resolve `User` into `ObjectSchema`;
-6. retain the call's source location.
-
----
-
-# 37. Type Resolution
-
-Type resolver should support:
+The core pipeline accepts one `AnalysisRequest` and returns one `AnalysisResult`. The engine is asynchronous and accepts an `AbortSignal` so superseded work can be cancelled where possible.
 
 ```text
-interface
-type alias
-imported type
-generic reference
-inline object type
-Zod object schema where practical
+AnalysisRequest
+      │
+      ▼
+Validate request/config + select supported documents
+      │
+      ▼
+Parse documents (ParserPort)
+      │
+      ▼
+Build/update project index
+      │
+      ▼
+Run matching language analyzers
+      │
+      ▼
+Collect ApiObservation + warnings
+      │
+      ▼
+Normalize route/shape representation
+      │
+      ▼
+Generate candidate relationships
+      │
+      ▼
+Classify relationships + run drift rules
+      │
+      ▼
+Build explanation payloads + fix proposals
+      │
+      ▼
+Calculate coverage/statistics + AnalysisResult
 ```
 
-Example:
+### 8.2 Pipeline interfaces
 
 ```ts
-interface User {
-  id: string;
-  userName: string;
+export interface AnalysisPipeline {
+  run(request: AnalysisRequest, signal?: AbortSignal): Promise<AnalysisResult>;
+}
+
+export interface PipelineDependencies {
+  parsers: readonly ParserPort[];
+  analyzers: readonly LanguageAnalyzerPort[];
+  matcher: ContractMatcher;
+  ruleEngine: DriftRuleEngine;
+  explainer: FindingExplainer;
+  fixRegistry: FixGeneratorRegistry;
+  reportBuilder: AnalysisReportBuilder;
 }
 ```
 
-becomes:
+The actual factory/composition mechanism is an application-level detail. The dependencies should be injected so the core can be tested with deterministic fake parsers/analyzers or real syntax fixtures without activating VS Code.
 
-```text
-object User
- ├── id → string
- └── userName → string
-```
+### 8.3 Per-document processing
 
----
+For each included `SourceDocument`:
 
-# 38. Backend Route Discovery
+1. Find a parser that supports the document's language/file extension.
+2. Parse the exact content snapshot and record parser issues.
+3. Build/update the project index from supported declarations.
+4. Run all applicable extractors for that document.
+5. Validate observation IDs, source ranges, and source snapshot identity.
+6. Collect observations and warnings.
+7. Dispose temporary parse resources according to binding lifecycle.
 
-Backend pipeline:
+Parser and analyzer errors should be isolated per document/extractor where safe. If a document cannot be parsed, other independent documents should still be analyzed. Mark the overall result incomplete if the failed document could affect coverage.
 
-```text
-TypeScript source
-      ↓
-AST
-      ↓
-CallExpression
-      ↓
-router.get/post/put/delete
-      ↓
-route path
-      ↓
-handler
-      ↓
-request analysis
-      ↓
-response analysis
-      ↓
-ProviderContract
-```
+### 8.4 Workspace index
 
----
+The initial project index needs only data required by supported analyzers:
 
-# 39. Supported Express Patterns
+- normalized document metadata and snapshot hashes;
+- explicitly indexed local type/interface declarations;
+- supported imports/references when resolved;
+- route declarations and frontend observations;
+- source spans for symbols and observations;
+- dependency edges used by the limited resolver.
 
-Initial support:
+Do not construct an elaborate universal symbol graph before there is a consumer that needs it. The initial index is an in-memory analysis aid, not a database.
 
-```ts
-router.get(path, handler)
-router.post(path, handler)
-router.put(path, handler)
-router.patch(path, handler)
-router.delete(path, handler)
+### 8.5 Cancellation and revisions
 
-app.get(path, handler)
-app.post(path, handler)
-app.put(path, handler)
-app.patch(path, handler)
-app.delete(path, handler)
-```
+The extension increments a generation counter whenever a newer analysis state supersedes the previous one. The engine must check cancellation at safe phase boundaries and avoid expensive work when a signal is already aborted. The extension MUST publish a result only if its generation is still current.
+
+Some Tree-sitter operations may not support interruption at every internal step. In that case, allow the current operation to complete safely but discard its stale output. Do not share or dispose a parse tree while an analysis task is still traversing it.
+
+### 8.6 First implementation versus incremental analysis
+
+The first correct implementation may parse the supplied workspace snapshot in a scoped/full scan. Live changes are debounced, and an obsolete result is ignored. Add caches and selective invalidation incrementally.
+
+Do not claim dependency-aware incremental analysis until the implementation can identify which observations and relationships depend on a changed file. When an import, alias, router mount, or shared type may affect multiple files, use a safe broader scan if the dependency graph is not trustworthy.
 
 ---
 
-# 40. Route Path Extraction
+## 9. Normalization
 
-The route argument should be:
+### 9.1 Route normalization
 
-```text
-string literal
-template literal with resolvable static sections
-```
+A `RouteNormalizer` converts supported route evidence to a comparable `RoutePattern`.
 
-Example:
+Initial rules:
 
-```ts
-router.get("/users/:id", handler)
-```
+1. Trim surrounding whitespace from known literal path strings.
+2. If a fully literal absolute URL is supported, extract its pathname with a well-tested URL parser; preserve evidence for any configured base URL.
+3. Exclude query strings from the route path only when they belong to a fully parsed URL and the query is separately represented or is intentionally out of scope.
+4. Normalize path separators and leading slash consistently without removing meaningful segments.
+5. Represent supported framework path parameters as parameter segments.
+6. Preserve wildcard and unresolved segments explicitly.
+7. Compose router mount prefixes only when the prefix and route are statically resolvable.
+8. Keep trailing slash policy explicit; do not silently conflate variants until behavior is decided and tested.
+9. Never singularize/pluralize, rename segments by heuristic, or discard version prefixes to improve a match.
 
-produces:
+### 9.2 HTTP method normalization
 
-```text
-GET
-/users/:id
-```
+- Convert literal supported methods to uppercase.
+- Use GET as a default for `fetch()` only when standard semantics are clearly represented and no unsupported override applies.
+- Do not infer a method from a variable value or custom helper.
+- Return an unresolved method observation for dynamic configuration.
 
-Dynamic routes that cannot be statically resolved should produce an analysis warning rather than an invented path.
+### 9.3 Type and shape normalization
 
----
+A `TypeNormalizer` canonicalizes known type forms while preserving uncertainty:
 
-# 41. Express Router Prefix
+- string/number/boolean and other supported primitives;
+- literal values;
+- arrays and nested arrays;
+- object fields and their presence/nullability;
+- unions of supported types;
+- references with resolution state;
+- unknown/unsupported shapes.
 
-The MVP may support a simple static router prefix.
+The initial implementation should avoid type coercion assumptions. A number is not a string because JavaScript may coerce it at some runtime boundary. A field marked nullable is not equivalent to a field marked optional. A missing field is only evidence of incompatibility when the compared observation is complete enough for the rule.
 
-Example:
+### 9.4 Naming transformations
 
-```ts
-app.use("/api", router);
-```
-
-and:
-
-```ts
-router.get("/users", handler);
-```
-
-can resolve to:
-
-```text
-GET /api/users
-```
-
-This requires a basic router relationship model.
-
-If the router prefix cannot be statically resolved, retain the route as a partial path and lower match confidence.
+Do not automatically equate `user_name`, `userName`, and `display_name`. These may be connected by a mapper or serializer, but the transformation must be observed through a supported rule or explicitly configured. Where the mapping is unobserved, report the structural difference only when contract evidence is otherwise sufficient, and explain the possible transformation uncertainty.
 
 ---
 
-# 42. Backend Request Extraction
+## 10. Consumer/Provider Matching
 
-Analyze references such as:
+### 10.1 Matching goals
 
-```ts
-req.params.id
-req.query.page
-req.body.email
-req.body.password
-```
+Matching attempts to relate an observed consumer and provider without over-claiming that they implement the same logical endpoint. Candidate relationship generation is separate from compatibility checks.
 
-into:
+### 10.2 Candidate stages
 
-```text
-params:
-  id
+Use this order:
 
-query:
-  page
+1. **Exact method + route shape:** same normalized method and structurally compatible route.
+2. **Method conflict:** same unique route shape but incompatible known methods.
+3. **Suspected route conflict:** same known method and highly constrained path difference with unique candidates.
+4. **Unmatched:** no supported candidate relationship found.
+5. **Ambiguous:** more than one plausible candidate or the evidence is not strong enough to choose.
 
-body:
-  email
-  password
-```
+### 10.3 Route-shape equality
 
-Where type information is unavailable, fields are represented as unknown.
+Two paths have the same route shape if all static segments match and corresponding parameter/wildcard positions are structurally compatible under the supported route model. Parameter variable names alone should not create a route mismatch because names in the client and server source do not necessarily need to be identical. Query parameters and body schema are compared separately where supported.
 
----
+### 10.4 Suspected route mismatch rule
 
-# 43. Backend Response Extraction
+To limit false positives, the initial suspected route mismatch heuristic should be conservative. A candidate can be classified as suspected route mismatch only when all of the following hold:
 
-Primary response patterns:
+- consumer and provider have the same known HTTP method;
+- both paths are known and contain no unresolved/wildcard segment that makes comparison unreliable;
+- segment counts are equal;
+- parameter positions are compatible;
+- exactly one static segment differs;
+- this provider is the unique candidate for the consumer under the rule, and the consumer is the unique candidate for the provider;
+- the relationship does not conflict with a stronger exact candidate.
 
-```ts
-res.json({...})
-return res.json({...})
-res.status(200).json({...})
-return res.status(200).json({...})
-```
+Even then, classify the relation as inferred/suspected, not an exact match. If any condition fails, retain an unmatched/ambiguous relationship and avoid producing a confident route-mismatch finding.
 
-For:
+This rule is a starting constraint to evaluate against fixtures, not a claim that it detects every route drift.
 
-```ts
-res.json({
-  id: user.id,
-  user_name: user.userName,
-  email: user.email
-});
-```
+### 10.5 Candidate conflicts and duplicate findings
 
-extract:
+If a consumer has a suspected route-mismatch candidate, do not simultaneously emit a high-confidence missing-provider finding for the same consumer unless the analysis clearly identifies separate problems. If a unique route shape has a method conflict, prefer the method-mismatch explanation rather than reporting the endpoint as simply missing.
 
-```text
-id
-user_name
-email
-```
+One observation can participate in multiple relationships only when the evidence and product rules justify it. Avoid pairing a single consumer with every route that shares a static segment.
 
-and resolve types where TypeScript can infer them.
+### 10.6 Missing provider semantics
+
+A missing-provider finding is eligible only when:
+
+- the consumer method/path is known at the required evidence level;
+- the relevant analysis scope was sufficiently scanned;
+- no exact compatible provider was found;
+- no stronger method/route conflict already explains the discrepancy;
+- analysis limitations are attached.
+
+The text must say **“No compatible provider found in the analyzed scope”**, not “This endpoint does not exist.” If the scope has errors or unsupported backend patterns that could hide the provider, lower the certainty or show an incomplete-analysis message instead.
+
+### 10.7 Provider with no known consumer
+
+A provider is classified as orphaned/no-known-consumer only if no matched or supported suspected consumer is found within the analyzed workspace scope. The message must explicitly state that external consumers, dynamic callers, generated clients, or other repositories may exist.
 
 ---
 
-# 44. Variable Response Extraction
+## 11. Drift Rules
 
-If:
+Rule IDs and titles must be stable across releases where their meaning remains the same. If rule semantics change materially, document the change and update tests.
 
-```ts
-const result = {
-  id: user.id,
-  email: user.email
-};
+### 11.1 Initial rule catalog
 
-res.json(result);
-```
+| Rule ID | Rule | Default severity | Initial evidence requirement |
+|---|---|---|---|
+| `UND100` | No compatible provider found | Warning | Known consumer route/method and sufficiently complete backend scan |
+| `UND110` | Provider has no known consumer | Info | Known provider route/method and sufficiently complete consumer scan |
+| `UND120` | HTTP method conflict | Error | Unique route-shape candidate with conflicting known methods |
+| `UND130` | Suspected route mismatch | Warning | Conservative unique one-static-segment candidate rule |
+| `UND200` | Required request field not supplied/observed | Error or warning by completeness | Provider requires field; consumer body shape sufficiently complete |
+| `UND210` | Request field type mismatch | Error | Known incompatible consumer value and provider expectation |
+| `UND220` | Request nullability/optionality conflict | Warning/Error based on direction | Both sides provide relevant known semantics |
+| `UND300` | Provider response lacks expected field | Error | Provider response shape complete enough; consumer requires the field |
+| `UND310` | Response field type mismatch | Error | Known incompatible provider output and consumer expectation |
+| `UND320` | Response optionality conflict | Warning | Provider may omit field but consumer expects it reliably present |
+| `UND330` | Response nullability conflict | Warning/Error based on direction | Provider may return null but consumer disallows it |
+| `UND900` | Unsupported pattern limits analysis | Info/Warning | Extractor encounters an explicitly unsupported pattern |
+| `UND910` | Type/reference unresolved | Info/Warning | A supported reference could not be resolved |
+| `UND920` | Incomplete parse/scope affects coverage | Info/Warning | Parser or workspace-scan issue affects completeness |
 
-the extractor should resolve `result` to its object initializer.
+The exact default severity may be adjusted by fixture evaluation, but a rule's evidence requirement and semantics must be explicit. Warning/info rules should not be upgraded solely to make the dashboard look more serious.
 
-The maximum resolution depth should be bounded.
+### 11.2 Request comparison direction
+
+For requests, the consumer supplies values and the provider accepts/validates values.
+
+- A provider-required field absent from a complete consumer payload shape can be reported.
+- A provider's explicit non-null type conflicts with a consumer value that may be null if both are known.
+- A supplied field not listed in a provider shape is only an error if the provider schema is known to reject additional fields. In typical Express handlers, an apparent request interface is not proof of runtime rejection. If additional-property behavior is unknown, do not report extra fields as a hard incompatibility.
+- A field type comparison must be directional: compare the values the consumer may send against values the provider accepts.
+
+### 11.3 Response comparison direction
+
+For responses, the provider produces values and the consumer expects/uses values.
+
+- A consumer-required field missing from a complete provider response observation can be reported.
+- If the provider's actual observed type is wider than the consumer's expectation, report a possible incompatible value.
+- If the provider can return null and the consumer type disallows null, report the incompatibility.
+- A provider shape marked partial cannot prove that a field is never present; any omission finding must be qualified or withheld.
+- A provider's extra field is not automatically a drift when the consumer ignores it.
+
+### 11.4 Type compatibility algorithm
+
+For the initial shape subset:
+
+1. Treat identical supported primitive types as compatible.
+2. Treat a literal as compatible with its corresponding primitive where that direction is valid (for example, literal `"ready"` can satisfy `string`).
+3. Compare arrays recursively up to a configured maximum depth.
+4. Compare object fields by name; evaluate required/optional and nullable states separately from the base type.
+5. Compare unions conservatively. If the rule cannot establish compatibility for all relevant members, report unresolved/unsupported rather than guessing.
+6. Resolve supported references before comparison; unresolved references are not treated as mismatching names by default.
+7. Track visited reference pairs to avoid recursion loops.
+8. Stop at the configured depth and mark remaining structure unknown rather than silently treating it as compatible.
+
+The first implementation does not need full TypeScript assignability semantics. It needs a conservative comparator for the explicitly supported shape subset. Deep mapped types, conditional types, functions, tuples beyond the supported subset, branded types, overloads, and other complex features may remain unresolved.
+
+### 11.5 Duplicate suppression and finding aggregation
+
+Findings should be aggregated to avoid excessive notification noise. For example, a route mismatch may explain why a consumer has no exact provider; do not automatically emit both as two independent errors. A response field can produce a missing-field and a type mismatch only if they genuinely concern distinct issues.
+
+Finding identity should be based on a stable rule ID, relationship/observation identity, and relevant field/path key—not array position. If the same source issue is rediscovered after analysis, preserve identity where practical so the UI doesn't flicker unnecessarily.
+
+### 11.6 Severity, certainty, and UI state
+
+Severity and evidence strength are separate. An important issue with uncertain evidence should not be presented as confirmed. The first release should make exact/direct contradictions actionable by default while presenting inferred or incomplete observations as qualified findings/warnings.
+
+Suppressions should apply to the intended rule/relationship and include a reason where the configuration supports it. Suppressed findings must remain distinguishable from absent findings in reports.
 
 ---
 
-# 45. Service-Layer Response Extraction
+## 12. Explanation Construction
 
-For:
+### 12.1 Explanation requirements
+
+A finding explanation should answer, where the evidence permits:
+
+- what is inconsistent;
+- the expected and observed values;
+- how UNDRIFT related the consumer/provider;
+- the source location(s) for both sides where available;
+- why the mismatch may matter;
+- what is directly observed versus inferred;
+- which patterns or types could not be resolved;
+- which repair options are available.
+
+### 12.2 Explanation model
 
 ```ts
-const user = await service.getUser(id);
-
-return res.json(user);
-```
-
-the system may not always be able to reconstruct the response shape.
-
-Initial behavior:
-
-```text
-response shape = unresolved
-```
-
-If the `user` function has a statically resolvable return type, the type resolver may resolve that type.
-
----
-
-# 46. Prisma Extraction
-
-Parse `schema.prisma` using a dedicated schema parser or a small purpose-built parser for the benchmark syntax.
-
-Extract:
-
-```text
-model name
-field name
-field type
-optional marker
-list marker
-relations
-enum names
-```
-
-Example:
-
-```prisma
-model User {
-  id          String  @id
-  displayName String?
-  email       String
+export interface FindingExplanation {
+  headline: string;
+  summary: string;
+  expectedDescription?: string;
+  observedDescription?: string;
+  reason: string;
+  possibleImpact?: string;
+  evidenceStrength: EvidenceStrength;
+  sourceLocations: SourceSpan[];
+  limitations: AnalysisWarning[];
+  suggestedNextSteps: string[];
 }
 ```
 
-becomes:
+The public `Finding` can store this data directly or reference an explanation builder. Either approach must maintain the separation between factual evidence and explanatory prose.
 
-```text
-User
- ├── id: string
- ├── displayName: string | null
- └── email: string
-```
+### 12.3 Explanation rules
+
+- Do not claim a runtime failure is guaranteed based solely on static inference.
+- Prefer precise language such as “the frontend declares `name` as a required string, while the observed provider object contains `displayName`.”
+- If a value is unknown, say it could not be resolved.
+- If the provider scan was incomplete, do not claim that a route is absent from the entire project.
+- Do not manufacture a source location for a type or route that was not resolved.
+- Do not use the same confident explanation template for direct syntax evidence and heuristic candidates.
+
+The initial explanation engine can use deterministic templates keyed by rule ID. An LLM is not required.
 
 ---
 
-# 47. Parser Project Model
+## 13. Fix Proposal and Application Lifecycle
 
-The Core should maintain a project-level TypeScript program.
+### 13.1 Fix generation boundary
 
-Conceptually:
+The core finds eligible `FixGeneratorPort` implementations by rule ID and context. A generator creates one or more proposals only when it has sufficient evidence and can state its assumptions. A lack of a fix is a valid result.
+
+Initial repair scope SHOULD be limited to small localized edits whose target and replacement can be explained. Route mismatches often do not reveal which side is correct; in those cases the proposal must require a developer's target choice or provide a manual-resolution route.
+
+### 13.2 Proposal validation
+
+Before applying a proposal, the extension must verify:
+
+1. every affected URI remains within the intended workspace;
+2. each document exists and has the expected content hash/version;
+3. all ranges remain valid for the exact source snapshot from which the proposal was generated;
+4. the proposal hasn't been invalidated by a later analysis generation;
+5. any required target choice has been explicitly provided by the developer.
+
+If a check fails, reject the stale proposal and request fresh analysis. Never attempt to “best effort” apply obsolete offsets to changed text.
+
+### 13.3 VS Code edit application
+
+The VS Code adapter converts the proposal's UTF-16 offsets/ranges into VS Code `Range` objects using the exact validated document text, constructs a `WorkspaceEdit`, and requests user acceptance through an appropriate code action/preview flow. Only accepted edits are applied.
+
+The core does not import `WorkspaceEdit`, `TextEdit`, or VS Code classes. The editor adapter owns the translation and application.
+
+### 13.4 Reverification sequence
+
+```text
+Fix proposal generated
+        ↓
+Developer inspects explanation/preview
+        ↓
+Developer accepts, chooses target, or rejects
+        ↓
+Extension validates source version/hash/ranges
+        ↓
+Apply accepted edit through VS Code
+        ↓
+Mark previous analysis generation stale
+        ↓
+Analyze the changed snapshot
+        ↓
+Re-run matching and relevant drift rules
+        ↓
+Update finding: resolved / still active / unresolved
+```
+
+A finding is considered resolved only when the new analysis confirms that the previously reported supported incompatibility no longer exists. If it disappeared because the relevant files could not be parsed or the scope became incomplete, report the uncertainty rather than success.
+
+### 13.5 Initial fix test cases
+
+At least the following cases should be tested before calling the repair loop complete:
+
+- accepted proposal changes the intended range and leaves unrelated text unchanged;
+- rejected proposal makes no source changes;
+- source changed after proposal generation causes safe invalidation;
+- proposal affecting multiple files is applied as one reviewable workspace operation when supported;
+- position mapping works with Unicode and CRLF;
+- post-edit analysis resolves a seeded finding;
+- post-edit analysis leaves a finding active when the mismatch remains;
+- unsupported/ambiguous finding returns no speculative edit or clearly requires manual target selection.
+
+---
+
+## 14. VS Code Adapter Design
+
+The extension is an adapter around the core. It translates editor/workspace events into snapshots and results into native UI.
+
+### 14.1 Activation and composition root
+
+`extension.ts` or a dedicated activation module:
+
+- registers commands and views;
+- creates diagnostic collections, status items, tree providers and output channel;
+- builds concrete parser/analyzer registries and the analysis engine;
+- initializes workspace event handlers;
+- owns disposables and calls `dispose()` at deactivation.
+
+This is the only area that should assemble all implementation-specific dependencies. Avoid importing the full extension activation module from core or analyzer packages.
+
+### 14.2 Workspace adapter
+
+The workspace adapter:
+
+- detects opened folders and supported file URIs;
+- respects workspace exclusions and UNDRIFT configuration;
+- loads disk files within allowed scope;
+- obtains current text/version for open documents;
+- computes/updates content hashes;
+- creates `AnalysisRequest` snapshots;
+- listens to created/changed/deleted and relevant open-document events;
+- triggers debounced analysis.
+
+Analysis MUST not execute the repository's code, `npm` scripts, or framework servers to discover routes.
+
+### 14.3 Analysis coordinator
+
+The extension-side coordinator owns:
+
+- per-workspace generation counters;
+- debounce/cancellation;
+- snapshot creation;
+- current-analysis status/progress;
+- accepting only non-stale `AnalysisResult` objects;
+- publishing result updates to UI providers;
+- scheduling re-analysis after accepted fixes.
+
+The coordinator may use a correct scoped/full pass for each relevant burst in the first version. Avoid premature dependency-aware incremental scheduling if it can leave stale findings visible.
+
+### 14.4 Diagnostic provider
+
+The diagnostic provider maps active actionable findings to VS Code diagnostics.
+
+Requirements:
+
+- use stable rule codes, e.g. `UND120`;
+- provide a concise message, severity, and primary source range;
+- retain a finding ID link through diagnostic code/data where supported;
+- avoid duplicating diagnostics for the same finding at both consumer and provider if this overwhelms the editor;
+- clear diagnostics when a finding resolves, is suppressed, or becomes inapplicable;
+- separate incomplete-analysis warnings from actual incompatibility errors.
+
+A finding may identify multiple source locations, but the first release may use one primary diagnostic and show other locations through the details view and navigation actions.
+
+### 14.5 Findings tree/sidebar
+
+The tree provider presents findings grouped by category or severity and should show:
+
+- category and severity;
+- concise title;
+- confidence/evidence class or uncertainty indicator;
+- consumer/provider side when identified;
+- current state (active/suppressed/incomplete);
+- source navigation for each available location.
+
+Tree grouping must not imply certainty not present in the underlying `Finding`.
+
+### 14.6 Finding details/report
+
+A report view can use a VS Code WebviewPanel or another suitable native view. It consumes the normalized `AnalysisResult` and renders:
+
+- summary counts;
+- findings grouped by category/severity;
+- expected versus observed data;
+- relevant source links;
+- evidence and limitations;
+- fix proposal options;
+- analysis coverage/warnings.
+
+The view is presentation-only. It must not run its own route comparisons.
+
+### 14.7 Hover provider and Quick Fix provider
+
+Hover/detail views should be contextual and short, with a link/action to the full explanation. Quick Fix actions delegate to the fix registry/core and apply only validated proposals after user acceptance. Do not populate a Quick Fix merely because a string replacement is possible; the source-of-truth assumptions must be sound or explicitly chosen.
+
+### 14.8 Commands and status
+
+Initial commands should include equivalents of:
+
+- Analyze Workspace / Analyze Again;
+- Open UNDRIFT Report;
+- Explain Finding;
+- Refresh Findings;
+- Ignore/Suppress Finding when project configuration supports it;
+- Re-check affected relationship after manual correction.
+
+A status bar item may report analyzing/clean/findings/incomplete states. Notifications should be selective and should not repeatedly show unchanged results.
+
+### 14.9 Disposal and resource ownership
+
+Every VS Code listener, tree, diagnostic collection, status item, cancellation source, parser, and view registration must be registered for cleanup. The composition root owns the engine; the engine owns parser/analyzer resources it creates or registers according to the chosen contract. Do not dispose a parser/tree that another in-flight analysis is still using.
+
+---
+
+## 15. Configuration Model
+
+V0 may run with defaults. A later V1 configuration should be local, versioned, readable, and validated.
+
+Candidate shape:
 
 ```ts
-interface AnalysisProject {
-  rootPath: string;
-
-  sourceFiles: Map<string, SourceFileHandle>;
-
-  getSourceFile(path: string): SourceFileHandle | undefined;
-
-  resolveType(
-    reference: TypeReference
-  ): NormalizedType;
-}
-```
-
-`ts-morph` may be used as the primary implementation layer over the TypeScript compiler infrastructure.
-
----
-
-# 48. Source File Handle
-
-```ts
-interface SourceFileHandle {
-  path: string;
-
-  getText(): string;
-
-  getAst(): AstSourceFile;
-
-  getHash(): string;
-
-  isOverlay: boolean;
-}
-```
-
-This abstraction makes file input independent of VS Code.
-
----
-
-# 49. AST Traversal Strategy
-
-Traversal should be visitor-based.
-
-Example conceptual flow:
-
-```text
-SourceFile
-   ↓
-visit node
-   ├── CallExpression
-   │      ↓
-   │   Frontend adapters
-   │   Backend adapters
-   │
-   ├── InterfaceDeclaration
-   │
-   ├── TypeAliasDeclaration
-   │
-   └── VariableDeclaration
-```
-
-The extractor should only inspect nodes relevant to its adapter.
-
----
-
-# 50. Contract Normalization
-
-Before matching, normalize:
-
-```text
-method
-route
-parameter naming
-field representation
-type representation
-optional/nullability
-```
-
-Example:
-
-```text
-"GET" + "/users/:id"
-```
-
-becomes a canonical internal representation.
-
----
-
-# 51. Route Normalization
-
-Initial normalization:
-
-```text
-trim whitespace
-ensure leading slash
-remove duplicate slashes
-normalize trailing slash
-normalize parameter token shape
-```
-
-Parameter token:
-
-```text
-:id
-:userId
-```
-
-becomes conceptually:
-
-```text
-PARAM
-```
-
-for structural route matching.
-
-Original parameter names remain available for request-parameter validation.
-
----
-
-# 52. Route Matching
-
-Candidate generation:
-
-```text
-same normalized path
-OR
-same path structure with different parameter names
-```
-
-Example:
-
-```text
-/users/:id
-/users/:userId
-```
-
-candidate match.
-
-But:
-
-```text
-/users/:id
-/user/:id
-```
-
-is not an exact route match.
-
-Potential fuzzy matching can classify this as a route mismatch if both sides appear related.
-
----
-
-# 53. Contract Matching Pipeline
-
-```text
-Consumer
-   │
-   ▼
-Route + Method candidate search
-   │
-   ▼
-Candidate Provider
-   │
-   ▼
-Request comparison
-   │
-   ▼
-Response comparison
-   │
-   ▼
-Type/optional comparison
-   │
-   ▼
-Semantic resolver if required
-   │
-   ▼
-MatchResult
-```
-
----
-
-# 54. Method Matching Rule
-
-Exact match:
-
-```text
-POST == POST
-```
-
-Mismatch:
-
-```text
-POST != PUT
-```
-
-Method mismatch severity:
-
-```text
-critical
-```
-
-when the route is otherwise strongly related.
-
----
-
-# 55. Request Matching Rule
-
-Compare:
-
-```text
-path params
-query params
-body fields
-```
-
-For each:
-
-```text
-expected field exists?
-provided/consumed field exists?
-type compatible?
-optional compatible?
-```
-
----
-
-# 56. Response Matching Rule
-
-For each expected frontend response field:
-
-```text
-provider field exists?
-field name exact?
-field semantically related?
-type compatible?
-nullability compatible?
-```
-
-Missing response field:
-
-```text
-critical or warning
-```
-
-depending on whether it is required.
-
-Initial implementation recommendation:
-
-```text
-required missing field → critical
-optional missing field → warning
-```
-
----
-
-# 57. Field Matching Order
-
-Use:
-
-```text
-1. exact name
-2. normalized name
-3. structural/type evidence
-4. semantic resolver
-```
-
-Example:
-
-```text
-user_name
-      ↓
-normalize
-      ↓
-username
-```
-
-Potential exact normalized match.
-
----
-
-# 58. Name Normalization
-
-Convert common naming styles into comparable tokens.
-
-Examples:
-
-```text
-userName
-user_name
-user-name
-USER_NAME
-```
-
-normalize to something equivalent to:
-
-```text
-["user", "name"]
-```
-
-This reduces false positives without requiring AI.
-
----
-
-# 59. Semantic Matching
-
-Only invoke semantic resolution when deterministic matching leaves an ambiguous candidate.
-
-Example:
-
-```text
-displayName
-full_name
-```
-
-Possible result:
-
-```text
-equivalent = true
-confidence = 0.91
-reasons = [
-  "same source model",
-  "same primitive type",
-  "similar display-oriented usage"
-]
-```
-
----
-
-# 60. Semantic Resolver Interface
-
-```ts
-export interface SemanticResolver {
-  resolve(
-    request: SemanticMatchRequest
-  ): Promise<SemanticMatchResult>;
-}
-```
-
-Request:
-
-```ts
-interface SemanticMatchRequest {
-  frontendField: FieldDefinition;
-  backendField: FieldDefinition;
-
-  context: {
-    route: string;
-    entity?: string;
+export interface UndriftConfig {
+  version: 1;
+  include?: string[];
+  exclude?: string[];
+  analyzers?: {
+    javascriptTypescript?: boolean;
+    express?: boolean;
   };
+  rules?: Record<string, { enabled?: boolean; severity?: FindingSeverity }>;
+  suppressions?: FindingSuppression[];
+  mappings?: IntentionalMapping[];
+}
+
+export interface FindingSuppression {
+  ruleId: RuleId;
+  relationshipKey?: string;
+  uri?: DocumentUri;
+  reason: string;
+}
+
+export interface IntentionalMapping {
+  kind: "field" | "route-prefix" | "other";
+  from: string;
+  to: string;
+  reason: string;
 }
 ```
 
-Result:
-
-```ts
-interface SemanticMatchResult {
-  equivalent: boolean;
-
-  confidence: number;
-
-  reasons: string[];
-}
-```
-
----
-
-# 61. Semantic Resolution Priority
-
-For the 48-hour MVP:
-
-```text
-P0:
-deterministic normalization
-
-P2:
-heuristic semantic resolver
-
-P3:
-external/LLM semantic resolver
-```
-
-The core must operate without the P3 layer.
-
----
-
-# 62. Drift Detection
-
-The Drift Engine evaluates:
-
-```text
-unmatched consumer
-unmatched provider
-matched route
-matched method
-request schemas
-response schemas
-types
-optional/nullability
-semantic ambiguity
-```
-
----
-
-# 63. Missing Endpoint Detector
-
-Input:
-
-```text
-consumer exists
-provider candidates = []
-```
-
-Output:
-
-```ts
-Drift {
-  type: "missing-endpoint",
-  severity: "critical"
-}
-```
-
-Example message:
-
-```text
-Frontend expects GET /api/profile, but no matching backend
-provider was discovered.
-```
-
----
-
-# 64. Orphan Endpoint Detector
-
-Input:
-
-```text
-provider exists
-consumer candidates = []
-```
-
-Output:
-
-```text
-type = orphan-endpoint
-severity = info
-```
-
-Message:
-
-```text
-No known frontend consumer was discovered for GET /api/analytics.
-```
-
-The word "known" is intentional.
-
----
-
-# 65. Route Mismatch Detector
-
-When two endpoints appear strongly related but paths differ:
-
-```text
-Frontend:
-GET /users/:id
-
-Backend:
-GET /user/:id
-```
-
-create:
-
-```text
-route-mismatch
-```
-
-with both source locations.
-
----
-
-# 66. Method Mismatch Detector
-
-Example:
-
-```text
-Frontend:
-POST /orders
-
-Backend:
-PUT /orders
-```
-
-create:
-
-```text
-method-mismatch
-severity = critical
-```
-
-if route similarity is strong enough.
-
----
-
-# 67. Request Mismatch Detector
-
-Example:
-
-```text
-Frontend request:
-email
-password
-
-Backend request:
-email
-pass
-```
-
-finding:
-
-```text
-request-mismatch
-```
-
-The finding may contain child field mismatches internally.
-
----
-
-# 68. Response Mismatch Detector
-
-Example:
-
-```text
-Frontend:
-userName
-email
-
-Backend:
-user_name
-email
-```
-
-finding:
-
-```text
-response-mismatch
-```
-
-with an optional semantic child finding for:
-
-```text
-userName ↔ user_name
-```
-
----
-
-# 69. Type Mismatch Detector
-
-Example:
-
-```text
-Frontend:
-price: number
-
-Backend:
-price: string
-```
-
-Output:
-
-```text
-type-mismatch
-severity = critical
-```
-
-if the field is required and the types are clearly incompatible.
-
----
-
-# 70. Nullability Detector
-
-Example:
-
-```text
-Frontend:
-avatar: string
-
-Backend:
-avatar: string | null
-```
-
-Output:
-
-```text
-nullability-mismatch
-severity = warning
-```
-
----
-
-# 71. Severity Rules
-
-Suggested initial rules:
-
-```text
-missing endpoint            critical
-method mismatch             critical
-required request mismatch  critical
-required response missing   critical
-clear type mismatch        critical
-field naming drift          warning
-nullability mismatch       warning
-optional field mismatch    warning
-orphan endpoint             info
-ambiguous semantic match   info/warning
-```
-
-Severity should remain configurable later.
-
----
-
-# 72. Drift State Resolution
-
-The contract's state is derived from observations.
-
-Pseudo-logic:
-
-```text
-consumer only
-    → waiting
-
-provider only
-    → orphaned
-
-consumer + provider
-    → matched
-
-consumer + provider + no drift
-    → verified
-
-consumer + provider + drift
-    → drifted
-```
-
-After a user-approved fix:
-
-```text
-drifted
-    ↓
-re-analysis
-    ↓
-no drift
-    ↓
-verified
-```
-
----
-
-# 73. Repaired State
-
-`repaired` should be treated as a transitional state rather than a permanent state.
-
-Example:
-
-```text
-DRIFTED
-   ↓
-Fix applied
-   ↓
-REPAIRED
-   ↓
-Verification succeeds
-   ↓
-VERIFIED
-```
-
-If verification fails:
-
-```text
-REPAIRED
-   ↓
-DRIFTED
-```
-
----
-
-# 74. Contract Store
-
-The Contract Store maintains current contracts.
-
-```ts
-interface ContractStore {
-  get(id: string): ApiContract | undefined;
-
-  getAll(): ApiContract[];
-
-  set(contract: ApiContract): void;
-
-  delete(id: string): void;
-
-  clear(): void;
-}
-```
-
----
-
-# 75. Drift Store
-
-```ts
-interface DriftStore {
-  get(id: string): Drift | undefined;
-
-  getAll(): Drift[];
-
-  set(drift: Drift): void;
-
-  delete(id: string): void;
-
-  clear(): void;
-}
-```
-
----
-
-# 76. Source Store
-
-```ts
-interface SourceStore {
-  get(path: string): SourceFileState | undefined;
-
-  set(file: SourceFileState): void;
-
-  delete(path: string): void;
-
-  getAll(): SourceFileState[];
-
-  hasChanged(path: string, hash: string): boolean;
-}
-```
-
----
-
-# 77. Graph Store
-
-The graph can be held directly by Core state.
-
-Basic operations:
-
-```ts
-interface GraphStore {
-  addNode(node: GraphNode): void;
-
-  removeNode(id: string): void;
-
-  addEdge(edge: GraphEdge): void;
-
-  removeEdge(id: string): void;
-
-  getNode(id: string): GraphNode | undefined;
-
-  getEdgesForNode(id: string): GraphEdge[];
-
-  clear(): void;
-}
-```
-
----
-
-# 78. Full Analysis Coordinator
-
-The engine coordinator controls the analysis pipeline.
-
-```text
-WorkspaceInput
-      ↓
-WorkspaceIndexer
-      ↓
-ExtractorRunner
-      ↓
-ContractNormalizer
-      ↓
-ContractStore
-      ↓
-GraphBuilder
-      ↓
-MatchingEngine
-      ↓
-DriftEngine
-      ↓
-FixBuilder
-      ↓
-AnalysisResult
-```
-
----
-
-# 79. Incremental Analysis Coordinator
-
-For a file change:
-
-```text
-SourceChange
-      ↓
-identify old observations
-      ↓
-remove old contract nodes
-      ↓
-parse changed content
-      ↓
-re-extract
-      ↓
-normalize
-      ↓
-update stores
-      ↓
-rebuild affected graph relationships
-      ↓
-re-match affected contracts
-      ↓
-recompute affected drifts
-```
-
----
-
-# 80. What Is an Affected Contract?
-
-For the MVP, an affected contract is any contract where:
-
-- the consumer source file changed;
-- the provider source file changed;
-- a directly referenced type definition changed;
-- a Prisma model used by the provider changed.
-
-A fully recursive dependency impact system is not required initially.
-
----
-
-# 81. Type Dependency Handling
-
-If:
-
-```ts
-interface User {
-  userName: string;
-}
-```
-
-changes, API contracts using `User` may be affected even though the API call file did not change.
-
-Minimum acceptable MVP strategy:
-
-```text
-track source location of resolved type
-+
-associate type definition with consumer/provider
-```
-
-Then re-evaluate those contracts when the definition changes.
-
----
-
-# 82. File Hashing
-
-For persisted/cached source state:
-
-```text
-SHA-256(content)
-```
-
-or another stable cryptographic/content hash may be used.
-
-The hash helps determine whether a file actually changed.
-
-The exact hashing algorithm is not part of the product contract.
-
----
-
-# 83. Debouncing
-
-VS Code may emit many document change events while typing.
-
-Use:
-
-```text
-change
- ↓
-reset timer
- ↓
-~500–1000 ms without new change
- ↓
-run analysis
-```
-
-The exact interval can be configured.
-
----
-
-# 84. Revision Control
-
-Every analysis request should capture a revision number.
-
-Example:
-
-```text
-revision 18
-```
-
-When a new change occurs:
-
-```text
-revision 19
-```
-
-If revision 18 finishes after revision 19:
-
-```text
-discard revision 18 result
-```
-
-This prevents stale analysis from overwriting current state.
-
----
-
-# 85. VS Code Extension Entry Point
-
-`extension.ts` responsibilities:
-
-```text
-activate context
-    ↓
-detect workspace
-    ↓
-initialize Core service
-    ↓
-register commands
-    ↓
-register diagnostics
-    ↓
-register hover
-    ↓
-register code actions
-    ↓
-register sidebar
-    ↓
-register report command
-    ↓
-register workspace watchers
-```
-
-It should remain an orchestration file, not a giant implementation file.
-
----
-
-# 86. Core Service
-
-`coreService.ts` owns the extension's Core instance.
-
-Conceptually:
-
-```ts
-interface CoreService {
-  initialize(rootPath: string): Promise<void>;
-
-  analyze(): Promise<AnalysisResult>;
-
-  analyzeChanges(
-    changes: SourceChange[]
-  ): Promise<AnalysisResult>;
-
-  getDrift(id: string): Drift | undefined;
-
-  getFixes(id: string): FixProposal[];
-
-  getReport(): IntegrationReport;
-}
-```
-
----
-
-# 87. Workspace Service
-
-Responsibilities:
-
-- determine workspace root;
-- create source overlays;
-- identify relevant files;
-- connect VS Code workspace state to Core inputs.
-
-It should not perform contract matching.
-
----
-
-# 88. Analysis Coordinator in Extension
-
-The extension-level coordinator controls when Core analysis should happen.
-
-```text
-VS Code event
-     ↓
-AnalysisCoordinator
-     ↓
-debounce
-     ↓
-CoreService
-     ↓
-Core
-     ↓
-AnalysisResult
-     ↓
-UI refresh
-```
-
----
-
-# 89. Diagnostics Provider
-
-The Diagnostic Provider translates Core drift into VS Code diagnostics.
-
-Mapping:
-
-```text
-DriftSeverity
-    ↓
-DiagnosticSeverity.Error / Warning / Information
-```
-
-Example:
-
-```ts
-const diagnostic =
-  new vscode.Diagnostic(
-    range,
-    drift.message,
-    severity
-  );
-```
-
-The diagnostic source should be:
-
-```text
-UNDRIFT
-```
-
----
-
-# 90. Diagnostic Range Selection
-
-A drift can have multiple locations.
-
-Preferred target order:
-
-```text
-1. developer's currently incorrect usage
-2. provider field/route
-3. consumer route
-4. general source range
-```
-
-The goal is to place the warning where the developer can act on it.
-
----
-
-# 91. Related Information
-
-Where supported, attach related locations:
-
-```text
-Frontend:
-src/api/users.ts:12
-
-Backend:
-src/routes/users.ts:24
-```
-
-This gives the developer both sides of the mismatch.
-
----
-
-# 92. Hover Provider
-
-The Hover Provider performs:
-
-```text
-cursor location
-     ↓
-Core source lookup
-     ↓
-relevant contract/drift
-     ↓
-hover markdown
-```
-
-Hover content should contain:
-
-```text
-endpoint
-expected
-actual
-reason
-severity
-suggested resolution
-```
-
----
-
-# 93. Code Action Provider
-
-The Code Action Provider:
-
-```text
-diagnostic range
-      ↓
-find drift
-      ↓
-request FixProposals
-      ↓
-create CodeActions
-```
-
-Example labels:
-
-```text
-UNDRIFT: Map user_name → userName
-UNDRIFT: Add missing response field
-UNDRIFT: Review contract
-```
-
----
-
-# 94. Code Action Edit
-
-For an exact replacement:
-
-```text
-FixProposal
-    ↓
-vscode.WorkspaceEdit
-    ↓
-TextEdit.replace(...)
-    ↓
-workspace.applyEdit(...)
-```
-
-For multiple files:
-
-```text
-single WorkspaceEdit
-   ├── frontend edit
-   ├── backend edit
-   └── test edit
-```
-
-where supported by the generated proposal.
-
----
-
-# 95. Fix Preview
-
-The MVP does not need a custom diff renderer.
-
-Prefer VS Code's native source/edit interaction wherever possible.
-
-The user can:
-
-```text
-review
-accept
-reject
-```
-
-from native editor flows.
-
-A custom report can show a textual summary of affected files.
-
----
-
-# 96. Fix Safety Policy
+This is a proposal for LLD discussion, not a finalized public schema. The final configuration filename, mapping semantics, and behavior for unknown keys should be confirmed before implementation.
 
 Rules:
 
-```text
-safe
-→ direct Quick Fix
-
-review
-→ explicit review action
-
-manual
-→ no automatic edit
-```
-
-Examples:
-
-```text
-user_name → userName
-```
-
-may be `safe` if only one consumer mapping must be changed.
-
-A multi-file semantic transformation may be `review`.
-
-An ambiguous semantic relationship should be `manual`.
+- invalid config should produce a clear warning and safe defaults;
+- scope/ignore patterns must not allow accidental traversal outside the selected workspace;
+- suppressions should be explicit and narrowly scoped;
+- an intentional mapping must retain its rationale and contribute visible evidence;
+- no implicit global assumption that either frontend or backend is always authoritative;
+- configuration changes invalidate affected analysis and relevant cache entries.
 
 ---
 
-# 97. Sidebar Tree Provider
+## 16. Caching, State and Finding Identity
 
-The Tree Provider should read Core state.
+### 16.1 Initial state strategy
 
-Root nodes:
+No database is required. Workspace source is the current source of truth. Derived parser trees, observations, relationships, findings, and reports live in memory and can be rebuilt.
 
-```text
-Integration Health
-Drifted Contracts
-Waiting Contracts
-Orphaned Providers
-```
+### 16.2 Cache layers
 
-Child nodes:
+The implementation may add caches in this order:
 
-```text
-⚠ GET /users/:id
-⚠ POST /orders
-```
+1. parse result/tree per document content hash;
+2. extraction output per document content hash and analyzer/config version;
+3. local declaration/index data per affected document set;
+4. relationships/findings per observation revision;
+5. report per analysis generation.
 
-Tree node commands can open the relevant source or report entry.
+A cache key must account for every input that affects the result. If an import, route mount, type alias, configuration mapping, parser grammar or analyzer rule changes, dependent observations/results need invalidation.
 
----
+### 16.3 Correctness fallback
 
-# 98. Report Webview
+When dependency relationships are unknown, invalidate broadly and run a workspace/scoped scan. A correct full pass is preferred over returning stale or incomplete results while claiming they are current.
 
-The report receives a serializable `IntegrationReport`.
+### 16.4 Identity
 
-Messages from Webview to extension may include:
+- `ObservationId` should be stable for unchanged source-derived constructs where practical.
+- `RelationshipId` should derive from observation identities and relationship kind, not array order.
+- `FindingId` should derive from stable rule identity, relationship/observation keys, and a field/path key when relevant.
+- `FixProposalId` may be scoped to the current finding and analysis generation; stale proposals must never be reused after relevant source changes.
 
-```text
-OPEN_DRIFT
-APPLY_FIX
-REFRESH
-OPEN_FILE
-```
-
-The Webview must not mutate Core directly.
-
-All actions go:
-
-```text
-Webview
- ↓ message
-Extension
- ↓
-Core / WorkspaceEdit
-```
+A material code change may correctly change an ID. Stability is intended to minimize flicker for unchanged issues, not force identity across different semantics.
 
 ---
 
-# 99. Integration Report
+## 17. Error Handling
 
-```ts
-export interface IntegrationReport {
-  projectName: string;
+| Condition | Core behavior | Extension behavior |
+|---|---|---|
+| Unsupported file/language | No parser/analyzer result for that document | Ignore silently or show scoped unsupported status; do not classify it as clean analyzed code |
+| Grammar failed to load | Return an analyzer/parse warning and mark coverage incomplete | Log details; avoid crashing activation |
+| Syntax error/incomplete buffer | Retain valid supported syntax where possible and attach parse issues | Avoid noisy diagnostics for every incomplete keystroke |
+| Dynamic route/method/body | Store dynamic/unknown observation | Explain analysis limitation and avoid confident compatibility assertion |
+| Unresolved type/import | Retain unresolved reference and provenance | Show qualified warning if it affects a finding |
+| Analyzer exception | Isolate the failing analyzer/document when safe | Write useful local logs and continue independent work |
+| Invalid config | Return configuration warning and documented defaults | Identify the config source/location |
+| Cancelled/superseded analysis | Stop at safe boundaries; discard stale output | Keep latest valid result or show current analysis state |
+| Source changed during proposal | Refuse to apply stale edit | Ask for fresh analysis |
+| Fix does not resolve mismatch | Keep finding active after re-analysis | Show remaining mismatch; do not imply success |
+| Workspace changed during scan | Mark result stale/incomplete as appropriate | Ignore stale generation and schedule latest scan |
 
-  generatedAt: number;
-
-  summary: {
-    totalContracts: number;
-    verified: number;
-    drifted: number;
-    waiting: number;
-    orphaned: number;
-  };
-
-  drifts: Drift[];
-
-  warnings: AnalysisWarning[];
-}
-```
+Unexpected failures should include enough context for debugging—phase, analyzer ID, URI, error details—without logging full source unnecessarily.
 
 ---
 
-# 100. CLI Design
+## 18. Privacy and Safety Requirements
 
-CLI commands:
-
-```bash
-undrift scan
-undrift report
-undrift verify
-```
-
-Implementation:
-
-```text
-CLI command
-   ↓
-create Core
-   ↓
-analyzeWorkspace()
-   ↓
-format output
-```
-
-The CLI has no separate analysis implementation.
+1. All V0/V1 analysis happens locally within the opened workspace or permitted extension-host workspace.
+2. No source code or derived contract graph is uploaded to a UNDRIFT service.
+3. There is no required server, database, account, LLM provider, or model API key.
+4. The analyzer does not execute source, install dependencies, run package scripts, or launch application services.
+5. File discovery respects the workspace boundary and ignore rules.
+6. Generated/dependency files should be excluded from normal analysis/fixes unless explicitly configured.
+7. Proposed edits are reviewed and validated against current snapshots before application.
+8. All multi-file edits are described by explicit edit intents; no arbitrary shell command is generated/executed as a fix.
+9. Any future remote/AI capability would require explicit opt-in and clear disclosure of any data leaving the workspace.
 
 ---
 
-# 101. CLI Output
+## 19. Testing Strategy
 
-Example:
+Tests follow package boundaries and include valid projects as well as deliberately broken cases. A larger number of detected problems is not success if false positives increase.
 
-```text
-UNDRIFT
+### 19.1 Unit tests: parser facade and position mapper
 
-Contracts: 24
+Cover:
 
-✓ Verified:   18
-⚠ Drifted:     3
-○ Waiting:     2
-◇ Orphaned:    1
+- correct grammar selection for `.js`, `.jsx`, `.ts`, `.tsx`;
+- exact source text and snapshot identity;
+- error/missing nodes in incomplete code;
+- byte-offset to UTF-16 mapping;
+- Unicode, CRLF, LF, empty documents, final-line positions;
+- valid and invalid text edit ranges;
+- parser/tree disposal and cancellation lifecycle.
 
-Drifted:
-  [CRITICAL] POST /api/orders
-  [WARNING]  GET /api/users/:id
-  [WARNING]  PUT /api/profile
-```
+### 19.2 Unit tests: extractors
 
----
+Frontend call fixtures:
 
-# 102. Prisma-to-Backend Relationship
+- direct `fetch("/api/users")`;
+- fetch with explicit POST method;
+- fetch with supported JSON body serialization;
+- supported Axios method calls;
+- a typed Axios result where the response annotation is visible;
+- dynamic path/method and unsupported custom wrapper;
+- wrong identifier/unsupported call that must not become an API consumer.
 
-The MVP should not attempt full semantic entity tracing.
+Backend fixtures:
 
-A practical implementation can establish relationships when:
+- `app.get` and `router.post`;
+- the supported methods across app/router forms;
+- literal route and parameter route;
+- direct `res.json` response;
+- supported `res.status(...).json(...)` chain;
+- route with dynamic path;
+- mounted prefix supported case and unresolved mount case;
+- a function that looks like a route method but is not a supported Express construct.
 
-```text
-Prisma model type
-      ↓
-backend service/type reference
-      ↓
-response type
-```
+Shape/type fixtures:
 
-is statically resolvable.
+- primitive field, nested object, array, union and literal;
+- optional and nullable properties;
+- local interface/type alias;
+- supported import if the POC validates it;
+- unresolved import, circular reference, complex generic or unsupported type;
+- complete versus partial shapes.
 
-Otherwise, the Prisma model remains independently available for future graph enrichment.
+### 19.3 Unit tests: normalization and matching
 
----
+Test exact matches, route parameter handling, method conflict, trailing slash policy, base paths, query strings, unsupported interpolation, duplicate routes, ambiguity, and conservative suspected route mismatch.
 
-# 103. Dynamic API Calls
+Explicit negative tests are essential:
 
-Unsupported example:
+- similar-looking unrelated routes do not get matched;
+- `user` and `users` are not silently equivalent except under the constrained suspected-route rule;
+- parameter names alone do not create a route mismatch;
+- route prefixes are not dropped;
+- unknown method/path does not become a literal;
+- ambiguous candidate sets do not emit a definitive route mismatch;
+- external/dynamic consumer possibilities do not become a claim of global unused endpoint.
 
-```ts
-fetch(`/api/${resource}/${action}`);
-```
+### 19.4 Unit tests: drift rules
 
-If values cannot be resolved statically:
+For each rule, include:
 
-```text
-do not create a false concrete contract
-```
+- a positive fixture that should produce the finding;
+- a compatible fixture that should not;
+- an ambiguous/incomplete fixture that should qualify or suppress the finding;
+- expected severity and evidence strength;
+- exact source references;
+- expected and observed data;
+- a stable rule ID.
 
-Instead:
+Specific cases:
 
-```text
-AnalysisWarning:
-unresolved-route
-```
+- no compatible provider versus method mismatch;
+- no known consumer semantics;
+- required request field omitted from a complete consumer shape;
+- extra request property when provider acceptance is unknown (must not be a hard error);
+- missing response property in a complete provider shape;
+- missing response property in a partial provider shape (must not be treated as proof);
+- incompatible request/response types;
+- provider nullable output versus non-null consumer expectation;
+- unknown/unresolved types (must not yield guessed mismatch);
+- intentional mapping/suppression;
+- duplicate route finding aggregation.
 
-This preserves correctness.
+### 19.5 Unit tests: fix proposal and staleness
 
----
+- generator returns no fix when evidence/authority is ambiguous;
+- proposal contains expected content hash/version;
+- rejected proposal causes no edit;
+- stale source invalidates the proposal;
+- accepted edit modifies only intended ranges;
+- Unicode position mapping does not shift ranges;
+- route ambiguity requires a target choice or manual handling;
+- successful fix re-analysis clears the intended finding;
+- incomplete re-analysis does not mark a finding resolved.
 
-# 104. Generated Code
+### 19.6 Integration tests: core
 
-The analyzer should treat generated code conservatively.
+A complete fixture workspace should be passed through the real parser adapter, analyzer, matching, and rule engine. Compare normalized JSON/golden outputs for observations, relationships, findings, warnings, and source positions.
 
-Potential directories:
+Golden files should be intentionally reviewed when rules change, so false-positive behavior isn't silently normalized.
 
-```text
-generated/
-dist/
-build/
-```
+### 19.7 Extension-host tests
 
-should normally be excluded unless configuration explicitly includes them.
+Run through a VS Code extension host to verify:
 
----
+- activation, commands and contribution registration;
+- workspace scan and open-buffer precedence;
+- diagnostics and tree/report linkage;
+- changed document invalidates stale output;
+- analysis generation prevents old results replacing new ones;
+- accepted and rejected Quick Fix flow;
+- invalidated fix proposals are not applied;
+- result refresh after accepted fix;
+- resource/listener disposal on deactivation.
 
-# 105. Source Filtering
+### 19.8 Evaluation metrics
 
-Relevant extensions for MVP:
-
-```text
-.ts
-.tsx
-.js
-.jsx
-```
-
-with `.ts` / `.tsx` as the primary implementation target.
-
-Prisma:
-
-```text
-.prisma
-```
-
-Only supported source paths should enter extraction.
-
----
-
-# 106. Error Handling
-
-Every major pipeline stage should catch local failures.
-
-Example:
-
-```text
-extract file
-   ↓
-try
-   ├── successful
-   └── warning
-```
-
-One extractor failing for one file should not abort all analysis.
-
-Errors should become:
-
-```text
-AnalysisWarning
-```
-
-whenever the project can still be meaningfully analyzed.
+Track the metrics specified by the PRD, including true positives, false positives, seeded drifts missed, accuracy by rule category, successful re-verification, first-use time, responsiveness, and warning/noise levels. Keep a labeled fixture catalog so every rule can be improved against reproducible examples.
 
 ---
 
-# 107. Logging Architecture
+## 20. Proof-of-Concept Gates
 
-Provide a small logger interface:
+The code structure should allow these experiments without redesigning the core domain.
 
-```ts
-interface Logger {
-  debug(message: string, meta?: unknown): void;
-  info(message: string, meta?: unknown): void;
-  warn(message: string, meta?: unknown): void;
-  error(message: string, meta?: unknown): void;
-}
-```
+### POC-A — Parser binding and package viability
 
-Production/default logging:
+Validate Tree-sitter in the actual bundled extension. Compare `web-tree-sitter` with packaged WASM grammars against the official Node.js binding.
 
-```text
-INFO
-WARN
-ERROR
-```
+Measure/verify:
 
-Debug logging is enabled through development configuration.
+- cold-start and grammar initialization;
+- JS/TS/JSX/TSX parsing;
+- syntax errors and incomplete buffers;
+- source ranges and Unicode position mapping;
+- incremental edit parsing;
+- bundle/asset packaging;
+- version compatibility and cross-platform behavior.
 
-Do not log source file contents by default.
+**Decision:** choose the concrete binding and pin compatible grammar/runtime versions. If the preferred WASM candidate fails material requirements, use the alternative behind `ParserPort`.
 
----
+### POC-B — First consumer/provider extraction
 
-# 108. Configuration Resolution
+Extract direct supported frontend calls and Express routes into the normalized observation model. Test complete and dynamic cases.
 
-Configuration resolution order:
+**Decision:** publish a precise support matrix for the initial vertical slice and its known limitations.
 
-```text
-1. built-in defaults
-2. .undriftrc.json
-3. workspace settings
-4. runtime command options
-```
+### POC-C — Semantic depth for TypeScript
 
-For the hackathon, `.undriftrc.json` may remain optional.
+Test direct fields, inline response shapes, local interfaces, imported aliases, and responses routed through helpers.
 
----
+**Decision:** decide whether the lightweight local index is sufficient for V0/V1 or whether an optional TypeScript semantic adapter (TypeScript Compiler API or `ts-morph`) must be included. Do not choose a compiler-backed adapter pre-emptively or make the core depend on it.
 
-# 109. Example `.undriftrc.json`
+### POC-D — Matching accuracy
 
-```json
-{
-  "version": 1,
-  "frontend": {
-    "clients": ["fetch", "axios"]
-  },
-  "backend": {
-    "frameworks": ["express"]
-  },
-  "prisma": {
-    "enabled": true
-  },
-  "analysis": {
-    "maxSchemaDepth": 4
-  }
-}
-```
+Run route and shape fixtures covering direct matches, method conflicts, a unique one-segment route conflict, ambiguous candidates, partial schemas, and intentional transformations.
+
+**Decision:** tune or narrow matching rules based on labeled precision/false-positive results. Do not expand fuzzy matching just to increase counts.
+
+### POC-E — Live edit and fix loop
+
+Verify open-buffer precedence, debounce/cancel behavior, generation checks, accepted edits, stale-edit rejection, and re-analysis.
+
+**Decision:** decide whether the in-process model meets responsiveness goals or whether profiling justifies further concurrency architecture.
 
 ---
 
-# 110. Testing Structure
+## 21. Implementation Sequence
 
-Core tests should be independent of VS Code.
+### Phase 1 — Repository baseline and parser POC
 
-```text
-packages/core/tests/
-│
-├── extractors/
-│   ├── frontend/
-│   ├── backend/
-│   └── prisma/
-│
-├── normalization/
-├── matcher/
-├── drift/
-├── fixes/
-├── graph/
-└── engine/
-```
+- reconcile package setup and scripts;
+- implement parser port and grammar registry;
+- package the extension with parser assets;
+- test position mapping and incomplete-source handling.
 
-VS Code-specific tests live separately.
+**Exit:** the extension bundle parses representative source files and returns reliable spans.
 
----
+### Phase 2 — Observation extraction
 
-# 111. Fixture Structure
+- implement frontend `fetch`/Axios patterns in the chosen support matrix;
+- implement Express route/handler patterns;
+- extract direct request/response shapes and explicit supported types;
+- record provenance and analysis warnings.
 
-Recommended:
+**Exit:** fixture code yields expected normalized observations.
 
-```text
-tests/fixtures/
-│
-├── 01-missing-endpoint/
-│   ├── frontend/
-│   ├── backend/
-│   └── expected.json
-│
-├── 02-orphan-endpoint/
-│
-├── 03-route-mismatch/
-│
-├── 04-method-mismatch/
-│
-├── 05-response-field-mismatch/
-│
-├── 06-type-mismatch/
-│
-└── 07-nullability-mismatch/
-```
+### Phase 3 — Contract model and drift detection
 
----
+- implement shape/route normalization;
+- generate candidate relationships;
+- implement stable rule IDs;
+- build expected/actual explanations and report data;
+- add negative/ambiguity fixtures.
 
-# 112. Fixture Principles
+**Exit:** valid, drifted, and unresolved relationships produce distinct results.
 
-Each fixture should be:
+### Phase 4 — VS Code diagnostics/report
 
-- small;
-- deterministic;
-- understandable;
-- intentionally broken in one primary way;
-- easy to compare against expected output.
+- wire workspace snapshot provider and analysis coordinator;
+- add diagnostics, sidebar/report, source navigation, commands and status;
+- debounce and discard stale analysis.
 
-Multiple issues can be tested in larger integration fixtures.
+**Exit:** a developer sees a concrete mismatch and can inspect both source sides.
+
+### Phase 5 — Reviewable repair and verification
+
+- implement a narrowly scoped fix generator;
+- add target choice/manual path for ambiguous repairs;
+- validate hashes/versions and apply through `WorkspaceEdit`;
+- trigger re-analysis and verify resolution.
+
+**Exit:** at least one realistic case completes the full detect → explain → review/apply → re-analyze → verify loop.
+
+### Phase 6 — Evaluation and scope adjustment
+
+- run labeled fixture suite and a representative sample project;
+- evaluate false positives and missed cases;
+- benchmark startup, analysis and editing responsiveness;
+- test with developers;
+- decide whether to add semantic resolution, expand framework coverage, or focus on report/fix quality.
+
+**Exit:** the next changes are prioritized by measured gaps and real workflow feedback.
 
 ---
 
-# 113. Extractor Unit Test Example
+## 22. Definition of Done for the First End-to-End Slice
 
-Input:
+The first complete slice is not considered done until:
 
-```ts
-api.get<User>("/users/:id");
-```
-
-Expected:
-
-```text
-method = GET
-path = /users/:id
-response type = User
-```
-
-The test should also assert source location.
-
----
-
-# 114. Matcher Unit Test Example
-
-Input:
-
-```text
-Consumer:
-GET /users/:id
-Response:
-userName: string
-
-Provider:
-GET /users/:id
-Response:
-user_name: string
-```
-
-Expected:
-
-```text
-route match = true
-response field exact match = false
-normalized/semantic candidate = true
-```
+- [ ] the extension activates and loads all required parser assets in its packaged form;
+- [ ] supported JavaScript/TypeScript/JSX/TSX fixtures parse with source mapping tests;
+- [ ] a supported frontend API call and Express provider are extracted;
+- [ ] observations retain source spans, snapshot identity, evidence strength and limitations;
+- [ ] exact matching, a mismatch, and an ambiguous case produce different appropriate results;
+- [ ] drift rules have positive and negative fixtures;
+- [ ] findings explain expected versus observed data;
+- [ ] a finding can be opened from a diagnostic/sidebar/report and navigates to available source sides;
+- [ ] one supported repair proposal is reviewable and applied only after user acceptance;
+- [ ] stale proposals are rejected;
+- [ ] post-edit analysis confirms resolution only when supported checks establish it;
+- [ ] parser/analyzer failures do not crash unrelated workspace analysis;
+- [ ] no source or contract evidence is sent to a remote service;
+- [ ] documented limitations and supported patterns match actual behavior.
 
 ---
 
-# 115. Drift Unit Test Example
+## 23. Deferred Decisions
 
-Input:
+The following remain intentionally outside the finalized implementation details until justified:
 
-```text
-expected:
-price: number
+- exact Tree-sitter JS/WASM binding and grammar versions (POC-A);
+- need and implementation of a TypeScript semantic adapter (POC-C);
+- deep inference through arbitrary functions, custom clients and complex framework composition;
+- Prisma and other language/framework adapters;
+- final configuration filename, mappings and suppression schema;
+- incremental dependency graph sophistication;
+- worker thread or process isolation;
+- CLI/npm, Git hooks and CI;
+- LSP/multi-editor support;
+- OpenAPI/generated SDK ingestion;
+- runtime evidence and multi-repository analysis;
+- any optional AI/remote semantic capability.
 
-actual:
-price: string
-```
-
-Expected:
-
-```text
-type = type-mismatch
-severity = critical
-```
-
----
-
-# 116. Fix Unit Test Example
-
-Input:
-
-```text
-Frontend:
-user_name
-Backend:
-userName
-```
-
-Expected:
-
-```text
-FixProposal
-confidence >= configured safe threshold
-edits.length >= 1
-```
-
-The test should verify that the generated replacement changes the intended range and not unrelated code.
+Future extensions should contribute observations and provenance to the shared model. They must not create a parallel drift engine or compromise local-first defaults.
 
 ---
 
-# 117. End-to-End Fixture
+## 24. Final Implementation Contract
 
-A complete fixture should simulate:
+The LLD defines UNDRIFT as a modular local analysis system composed of:
+
+1. a VS Code adapter that snapshots workspace source and presents results;
+2. an asynchronous analysis pipeline;
+3. a Tree-sitter adapter hidden behind a parser port;
+4. JavaScript/TypeScript and Express extractors producing normalized evidence;
+5. a language-neutral contract matcher and deterministic drift-rule engine;
+6. explanation and fix-proposal generators that preserve evidence and uncertainty;
+7. a reviewed, version-aware VS Code edit path;
+8. post-edit re-analysis that establishes the resulting state.
+
+The core does not depend on VS Code or a programming-language compiler API. The language adapters can grow over time, but the first release proves one vertical slice deeply instead of claiming broad language support prematurely.
+
+The implementation's primary acceptance loop is:
 
 ```text
-Open project
-     ↓
-initial scan
-     ↓
-drift detected
-     ↓
-fix generated
-     ↓
-apply edit
-     ↓
-rescan
-     ↓
-verified
+DISCOVER → MATCH → DETECT → EXPLAIN
+        → PROPOSE → REVIEW/APPLY
+        → RE-ANALYZE → VERIFY
 ```
 
-This test represents the main product loop.
+A successful file write is not the goal. A reliable, evidence-backed diagnosis and verified resolution inside the developer's normal workflow is the goal.
 
 ---
 
-# 118. Performance Test
+## 25. Reference Documentation
 
-Use the benchmark application.
+Recheck upstream versions during implementation; URLs are references, not pinned dependency declarations.
 
-Record:
-
-```text
-initialScanMs
-incrementalAnalysisMs
-contractsDiscovered
-driftsDetected
-```
-
-Performance measurements should be recorded locally and reported as benchmark results.
+- Tree-sitter: https://tree-sitter.github.io/tree-sitter/
+- Tree-sitter WebAssembly binding: https://github.com/tree-sitter/tree-sitter/blob/master/lib/binding_web/README.md
+- Tree-sitter TypeScript/TSX grammars: https://github.com/tree-sitter/tree-sitter-typescript
+- VS Code Extension API: https://code.visualstudio.com/api/
+- VS Code extension bundling: https://code.visualstudio.com/api/working-with-extensions/bundling-extension
+- TypeScript Compiler API (for optional semantic-adapter evaluation): https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API
+- Vitest: https://vitest.dev/guide/
 
 ---
 
-# 119. Memory Management
-
-Do not keep redundant AST trees forever.
-
-Recommended model:
-
-```text
-source cache
-+
-current AST/project representation
-+
-normalized contract data
-```
-
-Old contract observations should be removed when the source file is re-extracted.
-
----
-
-# 120. Stale Entity Cleanup
-
-When a file changes:
-
-```text
-old consumer IDs
-old provider IDs
-```
-
-must be removed from:
-
-```text
-consumer store
-provider store
-contract graph
-drift relationships
-```
-
-before inserting the new observations.
-
-This prevents ghost contracts inside UNDRIFT itself.
-
----
-
-# 121. File Deletion
-
-On file deletion:
-
-```text
-delete source state
-delete extracted consumers/providers
-remove related graph nodes
-recompute affected contracts
-recompute drifts
-```
-
-Example:
-
-```text
-backend route deleted
-     ↓
-frontend consumer remains
-     ↓
-missing endpoint finding appears
-```
-
-This is an important live-drift scenario.
-
----
-
-# 122. Contract Appearance During Coding
-
-Example:
-
-```text
-Developer writes frontend API call
-```
-
-UNDRIFT extracts:
-
-```text
-consumer discovered
-provider = unknown
-state = waiting
-```
-
-Later:
-
-```text
-Developer adds backend route
-```
-
-UNDRIFT re-analyzes:
-
-```text
-provider discovered
-consumer/provider matched
-state = verified
-```
-
-This directly implements the live contract lifecycle.
-
----
-
-# 123. Backend-Only Development
-
-Developer adds:
-
-```ts
-router.get("/recommendations", ...)
-```
-
-No known frontend consumer.
-
-UNDRIFT:
-
-```text
-state = orphaned
-severity = info
-```
-
-If later the frontend consumes it, the relationship transitions to:
-
-```text
-verified
-```
-
-provided there are no contract mismatches.
-
----
-
-# 124. Frontend-Only Development
-
-Developer adds:
-
-```ts
-api.get("/recommendations")
-```
-
-No backend route.
-
-UNDRIFT:
-
-```text
-state = waiting
-```
-
-The UI should explain:
-
-```text
-Waiting for provider
-No matching backend endpoint found.
-```
-
-This is distinct from a provider that is known to be present but structurally incompatible.
-
----
-
-# 125. Drift Trigger Example
-
-Initially:
-
-```text
-Frontend:
-userName
-
-Backend:
-userName
-
-STATUS:
-VERIFIED
-```
-
-Developer changes backend:
-
-```text
-userName
-→
-displayName
-```
-
-UNDRIFT:
-
-```text
-file change
- ↓
-provider re-extraction
- ↓
-response contract changed
- ↓
-consumer still expects userName
- ↓
-drift created
- ↓
-diagnostic published
-```
-
-The previously verified contract is now `drifted`.
-
----
-
-# 126. Fix Trigger Example
-
-Developer invokes:
-
-```text
-UNDRIFT: Fix selected drift
-```
-
-Core returns:
-
-```text
-FixProposal
-```
-
-Extension applies:
-
-```text
-WorkspaceEdit
-```
-
-Then:
-
-```text
-document change
- ↓
-Core re-analysis
- ↓
-drift gone
- ↓
-contract verified
-```
-
----
-
-# 127. Semantic Mapping UI
-
-For ambiguous cases:
-
-```text
-Frontend:
-displayName
-
-Backend:
-full_name
-
-UNDRIFT:
-Possible semantic match
-Confidence: 91%
-
-Reason:
-Both are string fields associated with User display data.
-
-[Review Mapping]
-[Apply]
-[Ignore]
-```
-
-Semantic confidence should never bypass developer control.
-
----
-
-# 128. Inline Completion Implementation
-
-Inline completion is optional.
-
-When enabled, it may provide context-aware completions for a high-confidence missing field.
-
-Example:
-
-```ts
-response.us|
-            ghost text:
-            erName
-```
-
-However, this feature must not become coupled to the core drift engine.
-
-The core should return structured suggestions, and the extension can decide whether a suggestion is suitable for inline completion.
-
----
-
-# 129. Why Code Actions Are Primary
-
-The primary repair mechanism should remain:
-
-```text
-Diagnostic
-   ↓
-Code Action
-```
-
-because the issue already exists in the source.
-
-Inline completion is optimized for predicting what the developer may type next; UNDRIFT primarily needs to repair an existing integration mismatch.
-
----
-
-# 130. Source-to-UI Mapping
-
-Every diagnostic-capable drift should retain source locations.
-
-Example:
-
-```text
-Drift:
-response-mismatch
-
-locations:
-[
-  frontend/src/api/users.ts:14:8,
-  backend/src/routes/users.ts:31:5
-]
-```
-
-Extension can then:
-
-```text
-open frontend source
-open backend source
-```
-
-as needed.
-
----
-
-# 131. Command Registration
-
-Recommended command IDs:
-
-```text
-undrift.analyzeWorkspace
-undrift.showReport
-undrift.refresh
-undrift.verifyCurrentFile
-undrift.fixDrift
-```
-
-Command handlers should call services rather than directly accessing Core internals.
-
----
-
-# 132. Extension Activation Events
-
-The extension should activate when a supported workspace/language is opened.
-
-Possible activation strategy:
-
-```text
-onLanguage:typescript
-onLanguage:typescriptreact
-workspaceContains:**/package.json
-```
-
-The exact activation event configuration can be refined during packaging.
-
----
-
-# 133. Extension Settings
-
-Potential settings:
-
-```text
-undrift.enabled
-undrift.analysis.debounceMs
-undrift.analysis.maxSchemaDepth
-undrift.semantic.enabled
-undrift.debug
-```
-
-For the hackathon, only essential settings should be exposed.
-
----
-
-# 134. Webview Message Contract
-
-Example:
-
-```ts
-type WebviewMessage =
-  | {
-      type: "openDrift";
-      driftId: string;
-    }
-  | {
-      type: "applyFix";
-      fixId: string;
-    }
-  | {
-      type: "refresh";
-    };
-```
-
-Extension response:
-
-```ts
-type WebviewStateMessage = {
-  type: "reportState";
-  report: IntegrationReport;
-};
-```
-
----
-
-# 135. UI State Synchronization
-
-After every successful Core update:
-
-```text
-AnalysisResult
- ↓
-update diagnostics
- ↓
-refresh TreeView
- ↓
-refresh report state
-```
-
-There must be one Core state and multiple presentation projections.
-
----
-
-# 136. No Duplicate Analysis State in UI
-
-The extension should not independently maintain:
-
-```text
-verifiedContracts
-driftedContracts
-orphanedContracts
-```
-
-as authoritative state.
-
-Instead:
-
-```text
-Core AnalysisResult
-        ↓
-UI projection
-```
-
-This avoids divergence.
-
----
-
-# 137. Persistence Strategy
-
-Optional persistence:
-
-```text
-.undrift/
-├── state.json
-├── contracts.json
-└── graph.json
-```
-
-Suggested content:
-
-```text
-schema version
-project metadata
-contract metadata
-history
-```
-
-Source contents should not be stored unless explicitly required for a future feature.
-
----
-
-# 138. Persistence Recovery
-
-On startup:
-
-```text
-load persisted metadata
-      ↓
-validate schema version
-      ↓
-discard stale state if incompatible
-      ↓
-run source analysis
-      ↓
-replace runtime state with current source-derived state
-```
-
-The source remains authoritative.
-
----
-
-# 139. CI/CLI Verification Mode
-
-The CLI may support a non-interactive verification mode.
-
-Example:
-
-```bash
-undrift verify
-```
-
-Exit codes:
-
-```text
-0 → no critical drift
-1 → critical drift found
-2 → analysis failure
-```
-
-Exact exit code semantics can be finalized during CLI implementation.
-
----
-
-# 140. Analysis Pipeline Pseudocode
-
-```ts
-async function analyzeWorkspace(
-  input: WorkspaceInput
-): Promise<AnalysisResult> {
-
-  const project = await projectLoader.load(input);
-
-  const files = await workspaceIndexer.index(project);
-
-  const observations = await extractorRunner.extract(files);
-
-  const normalized =
-    normalizer.normalize(observations);
-
-  contractStore.replaceAll(normalized);
-
-  const graph =
-    graphBuilder.build(contractStore);
-
-  matcher.match(
-    contractStore,
-    graph
-  );
-
-  const drifts =
-    driftEngine.detect(
-      contractStore,
-      graph
-    );
-
-  const fixes =
-    fixBuilder.build(drifts);
-
-  return resultBuilder.build(
-    contractStore,
-    graph,
-    drifts,
-    fixes
-  );
-}
-```
-
-The actual implementation should preserve the same conceptual ordering.
-
----
-
-# 141. Incremental Analysis Pseudocode
-
-```ts
-async function analyzeChanges(
-  changes: SourceChange[]
-): Promise<AnalysisResult> {
-
-  const affectedFiles =
-    sourceStore.applyChanges(changes);
-
-  for (const file of affectedFiles) {
-    removeOldObservations(file);
-  }
-
-  const newObservations =
-    extractorRunner.extract(affectedFiles);
-
-  const normalized =
-    normalizer.normalize(newObservations);
-
-  contractStore.upsert(normalized);
-
-  graphUpdater.update(
-    affectedFiles,
-    contractStore
-  );
-
-  const affectedContracts =
-    dependencyResolver.findAffectedContracts(
-      affectedFiles
-    );
-
-  matcher.rematch(affectedContracts);
-
-  driftEngine.recompute(
-    affectedContracts
-  );
-
-  return resultBuilder.buildCurrent();
-}
-```
-
----
-
-# 142. Matching Complexity
-
-The implementation should avoid naïve all-to-all matching when possible.
-
-For route candidates, index providers by:
-
-```text
-HTTP method
-+
-normalized path
-```
-
-Conceptually:
-
-```ts
-Map<string, ProviderContract[]>
-```
-
-where key:
-
-```text
-GET:/users/:param
-```
-
-This reduces candidate search substantially.
-
----
-
-# 143. Field Comparison Complexity
-
-Object fields should be indexed by normalized name.
-
-Example:
-
-```text
-Map<normalizedFieldName, FieldDefinition[]>
-```
-
-Then:
-
-```text
-exact/normalized lookup
-```
-
-occurs before semantic search.
-
-This keeps semantic matching rare.
-
----
-
-# 144. Semantic Resolver Cost Control
-
-Semantic resolution should only occur when:
-
-```text
-exact match failed
-+
-normalized match failed
-+
-candidate relationship remains plausible
-```
-
-This prevents AI or expensive reasoning from being invoked for ordinary fields.
-
----
-
-# 145. AI/External Resolver Boundary
-
-If an external semantic resolver is added, it should sit behind:
-
-```ts
-SemanticResolver
-```
-
-The rest of the Core does not know:
-
-- which model is used;
-- where it runs;
-- how it is authenticated;
-- how the reasoning is performed.
-
-This is an optional implementation behind an abstraction.
-
----
-
-# 146. Security Constraints for Resolver
-
-Before sending semantic context to an external provider:
-
-```text
-remove secret values
-remove environment values
-remove credentials
-remove unnecessary source contents
-```
-
-Prefer structured context:
-
-```text
-field names
-types
-route
-entity name
-source-free evidence
-```
-
-over raw source whenever possible.
-
----
-
-# 147. Analysis Cancellation
-
-If possible, an outdated analysis should be cancellable.
-
-Minimal MVP strategy:
-
-```text
-requestId/revision check
-```
-
-Advanced strategy:
-
-```text
-AbortController
-```
-
-can cancel long-running analysis.
-
-The MVP only requires correctness against stale results.
-
----
-
-# 148. Extension Disposal
-
-On extension deactivation:
-
-```text
-dispose watchers
-dispose diagnostics
-dispose tree provider
-dispose webview resources
-dispose Core
-```
-
-All VS Code disposables should be registered with the extension context where practical.
-
----
-
-# 149. Testable Boundaries
-
-The following should be independently unit-testable:
-
-```text
-Frontend extractor
-Backend extractor
-Prisma extractor
-Normalizer
-Route matcher
-Field matcher
-Type matcher
-Drift detector
-Fix builder
-Graph builder
-Core engine
-```
-
-VS Code providers are separately integration-tested.
-
----
-
-# 150. Recommended Implementation Order
-
-Implementation should proceed in the following dependency order.
-
-```text
-1. Domain types
-2. Type normalizer
-3. Source/project loader
-4. Frontend extraction
-5. Backend extraction
-6. Prisma extraction
-7. Contract normalizer
-8. Contract store
-9. Route matcher
-10. Schema matcher
-11. Graph builder
-12. Drift detectors
-13. Fix builder
-14. Core engine
-15. Fixture tests
-16. VS Code activation
-17. Diagnostics
-18. Sidebar
-19. Hover
-20. Code Actions
-21. WorkspaceEdit
-22. Live updates
-23. Report Webview
-24. CLI
-25. Semantic resolver
-26. Performance/polish
-```
-
----
-
-# 151. 48-Hour Implementation Cut Line
-
-If time runs short, the first shippable cut should be:
-
-```text
-Domain model
-+
-React/TS frontend extractor
-+
-Express/TS backend extractor
-+
-route/method matching
-+
-field/type comparison
-+
-missing/orphan detection
-+
-drift engine
-+
-VS Code diagnostics
-+
-sidebar
-+
-one Quick Fix
-+
-reverification
-```
-
-These components represent the minimum complete product loop.
-
-Prisma, semantic AI, inline completion, advanced graph visualization, and CLI polish can be deferred.
-
----
-
-# 152. Recommended First Quick Fix
-
-The first fix should be a deterministic field rename/mapping case.
-
-Example:
-
-```text
-Frontend:
-user_name
-
-Backend:
-userName
-```
-
-or the inverse.
-
-The implementation path:
-
-```text
-Drift
- ↓
-FixRule detects simple identifier mismatch
- ↓
-FixBuilder creates FileEdit
- ↓
-CodeActionProvider exposes action
- ↓
-WorkspaceEdit applies replacement
- ↓
-re-analysis
- ↓
-verified
-```
-
-This gives the team the fastest route to a compelling end-to-end demonstration.
-
----
-
-# 153. Recommended Demo Sequence from LLD Perspective
-
-Demo repository:
-
-```text
-React
-+
-Express
-+
-Prisma
-```
-
-Seed:
-
-```text
-1 missing endpoint
-1 orphan endpoint
-1 method mismatch
-1 response mismatch
-1 type mismatch
-```
-
-Start VS Code.
-
-```text
-initial analysis
-    ↓
-contracts discovered
-    ↓
-sidebar populated
-```
-
-Show one drift in code.
-
-```text
-hover
-    ↓
-explanation
-    ↓
-Quick Fix
-    ↓
-apply
-    ↓
-verified
-```
-
-Then make a live backend change.
-
-```text
-verified
-    ↓
-edit backend response field
-    ↓
-live drift appears
-```
-
-Then show report.
-
-This demonstrates:
-
-```text
-discover
-+
-track
-+
-detect
-+
-explain
-+
-fix
-+
-reverify
-+
-live monitoring
-```
-
----
-
-# 154. Architecture Invariants
-
-The following rules should remain true throughout implementation.
-
-### Invariant 1
-
-Core never imports VS Code.
-
-### Invariant 2
-
-VS Code extension never reimplements matching logic.
-
-### Invariant 3
-
-All source changes are applied through the extension/user interaction layer.
-
-### Invariant 4
-
-Deterministic contract checks do not depend on an external AI model.
-
-### Invariant 5
-
-The current source workspace is authoritative over persisted state.
-
-### Invariant 6
-
-An analysis result is associated with a workspace revision.
-
-### Invariant 7
-
-Unsupported dynamic behavior produces an explicit limitation/warning rather than fabricated certainty.
-
-### Invariant 8
-
-"Orphaned" means "no known consumer discovered within supported analysis scope."
-
----
-
-# 155. Final Low-Level Module Map
-
-```text
-packages/core
-│
-├── parser
-│   ├── project loader
-│   ├── source loader
-│   └── type resolver
-│
-├── extractors
-│   ├── frontend
-│   │   ├── fetch adapter
-│   │   ├── axios adapter
-│   │   └── typed-api adapter
-│   │
-│   ├── backend
-│   │   └── express adapter
-│   │
-│   └── prisma
-│
-├── contracts
-│   ├── domain types
-│   ├── schemas
-│   └── lifecycle
-│
-├── normalizer
-│   ├── path
-│   ├── type
-│   └── schema
-│
-├── matcher
-│   ├── route
-│   ├── request
-│   ├── response
-│   ├── field
-│   └── contract
-│
-├── graph
-│   ├── nodes
-│   ├── edges
-│   └── builder
-│
-├── drift
-│   ├── endpoint
-│   ├── method
-│   ├── request
-│   ├── response
-│   ├── type
-│   └── nullability
-│
-├── semantic
-│   ├── interface
-│   └── heuristic/AI implementation
-│
-├── fixes
-│   ├── rules
-│   ├── builder
-│   └── proposals
-│
-├── store
-│   ├── source
-│   ├── contracts
-│   └── graph
-│
-├── workspace
-│   ├── changes
-│   ├── revisions
-│   └── state
-│
-└── engine
-    ├── full analysis
-    └── incremental analysis
-```
-
-VS Code:
-
-```text
-apps/vscode-extension
-│
-├── extension.ts
-│
-├── services
-│   ├── coreService
-│   ├── workspaceService
-│   ├── analysisCoordinator
-│   └── editService
-│
-├── providers
-│   ├── diagnosticProvider
-│   ├── hoverProvider
-│   ├── codeActionProvider
-│   └── inlineCompletionProvider
-│
-├── views
-│   ├── TreeView
-│   └── Report Webview
-│
-└── commands
-    ├── analyze
-    ├── report
-    ├── refresh
-    └── verify
-```
-
----
-
-# 156. Final Technical Flow
-
-The final implementation should follow this exact conceptual pipeline:
-
-```text
-                 DEVELOPER
-                     │
-                     ▼
-                 VS CODE
-                     │
-             document/file event
-                     │
-                     ▼
-             Analysis Coordinator
-                     │
-                     ▼
-                UNDRIFT CORE
-                     │
-          ┌──────────┴──────────┐
-          ▼                     ▼
-     Source Loader          Overlay State
-          │                     │
-          └──────────┬──────────┘
-                     ▼
-                  AST
-                     │
-          ┌──────────┼──────────┐
-          ▼          ▼          ▼
-      Frontend    Backend     Prisma
-      Extractor   Extractor   Extractor
-          │          │          │
-          └──────────┼──────────┘
-                     ▼
-              Normalization
-                     │
-                     ▼
-              Contract Store
-                     │
-                     ▼
-               Contract Graph
-                     │
-                     ▼
-              Matching Engine
-                     │
-                     ▼
-                Drift Engine
-                     │
-           ┌─────────┴─────────┐
-           ▼                   ▼
-      Drift Findings       Fix Proposals
-           │                   │
-           └─────────┬─────────┘
-                     ▼
-                 VS CODE
-                     │
-        ┌────────────┼─────────────┐
-        ▼            ▼             ▼
-   Diagnostic      Hover       Quick Fix
-        │            │             │
-        └────────────┼─────────────┘
-                     ▼
-              Developer Action
-                     │
-                     ▼
-               WorkspaceEdit
-                     │
-                     ▼
-               Source Changes
-                     │
-                     ▼
-                 Re-analysis
-                     │
-                     ▼
-                  VERIFIED
-```
-
----
-
-# 157. Final LLD Principle
-
-UNDRIFT should be implemented as a **static-analysis-first, contract-centric system**.
-
-The implementation hierarchy is:
-
-```text
-Source Code
-   ↓
-AST / Type Information
-   ↓
-Contract Observations
-   ↓
-Normalized Contracts
-   ↓
-Relationships
-   ↓
-Drift
-   ↓
-Fix Proposal
-   ↓
-IDE Action
-   ↓
-Reverification
-```
-
-The system should not depend on an AI model to answer questions that the source code can answer deterministically.
-
-AI/semantic reasoning is an enhancement for ambiguous relationships.
-
-The primary engineering objective for the hackathon is to make the deterministic pipeline reliable enough that the user can experience the complete loop:
-
-> **UNDRIFT discovers what the application expects, detects when the layers disagree, explains the discrepancy, proposes a change, applies it through the IDE, and verifies that the integration is synchronized again.**
+**End of LLD — Version 1.0-draft**
