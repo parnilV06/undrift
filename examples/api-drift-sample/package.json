@@ -1,0 +1,9 @@
+{
+  "name": "api-drift-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sample fullstack project demonstrating API contract compatibility and deliberate drift scenarios for UNDRIFT.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

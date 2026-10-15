@@ -1,1755 +1,751 @@
 # UNDRIFT — High-Level Design (HLD)
 
-**Document:** HLD.md  
-**Project:** UNDRIFT  
-**Version:** 0.1 — Hackathon MVP  
-**Status:** Architecture baseline  
-**Primary Interface:** VS Code Extension  
-**Core Runtime:** Local TypeScript/Node.js analysis engine  
-**Primary Supported Stack:** React + TypeScript frontend, Node.js + Express + TypeScript backend, optional Prisma schema
+**Document:** `HLD.md`  
+**Version:** 1.0-draft  
+**Status:** Architecture review  
+**Date:** 2026-10-09  
+**Project:** UNDRIFT — personal developer-tool project  
+**Primary interface:** VS Code extension  
+**Architecture style:** Local-first extension with an editor-independent analysis core  
+**Related documents:** `PRD.md`, `TRD.md`  
+**Supersedes:** Earlier hackathon-oriented HLD assumptions
 
 ---
 
-# 1. Purpose
+## 1. Purpose
 
-This document describes the high-level architecture of UNDRIFT.
+This document describes UNDRIFT's high-level system architecture: the major components, their responsibilities, the flow of source evidence through the analysis pipeline, how findings reach the developer, and how accepted repairs are verified.
 
-The HLD defines:
+It intentionally defines logical responsibilities and interactions rather than final TypeScript interfaces, class layouts, algorithms, or UI implementation details. Those belong in the LLD, after the proof of concept validates the relevant boundaries.
 
-- major system components;
-- responsibilities and boundaries;
-- relationships between Core and the VS Code extension;
-- repository analysis flow;
-- contract discovery and lifecycle;
-- drift detection flow;
-- live development behavior;
-- fix application flow;
-- data ownership;
-- runtime architecture;
-- extensibility boundaries;
-- failure handling;
-- security and privacy boundaries;
-- deployment model;
-- major architectural decisions.
+UNDRIFT's core product loop is:
 
-The HLD intentionally does not define every class, function, AST node visitor, or exact implementation detail. Those belong in the Low-Level Design (LLD).
+```text
+DISCOVER → NORMALIZE → MATCH → DETECT → EXPLAIN
+       → PROPOSE → REVIEW / APPLY → RE-ANALYZE → VERIFY
+```
+
+The initial release targets JavaScript/TypeScript frontend code—including JSX/TSX—with supported React/client patterns and Node.js/Express backend routes. The architecture is designed for future language and framework adapters, but adding a grammar alone does not make a language supported.
 
 ---
 
-# 2. System Objective
+## 2. Architecture Goals
 
-UNDRIFT continuously maintains a code-derived view of the integration contract between supported application layers.
+The design must:
 
-The system answers four questions:
+1. Keep routine analysis local to the developer's workspace.
+2. Separate the VS Code user interface from analysis and drift rules.
+3. Use Tree-sitter as the shared syntax-parsing foundation.
+4. Keep language-specific extraction and optional semantic resolution behind adapters.
+5. Pass normalized evidence—not parser-specific nodes—into the language-neutral contract and drift engine.
+6. Keep evidence, source locations, confidence, and analysis limitations attached to observations and findings.
+7. Support explicit user review before source changes are applied.
+8. Re-analyze current source after an edit before marking a finding as resolved.
+9. Permit future CLI, Git, CI, and other editor consumers to reuse core behavior.
+10. Avoid introducing a cloud backend, database, required LLM, or language server before demonstrated need.
 
-1. **What API contracts exist in the current codebase?**
-2. **Which frontend consumers correspond to which backend providers?**
-3. **Where do those relationships disagree or remain incomplete?**
-4. **What actionable change can the developer make to resolve the issue?**
+### 2.1 Non-goals of this HLD
 
-The product is designed to operate inside the developer's normal coding environment.
+This document does not define:
 
-The target workflow is:
+- every supported syntax pattern;
+- final public/internal TypeScript types;
+- final route-normalization or matching algorithms;
+- a complete language-independent type system;
+- exact severity/confidence thresholds;
+- the final configuration schema;
+- final VS Code visual design;
+- performance claims that have not yet been benchmarked.
 
-```text
-Developer writes/changes code
-        ↓
-UNDRIFT observes workspace changes
-        ↓
-Contracts are extracted
-        ↓
-Contracts are normalized
-        ↓
-Consumers/providers are matched
-        ↓
-Drift is detected
-        ↓
-Developer receives explanation in VS Code
-        ↓
-Fix is proposed
-        ↓
-Developer reviews/accepts
-        ↓
-Workspace is edited
-        ↓
-UNDRIFT re-analyzes
-        ↓
-Contract becomes verified
-```
+These details must be made explicit and testable in the LLD or technical proof of concept.
 
 ---
 
-# 3. System Context
+## 3. System Context
 
-UNDRIFT operates on an application repository opened in VS Code.
-
-For the hackathon MVP, the repository is expected to contain primarily:
+UNDRIFT sits between a developer's local source workspace and the VS Code experience used to inspect integration drift.
 
 ```text
-React + TypeScript frontend
-Node.js + Express + TypeScript backend
-optional Prisma schema
+┌──────────────────────────────┐
+│          Developer           │
+│ edits, inspects, accepts fix │
+└──────────────┬───────────────┘
+               │ VS Code interaction
+┌──────────────▼───────────────┐
+│      VS Code Extension       │
+│ events, views, diagnostics,   │
+│ commands, reviewed edits      │
+└──────────────┬───────────────┘
+               │ in-process analysis interface
+┌──────────────▼───────────────┐
+│       UNDRIFT Core            │
+│ parse coordination, evidence, │
+│ matching, drift, fix plans    │
+└──────────────┬───────────────┘
+               │ local file/document access
+┌──────────────▼───────────────┐
+│      Open Workspace           │
+│ frontend, backend, configs,   │
+│ supported source files        │
+└──────────────────────────────┘
 ```
 
-UNDRIFT does not require a hosted backend for normal operation.
+The system does not execute the user's application to infer runtime behavior. Initial analysis is static. It does not upload source or derived contract data to a hosted service and does not require a network connection, model API key, account, or database to perform core analysis after the extension and parser assets are installed.
 
-High-level context:
-
-```text
-                         ┌───────────────────────┐
-                         │       Developer       │
-                         │                       │
-                         │ Writes / edits code   │
-                         └───────────┬───────────┘
-                                     │
-                                     ▼
-                         ┌───────────────────────┐
-                         │        VS CODE        │
-                         │                       │
-                         │ Application workspace │
-                         │ + UNDRIFT Extension   │
-                         └───────────┬───────────┘
-                                     │
-                                     ▼
-                         ┌───────────────────────┐
-                         │    UNDRIFT CORE       │
-                         │                       │
-                         │ Contract intelligence │
-                         └───────────┬───────────┘
-                                     │
-                         ┌───────────┼───────────┐
-                         │           │           │
-                         ▼           ▼           ▼
-                    Frontend     Backend      Prisma
-                    TypeScript   Express       Schema
-```
+VS Code is the initial host and presentation layer. It must not own contract matching or drift classification; otherwise later CLI and CI workflows would need a second implementation.
 
 ---
 
-# 4. Architectural Principles
+## 4. Architectural Style and Deployment Shape
 
-## 4.1 Local-First
+### 4.1 Initial deployment
 
-The primary MVP runtime is local.
+The first version is a VS Code extension executing in the local/remote Node.js extension host, with an in-process TypeScript analysis core.
 
-No UNDRIFT cloud service is required to analyze the project.
+```text
+VS Code Extension Host
+┌───────────────────────────────────────────────────┐
+│ VS Code Adapter                                   │
+│  - activation and commands                       │
+│  - workspace/document events                     │
+│  - diagnostics and views                          │
+│  - reviewed WorkspaceEdit application             │
+│                                                   │
+│ Analysis Orchestrator                             │
+│  - revisions, debounce, cancellation               │
+│  - coordinates parse/extract/match/report         │
+│                                                   │
+│ Shared Analysis Core                              │
+│  - normalized evidence and contracts               │
+│  - matching and drift rules                      │
+│  - explanation data and fix proposals             │
+│                                                   │
+│ Parser + Language/Framework Adapters               │
+│  - Tree-sitter runtime and grammars                │
+│  - JS/TS/JSX/TSX extraction                       │
+│  - supported client and Express patterns           │
+└───────────────────────────────────────────────────┘
+              │                       │
+              ▼                       ▼
+     Current editor buffers     Workspace files/config
+```
+
+This diagram expresses logical components. They need not map one-to-one to independently published npm packages in the first implementation. Keep the codebase modular, but avoid unnecessary package and process boundaries before the product loop is proven.
+
+### 4.2 In-process boundary
+
+The extension invokes the core through an asynchronous, editor-independent interface. The core does not import the VS Code API. The core receives source text, workspace scope, configuration, and change/revision information; it returns observations, findings, explanations, warnings, reports, and fix proposals.
+
+The initial architecture does not use Language Server Protocol (LSP), a local HTTP service, a database process, or a cloud API. These may be evaluated later based on evidence—such as a real requirement for other editor hosts or process isolation—not as prerequisites for the first release.
+
+### 4.3 Future consumers
+
+```text
+                   ┌───────────────────────┐
+                   │ Shared Analysis Core  │
+                   └───────────┬───────────┘
+                               │
+                ┌──────────────┼─────────────────┐
+                ▼              ▼                 ▼
+         VS Code Extension  Future CLI     Future CI/Git
+```
+
+Future integrations should reuse analysis and finding semantics. They may provide different input adapters and output formatters, but must not fork the core drift rules.
 
 ---
 
-## 4.2 Core/Interface Separation
+## 5. Logical Component Architecture
 
-The analysis engine must remain independent of VS Code.
+### 5.1 VS Code adapter
 
-```text
-UNDRIFT Core
-   │
-   ├── VS Code Extension
-   └── CLI
-```
+**Responsibilities**
 
-This prevents editor-specific behavior from leaking into the analysis domain.
+- activate the extension and register commands;
+- detect workspace roots and supported documents;
+- deliver open-document buffers and source changes to the analysis orchestrator;
+- expose sidebar/tree, diagnostics, hover/detail views, status, report, and output logging;
+- translate a selected fix proposal to a native VS Code workspace edit;
+- ask for review/acceptance and report the resulting analysis state.
 
----
+**Must not**
 
-## 4.3 Deterministic Core
+- parse raw code independently of the core pipeline;
+- implement duplicate route matching or drift rules;
+- treat successful file writing as proof that a mismatch is resolved;
+- silently apply source edits.
 
-The core should derive objective facts from source code wherever possible.
+### 5.2 Analysis orchestrator
 
-Examples:
+This component coordinates the phases and controls lifecycle behavior.
 
-```text
-route
-method
-field
-type
-presence
-nullability
-source location
-```
+**Responsibilities**
 
-AI/semantic reasoning is supplemental rather than foundational.
+- receive initial-workspace and changed-file analysis requests;
+- debounce bursts of edits;
+- assign analysis revision/generation identifiers;
+- cancel or supersede obsolete work when practical;
+- ensure current editor buffers take priority over stale disk contents;
+- coordinate parsing, extraction, normalization, matching, drift detection, explanation, report construction, and result delivery;
+- prevent stale results from replacing results for a newer workspace state;
+- provide a safe fallback to scoped or full re-analysis when incremental dependencies are uncertain.
 
----
+The orchestrator is not responsible for deciding whether a particular field mismatch is a defect. Those decisions belong to normalized rule logic in the core.
 
-## 4.4 Continuous State
+### 5.3 Workspace and source provider
 
-UNDRIFT is not only a one-shot scanner.
+This logical service describes the analysis scope and provides file contents.
 
-It maintains a current representation of:
+**Responsibilities**
 
-```text
-contracts
-relationships
-drifts
-statuses
-```
+- identify the opened workspace/folders and supported source files;
+- respect workspace exclusions and UNDRIFT configuration;
+- omit dependency, vendor, build, and generated output from default scanning where appropriate;
+- prefer in-memory text for open documents;
+- track document versions or content hashes for caching and edit invalidation;
+- safely scope file access to the workspace and extension-owned resources.
 
-and updates that representation as source changes.
+The provider should not execute project code or package scripts to discover routes.
 
----
+### 5.4 Tree-sitter parser adapter
 
-## 4.5 Explainable Findings
+This component hides the concrete Tree-sitter binding and grammar lifecycle from the rest of UNDRIFT.
 
-Every meaningful drift should retain enough evidence to explain:
+**Responsibilities**
 
-```text
-what was expected
-what was found
-where it was found
-why the relationship is considered inconsistent
-```
+- load the selected Tree-sitter runtime and pinned grammar assets;
+- select the grammar based on file type;
+- parse source into syntax trees;
+- retain source ranges, node kinds, syntax errors, and incomplete-region information;
+- expose the syntax information needed by extractors through an internal parser abstraction;
+- support incremental edit parsing where the selected binding and lifecycle permit it.
 
----
+The preferred binding candidate is `web-tree-sitter` with packaged WebAssembly grammars, subject to a technical proof of concept. The official Node.js binding remains an alternative behind the same boundary if WASM packaging or performance is unacceptable.
 
-## 4.6 Controlled Modification
+No domain module should depend directly on binding-specific parser objects. A parser or grammar error affecting one document should become a scoped analysis warning rather than crash the extension.
 
-The Core produces fix proposals.
+### 5.5 Language and framework extractors
 
-The VS Code extension applies approved changes.
+Extractors recognize useful source constructs and convert them into observations.
 
-Core must not directly rewrite source files.
+Initial examples:
 
----
+- JavaScript/TypeScript extractor: declarations, supported calls, inline object shapes, explicit types and supported local references;
+- frontend client extractors: `fetch`, common Axios calls and other explicitly supported client patterns;
+- Express route extractor: route registrations, HTTP methods, handlers, statically discoverable paths and supported response forms.
 
-# 5. High-Level Component Architecture
+An extractor is responsible for documenting the patterns it supports and expressing uncertainty when a pattern cannot be resolved. Extractors do not make final cross-boundary drift decisions.
 
-```text
-┌────────────────────────────────────────────────────────────────────┐
-│                           VS CODE                                  │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                 UNDRIFT EXTENSION                            │  │
-│  │                                                              │  │
-│  │  Workspace Watcher                                           │  │
-│  │        │                                                     │  │
-│  │        ├── Diagnostics Provider                              │  │
-│  │        ├── Hover Provider                                    │  │
-│  │        ├── Code Action Provider                              │  │
-│  │        ├── TreeView Provider                                 │  │
-│  │        ├── Report Webview                                    │  │
-│  │        └── Command Handlers                                  │  │
-│  │                                                              │  │
-│  └──────────────────────────────┬───────────────────────────────┘  │
-│                                 │                                  │
-└─────────────────────────────────┼──────────────────────────────────┘
-                                  │
-                            Core API Calls
-                                  │
-                                  ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                         UNDRIFT CORE                               │
-│                                                                    │
-│  ┌───────────────────┐                                             │
-│  │ Workspace Indexer │                                             │
-│  └─────────┬─────────┘                                             │
-│            ▼                                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    Extractor Layer                         │   │
-│  │                                                             │   │
-│  │  Frontend Extractor │ Backend Extractor │ Prisma Extractor  │   │
-│  └────────────────────────────┬────────────────────────────────┘   │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Contract Normalizer │                        │
-│                    └──────────┬──────────┘                        │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Contract Registry   │                        │
-│                    └──────────┬──────────┘                        │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Contract Graph      │                        │
-│                    └──────────┬──────────┘                        │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Matching Engine     │                        │
-│                    └──────────┬──────────┘                        │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Drift Engine        │                        │
-│                    └──────────┬──────────┘                        │
-│                               ▼                                    │
-│                    ┌─────────────────────┐                        │
-│                    │ Fix Engine          │                        │
-│                    └─────────────────────┘                        │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-                          Local Application
-                           Source Workspace
-```
+### 5.6 Optional semantic-resolution adapter
 
----
+Tree-sitter provides syntax. Some useful cases may additionally require imported symbol resolution, aliases, inferred type information, helper-function relationships, or framework-specific semantic knowledge.
 
-# 6. Component Responsibilities
+The architecture therefore permits optional semantic enrichment behind an adapter. For TypeScript, the TypeScript Compiler API or `ts-morph` can be evaluated as implementation options if tests show that syntax-based extraction and supported local resolution are insufficient.
 
-## 6.1 VS Code Extension
+This adapter is not a requirement for every language. It must return normalized evidence and provenance rather than leaking compiler-specific runtime objects into the core. Unknown or ambiguous references must remain unknown or ambiguous instead of being guessed.
 
-The extension is the primary presentation and interaction layer.
+### 5.7 Normalized evidence and contract model
 
-Responsibilities:
+This is the common exchange model between extractors and the language-neutral engine.
 
-- detect workspace activation;
-- observe source/document changes;
-- initialize the Core engine;
-- request analysis;
-- display diagnostics;
-- display contextual explanations;
-- expose Quick Fix actions;
-- provide project-level integration status;
-- display detailed reports;
-- apply approved workspace changes;
-- refresh the UI after analysis.
+It records observations such as:
 
-The extension does not own the contract-analysis rules.
+- consumer or provider role;
+- HTTP method and normalized path where known;
+- request and response shapes;
+- field types, optionality and nullability where evidenced;
+- source references and spans;
+- evidence source/provenance;
+- direct, resolved, inferred or unknown evidence class;
+- unresolved references, parser warnings, and unsupported patterns.
+
+The model must preserve the difference between a missing field, an optional field, a nullable value, an unknown type, and an unresolved type reference. It must not require the consumer to understand Tree-sitter nodes or the TypeScript type system.
+
+### 5.8 Matching and drift engine
+
+This language-neutral component compares normalized observations and classifies differences.
+
+**Responsibilities**
+
+- normalize supported protocol data;
+- generate candidate consumer/provider relationships using evidence;
+- compare requests and responses once a relationship is sufficiently supported;
+- run deterministic compatibility rules;
+- classify findings and their evidence strength;
+- preserve expected/observed values and source references;
+- distinguish confirmed supported incompatibility from uncertain/incomplete analysis.
+
+Matching should be evidence-first. A similar route string alone is not sufficient to conclude that two endpoints are related. Low-confidence candidates should be qualified or left unresolved rather than surfaced as certain defects.
+
+### 5.9 Explanation and repair-proposal engine
+
+This component converts a rule result into developer-facing explanation data and potential edits.
+
+An explanation should state the observed conflict, why the comparison was made, the expected and observed values, relevant source locations, possible impact, evidence limits, and uncertainty. It should distinguish what was directly observed from what is inferred.
+
+Fix proposals are structured plans containing their rationale, affected files, edit intent/source ranges, assumptions, and risk. The core proposes; the VS Code adapter applies only after the developer reviews/accepts the change.
+
+### 5.10 Report and result model
+
+A report aggregates the current analysis generation into a consistent view for the extension.
+
+It includes discovered contracts, findings, severity/evidence classes, analysis coverage and warnings, relevant source references, current resolution state, and summary counts. The report must distinguish “no findings in completed supported analysis” from “no findings because analysis is incomplete or patterns were unsupported.”
+
+### 5.11 Configuration and suppression
+
+A project configuration service will eventually provide validated project-level include/exclude rules, analyzer/rule selection, intentional mappings, and finding suppressions. V0 may keep this minimal.
+
+Configuration must be versioned and readable, and warnings should identify invalid or unsupported entries. No universal source of truth should be assumed: a project can deliberately identify an authoritative contract artifact or side for selected relationships.
+
+The final file name and schema are reserved for the LLD after the initial implementation needs are better understood.
 
 ---
 
-# 7. Workspace Watcher
-
-The workspace watcher connects the VS Code editor to Core.
-
-Inputs include:
+## 6. Core Data Flow
 
 ```text
-document changes
-file creation
-file deletion
-file modification
-workspace open/close
-```
-
-Processing:
-
-```text
-VS Code event
-      ↓
-relevance check
-      ↓
-debounce
-      ↓
-Core analysis request
-```
-
-The watcher should distinguish between:
-
-- unsaved editor content;
-- saved filesystem changes.
-
-Unsaved content should be analyzed from the active `TextDocument` so the developer sees feedback before saving.
-
----
-
-# 8. Core API Boundary
-
-The VS Code extension communicates with Core through a direct in-process TypeScript API for the hackathon MVP.
-
-```text
-Extension
-    │
-    │ direct import
-    ▼
-@undrift/core
-```
-
-There is intentionally no mandatory:
-
-```text
-REST server
-WebSocket server
-localhost HTTP service
-external database
-```
-
-between the extension and Core.
-
-This minimizes runtime complexity and makes the system easier to package.
-
----
-
-# 9. Workspace Indexer
-
-The Workspace Indexer creates the initial analysis context.
-
-Responsibilities:
-
-- discover relevant files;
-- discover TypeScript configuration;
-- establish source projects;
-- classify source candidates;
-- exclude irrelevant/generated directories;
-- provide source files to extractors;
-- maintain file-level indexing state.
-
-Typical exclusions:
-
-```text
-node_modules/
-.git/
-dist/
-build/
-coverage/
-.cache/
-```
-
----
-
-# 10. Extractor Layer
-
-The extractor layer converts source-specific representations into domain-level observations.
-
-```text
-                   Extractor Layer
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-      Frontend        Backend         Prisma
-      Extractor       Extractor       Extractor
-          │              │              │
-          └──────────────┼──────────────┘
-                         ▼
-                  Normalized Domain
-```
-
-The extractor layer is intentionally adapter-oriented.
-
----
-
-# 11. Frontend Extractor
-
-The frontend extractor identifies API consumers.
-
-Primary targets:
-
-```text
-fetch
-axios
-typed api clients
-supported custom request wrappers
-```
-
-It extracts when available:
-
-```text
-HTTP method
-route
-path parameters
-query information
-request body
-request body type
-response type
-source location
-```
-
-The extractor does not directly compare the result with backend code.
-
-It only produces a frontend contract observation.
-
----
-
-# 12. Backend Extractor
-
-The backend extractor identifies API providers.
-
-Primary target for the MVP:
-
-```text
-Express
-```
-
-Supported patterns include route declarations such as:
-
-```text
-router.get(...)
-router.post(...)
-router.put(...)
-router.delete(...)
-
-app.get(...)
-app.post(...)
-```
-
-It extracts:
-
-```text
-HTTP method
-route
-path parameters
-request information
-response structure where statically discoverable
-source location
-```
-
----
-
-# 13. Prisma Extractor
-
-The Prisma extractor is secondary.
-
-It analyzes:
-
-```text
-prisma/schema.prisma
-```
-
-and represents:
-
-```text
-models
-fields
-types
-optional fields
-relations
-```
-
-It provides a database-side representation that can later be linked into the application graph.
-
-A live connection to PostgreSQL is not required for the hackathon MVP.
-
----
-
-# 14. Contract Normalizer
-
-Source structures vary across frontend and backend.
-
-The Contract Normalizer converts extracted observations into a common domain model.
-
-Conceptually:
-
-```text
-Frontend observation
-        │
-Backend observation
-        │
-Prisma observation
-        │
-        ▼
-Contract Normalizer
-        │
-        ▼
-Common Contract Representation
-```
-
-Normalization includes:
-
-- HTTP method normalization;
-- route normalization;
-- field representation;
-- type representation;
-- source location normalization;
-- optionality/nullability representation.
-
----
-
-# 15. Contract Registry
-
-The Contract Registry stores the current discovered contract observations.
-
-It provides a central logical view of:
-
-```text
-consumer contracts
-provider contracts
-matched relationships
-unmatched observations
-contract states
-```
-
-The registry is a Core-owned data structure.
-
-It should not depend on VS Code UI concepts.
-
----
-
-# 16. Contract Graph
-
-The registry is transformed into a relationship graph.
-
-Example:
-
-```text
-Frontend Component
-       │
-       │ CONSUMES
-       ▼
-Frontend API Contract
-       │
-       │ MATCHES
-       ▼
-Backend API Contract
-       │
-       │ PROVIDED_BY
-       ▼
-Backend Route
-       │
-       │ READS/WRITES
-       ▼
-Prisma Model
-```
-
-The graph allows UNDRIFT to reason about relationships rather than isolated files.
-
----
-
-# 17. Graph Node Types
-
-Initial conceptual nodes:
-
-```text
-FrontendConsumer
-BackendProvider
-ApiContract
-TypeDefinition
-DatabaseModel
-SchemaDefinition
-```
-
-Nodes retain identifiers and source references.
-
----
-
-# 18. Graph Edge Types
-
-Initial relationships:
-
-```text
-CONSUMES
-PROVIDES
-EXPECTS
-RETURNS
-MATCHES
-READS_FROM
-WRITES_TO
-```
-
-A graph relationship may also contain evidence and confidence metadata.
-
----
-
-# 19. Matching Engine
-
-The Matching Engine determines which provider observations correspond to consumer observations.
-
-Matching occurs in ordered stages.
-
-```text
-Route/method candidate discovery
-            ↓
-Request comparison
-            ↓
-Response comparison
-            ↓
-Type/optional comparison
-            ↓
-Semantic resolution where necessary
-```
-
-This avoids immediately relying on fuzzy or probabilistic reasoning for straightforward cases.
-
----
-
-# 20. Match Lifecycle
-
-A typical relationship progresses as:
-
-```text
-DISCOVERED
-    ↓
-WAITING
-    ↓
-MATCHED
-    ↓
-VERIFIED
-```
-
-If one side changes incompatibly:
-
-```text
-VERIFIED
-    ↓
-DRIFTED
-```
-
-After resolution:
-
-```text
-DRIFTED
-    ↓
-REPAIRED
-    ↓
-VERIFIED
-```
-
-A provider with no known consumer may be represented as:
-
-```text
-ORPHANED
-```
-
----
-
-# 21. Drift Engine
-
-The Drift Engine evaluates matched and unmatched contract observations.
-
-It produces structured findings.
-
-```text
-Contracts / Graph
-        ↓
-   Drift Engine
-        ↓
-     Findings
-```
-
-Supported findings:
-
-```text
-missing-endpoint
-orphan-endpoint
-route-mismatch
-method-mismatch
-request-mismatch
-response-mismatch
-type-mismatch
-nullability-mismatch
-semantic-mismatch
-```
-
----
-
-# 22. Missing Endpoint Flow
-
-Example:
-
-```text
-Frontend:
-GET /users/:id
-        │
-        X
-No compatible provider
-```
-
-Flow:
-
-```text
-Frontend contract discovered
-        ↓
-Matching engine searches providers
-        ↓
-No candidate
-        ↓
-Drift Engine
-        ↓
-CRITICAL / WAITING finding
-        ↓
-VS Code diagnostic
-```
-
----
-
-# 23. Orphan Endpoint Flow
-
-Example:
-
-```text
-Backend:
-GET /analytics
-        │
-        X
-No known consumer
-```
-
-Flow:
-
-```text
-Backend provider discovered
-        ↓
-Matching engine searches consumers
-        ↓
-No known consumer
-        ↓
-Drift Engine
-        ↓
-ORPHANED finding
-```
-
-The product should communicate that this means:
-
-> No known consumer was found within UNDRIFT's supported static analysis scope.
-
-It should not claim that the route can never be consumed externally.
-
----
-
-# 24. Response Drift Flow
-
-Example:
-
-```text
-Frontend:
-userName: string
-
-Backend:
-user_name: string
-```
-
-Flow:
-
-```text
-Consumer/provider matched
-        ↓
-Response schemas compared
-        ↓
-Field-name difference detected
-        ↓
-Drift created
-        ↓
-Source locations attached
-        ↓
-VS Code diagnostic
-```
-
----
-
-# 25. Semantic Resolution
-
-Semantic resolution is an optional stage for ambiguous differences.
-
-Example:
-
-```text
-displayName
-        ↕
-full_name
-```
-
-Pipeline:
-
-```text
-Deterministic comparison
-        ↓
-Ambiguous difference
-        ↓
-Semantic Resolver
-        ↓
-Possible relationship
-        ↓
-Confidence + reasoning
-```
-
-The architecture intentionally isolates this capability:
-
-```ts
-SemanticResolver
-```
-
-so the core deterministic engine remains independent from any particular AI/LLM provider.
-
----
-
-# 26. Fix Engine
-
-The Fix Engine converts findings into structured proposals.
-
-```text
-Drift
-  ↓
-Fix Engine
-  ↓
-FixProposal
-```
-
-A proposal contains conceptually:
-
-```text
-title
-confidence
-explanation
-affected contracts
-source edits
-```
-
-The Fix Engine does not edit files.
-
----
-
-# 27. Extension Fix Flow
-
-```text
-Diagnostic
-    ↓
-User opens Code Action
-    ↓
-Extension asks Core for fix
-    ↓
-FixProposal returned
-    ↓
-Extension renders proposed action
-    ↓
-Developer approves
-    ↓
-WorkspaceEdit
-    ↓
-VS Code applies edit
-    ↓
-Source change event
-    ↓
-UNDRIFT re-analysis
-    ↓
-Drift disappears / becomes verified
-```
-
-This provides a closed loop.
-
----
-
-# 28. VS Code Diagnostic Architecture
-
-The extension maps each relevant `Drift` to a VS Code diagnostic.
-
-Conceptually:
-
-```text
-Core Drift
-    │
-    ├── type
-    ├── severity
-    ├── message
-    ├── explanation
-    └── source locations
+Workspace / active documents
            │
            ▼
-VS Code Diagnostic
+  1. Scope and source snapshot
+           │
+           ▼
+  2. Tree-sitter parse per file
+           │
+           ▼
+  3. Language/framework extraction
+           │
+           ▼
+  4. Optional supported reference/type resolution
+           │
+           ▼
+  5. Normalized evidence collection
+           │
+           ▼
+  6. Candidate consumer/provider matching
+           │
+           ▼
+  7. Deterministic compatibility rules
+           │
+           ▼
+  8. Findings + explanations + repair proposals
+           │
+           ▼
+  9. Report / diagnostics / sidebar / hover
 ```
 
-The diagnostic should point to the source location most useful for the developer.
+### 6.1 Phase responsibilities
+
+1. **Scope:** determine which source files are included and the exact content version to analyze.
+2. **Parse:** produce per-file syntax trees and source spans.
+3. **Extract:** recognize supported declarations/calls/routes and derive observations.
+4. **Resolve:** enrich evidence where a deterministic supported resolver is available; retain unresolved information.
+5. **Normalize:** map different syntax/framework representations to a common contract model.
+6. **Match:** identify candidate connections between consumers and providers.
+7. **Detect:** run compatibility rules on sufficiently supported relationships.
+8. **Explain:** preserve the factual comparison, likely impact, evidence and limitations.
+9. **Present:** render the result through VS Code-native features.
+
+Each phase should be independently testable and observable through trace/logging data appropriate for local debugging. No phase should quietly erase the fact that extraction was partial.
 
 ---
 
-# 29. Hover Architecture
+## 7. Important Runtime Flows
 
-Hover information is derived from Core state.
+### 7.1 Initial workspace analysis
 
 ```text
-Editor cursor
-     ↓
-Extension resolves source location
-     ↓
-Core lookup
-     ↓
-Contract / Drift context
-     ↓
-Hover content
+VS Code activates extension
+        │
+        ▼
+Resolve workspace roots and configuration
+        │
+        ▼
+Create analysis generation N
+        │
+        ▼
+Collect supported files and current buffers
+        │
+        ▼
+Parse → extract → normalize
+        │
+        ▼
+Match → detect → explain → build report
+        │
+        ▼
+Check that generation N is still current
+        │
+        ├── stale ──► discard/schedule latest generation
+        │
+        └── current ─► publish findings and warnings
 ```
 
-Hover should show concise context rather than the entire project report.
+The initial version can use a scoped full scan for correctness. More advanced cross-file incremental invalidation should be implemented only when it can preserve correctness.
 
----
-
-# 30. Code Action Architecture
-
-Code Actions query Core for applicable fixes at a given location.
+### 7.2 Source edit during analysis
 
 ```text
-Source position
-      ↓
-Relevant drift
-      ↓
-Fix proposals
-      ↓
-Code actions
-```
-
-The Code Action layer is responsible for translating the proposal into VS Code workspace edits.
-
----
-
-# 31. Sidebar Architecture
-
-The sidebar provides a project-level view.
-
-```text
-UNDRIFT
-│
-├── Integration Health
-│   ├── Verified
-│   ├── Drifted
-│   ├── Waiting
-│   └── Orphaned
-│
-├── Drifted Contracts
-│
-└── Orphaned Providers
-```
-
-The sidebar should be driven from the current Core report/state.
-
-It should not maintain a separate version of the contract state.
-
----
-
-# 32. Report Architecture
-
-The detailed report may be rendered using a VS Code Webview.
-
-```text
-Core Report Model
-       ↓
-Extension message bridge
-       ↓
-Report Webview
-```
-
-The Webview is presentation-only.
-
-It must not become a second analysis engine.
-
----
-
-# 33. Live Analysis Architecture
-
-The central live-development loop is:
-
-```text
-                    SOURCE EDIT
-                         │
-                         ▼
-                  VS CODE EVENT
-                         │
-                         ▼
-                   DEBOUNCE
-                         │
-                         ▼
-                 RELEVANCE CHECK
-                         │
-                         ▼
-                  CORE ANALYSIS
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-        File re-extraction      Graph update
-              └──────────┬──────────┘
-                         ▼
-                   Re-matching
-                         │
-                         ▼
-                  Drift evaluation
-                         │
-                         ▼
-                    Core state
-                         │
-              ┌──────────┼──────────┐
-              ▼          ▼          ▼
-         Diagnostics   Sidebar    Report
-```
-
----
-
-# 34. Initial Workspace Scan
-
-When a project opens:
-
-```text
-VS Code extension activates
-        ↓
-Workspace discovered
-        ↓
-Core initialized
-        ↓
-Workspace indexed
-        ↓
-TypeScript projects loaded
-        ↓
-Extractors run
-        ↓
-Contracts normalized
-        ↓
-Graph created
-        ↓
-Matching performed
-        ↓
-Drift detected
-        ↓
-UI populated
-```
-
----
-
-# 35. Incremental Update
-
-When a supported file changes:
-
-```text
-Changed file
-    ↓
-Identify source type
-    ↓
-Re-extract changed file
-    ↓
-Remove old observations for file
-    ↓
-Insert new observations
-    ↓
-Update graph
-    ↓
-Re-evaluate affected relationships
-    ↓
-Refresh findings
-```
-
-A full re-scan may remain available as a correctness fallback.
-
----
-
-# 36. Unsaved Changes
-
-The system should analyze the in-memory content from VS Code when available.
-
-```text
-Unsaved editor buffer
-        ↓
-TextDocument.getText()
-        ↓
-Core source update
-        ↓
-analysis
-```
-
-This allows UNDRIFT to identify drift before a developer saves the file.
-
----
-
-# 37. Stale Analysis Protection
-
-Because analysis may be asynchronous, Core/Extension interaction should associate analysis work with a workspace revision or request identifier.
-
-Conceptually:
-
-```text
-Revision 10 → analysis starts
-Revision 11 → user edits again
-Revision 10 → returns
-```
-
-Revision 10 must not overwrite the newer Revision 11 state.
-
-Only the current/latest applicable result should be published.
-
----
-
-# 38. State Ownership
-
-Ownership should remain clear.
-
-## Core owns
-
-```text
-Contract Registry
-Graph
-Drift state
-Analysis results
-Fix proposals
-```
-
-## Extension owns
-
-```text
-VS Code diagnostics
-TreeView presentation
-Webview lifecycle
-workspace edit application
-editor-specific interaction state
-```
-
-This prevents duplicate sources of truth.
-
----
-
-# 39. Persistence Architecture
-
-Runtime state is primarily in memory.
-
-Optional project-local state:
-
-```text
-.undrift/
-├── contracts.json
-├── graph.json
-└── state.json
-```
-
-Persistence is not authoritative over current source code.
-
-When the workspace changes, source analysis remains the source of truth.
-
----
-
-# 40. CLI Architecture
-
-The CLI uses the same Core.
-
-```text
-             UNDRIFT CORE
-              /        \
-             /          \
-VS Code Extension       CLI
-```
-
-CLI responsibilities:
-
-- parse CLI arguments;
-- construct Core configuration;
-- request workspace analysis;
-- format output for terminal use.
-
-The CLI must not implement its own matching or drift engine.
-
----
-
-# 41. Application-to-Core Runtime Model
-
-The hackathon MVP is local and in-process.
-
-```text
-                VS Code Extension Host
-                         │
-               ┌─────────┴─────────┐
-               │                   │
-               ▼                   ▼
-        Extension Runtime      UNDRIFT Core
-                                   │
-                                   ▼
-                            Local File System
-```
-
-No application source needs to be uploaded to an UNDRIFT server.
-
----
-
-# 42. Deployment Model
-
-For hackathon use:
-
-```text
-Developer machine
-│
-├── VS Code
-│   └── UNDRIFT extension
-│
-└── Project repository
-    ├── frontend
-    ├── backend
-    └── prisma
-```
-
-Installation should result in:
-
-```text
-Install extension
-        ↓
-Open project
-        ↓
-UNDRIFT starts
-```
-
-No separate infrastructure is required.
-
----
-
-# 43. Build-Time Architecture
-
-The monorepo contains:
-
-```text
-apps/
-├── vscode-extension
-└── cli
-
-packages/
-└── core
-```
-
-Build relationship:
-
-```text
-@undrift/core
+Document changes
       │
-      ├──────────────► vscode-extension
+      ▼
+Debounce + assign newer document/workspace revision
       │
-      └──────────────► cli
+      ▼
+Cancel/supersede outdated analysis where practical
+      │
+      ▼
+Invalidate prior observations for changed file
+      │
+      ▼
+Reparse/re-extract changed file
+      │
+      ▼
+Recompute affected relationships or run safe scoped scan
+      │
+      ▼
+Publish results only if revision is still current
 ```
 
-Core is built independently.
+Analysis must not synchronously block normal editor input. Debouncing, cancellation, caching and incremental parsing should be measured. A worker thread or separate process is a later optimization if profiling shows that the extension host needs more isolation.
 
-The extension is bundled for VS Code.
+### 7.3 Inspect finding
+
+1. The extension maps a diagnostic/tree selection to a stable finding identifier.
+2. The report loads the finding's evidence and relevant source references.
+3. It displays expected versus observed values and the explanation's confidence/limitations.
+4. It navigates to available consumer/provider spans.
+5. The developer can inspect, dismiss/suppress, manually fix, or request a supported repair.
+
+A finding should not promise a source link for a side that was not discovered.
+
+### 7.4 Review and apply a fix
+
+```text
+Developer requests Quick Fix
+             │
+             ▼
+Core returns structured proposal + assumptions
+             │
+             ▼
+Extension checks relevant document versions/ranges
+             │
+             ├── stale ──► invalidate; ask for re-analysis
+             │
+             ▼
+Show review/preview and require acceptance
+             │
+             ▼
+Apply through VS Code WorkspaceEdit
+             │
+             ▼
+Trigger analysis against current source
+             │
+             ▼
+Verify finding state from new evidence
+```
+
+The extension must revalidate edit ranges and source versions immediately before applying. If the source has changed since the proposal was created, do not apply stale offsets. A successful `WorkspaceEdit` only proves that the edit was applied; it does not prove the API contract is compatible.
+
+### 7.5 Re-analysis and verification
+
+After an accepted edit, UNDRIFT re-analyzes the affected file/relationship. The finding becomes verified or disappears only if the current supported checks confirm the mismatch is resolved. If it remains, the extension should show the remaining discrepancy. If evidence becomes incomplete, it should show unresolved/incomplete analysis rather than report success.
+
+### 7.6 Unsupported or ambiguous pattern
+
+When a parser error, dynamic route, unresolved reference, configured client, or framework pattern prevents a reliable result:
+
+- retain any valid facts that can still be extracted;
+- attach an analysis warning and source location where possible;
+- avoid converting missing evidence into proof of absence;
+- report that coverage is incomplete for the affected relationship;
+- continue analyzing other independent files.
+
+### 7.7 No known consumer
+
+A backend provider with no matched consumer should be labeled **“no known consumer in the analyzed scope.”** The architecture cannot prove that external services, runtime-generated clients, other repositories, or dynamic consumers do not exist. This finding should therefore not claim that the endpoint is globally unused.
 
 ---
 
-# 44. Error Handling Architecture
+## 8. Source Evidence, Provenance and Position Mapping
 
-Errors should be isolated at the smallest reasonable scope.
+Source evidence is a first-class part of the architecture rather than metadata added after matching.
 
-```text
-Workspace
-   │
-   ├── File A → success
-   ├── File B → parse warning
-   ├── File C → success
-   └── File D → unsupported dynamic pattern
-```
+Each observation/finding should retain enough provenance to answer:
 
-A single unsupported file should not terminate the entire workspace scan.
+- which source file and range contributed the fact;
+- whether the value was literal, explicitly annotated, locally resolved, framework-derived, configured, or inferred;
+- which relationship/matching rule connected the evidence;
+- what is known and what remains unresolved;
+- whether the source revision used for a proposal is still current.
 
-The resulting analysis may include:
+Tree-sitter positions and offsets must be mapped carefully to VS Code document positions. Internal byte offsets may be needed by the parser, whereas VS Code positions use line and UTF-16 character units. A tested conversion layer must bridge them, including non-ASCII text and line-ending differences.
 
-```text
-successful findings
-+
-warnings
-+
-unsupported-analysis metadata
-```
-
-where useful.
+Finding identity should remain stable across re-analysis for unchanged issues as much as practical, without relying on array indexes or transient object identity. Source/rule-derived IDs and revision-aware fix proposals reduce unnecessary UI flicker and stale-edit risk.
 
 ---
 
-# 45. Analysis Confidence
+## 9. State, Caching and Persistence
 
-Confidence metadata should be preserved for ambiguous findings.
+### 9.1 Runtime state
 
-Example:
+For V0, parsed documents, extracted observations, contracts, relationships, findings, and reports may live in memory. They can be discarded and rebuilt from source. No database is required.
+
+### 9.2 Cache boundaries
+
+Potential cache layers:
+
+- parsed syntax tree by file content version;
+- extracted observations by file version and analyzer/config version;
+- normalized relationships/findings by relevant observation revisions;
+- report output by analysis generation.
+
+Cache keys must account for relevant inputs. A changed source file, parser grammar, extractor version, or configuration that affects an observation must invalidate dependent results. Correct invalidation is more important than maximizing cache hits.
+
+### 9.3 Persistence
+
+Project-level configuration and intentional suppressions may be persisted as versioned local/repository files when needed. Derived analysis state should not be persisted as authoritative truth in V0. If persistence is added later, it must be treated as a cache/index with schema versioning and rebuild behavior—not the source of truth for current code.
+
+---
+
+## 10. Error Handling and Resilience
+
+The extension should degrade by file or analysis phase rather than fail workspace-wide whenever possible.
+
+| Failure | Expected behavior |
+|---|---|
+| Grammar asset missing/incompatible | Surface a clear warning for the affected language/extension; do not crash activation of unrelated functionality. |
+| File contains syntax errors | Continue parsing supported portions; mark affected observations as potentially incomplete. |
+| Unsupported pattern | Record warning/coverage limitation; do not invent a compatible provider or a mismatch. |
+| Imported type cannot be resolved | Retain unresolved reference state and lower finding strength where appropriate. |
+| Invalid configuration | Report configuration location/error and use documented safe defaults where possible. |
+| Analysis superseded by newer edits | Discard stale results and schedule or retain current generation. |
+| Fix proposal is stale | Refuse to apply it and require updated analysis. |
+| One extractor throws unexpectedly | Log the failure, isolate it, and continue with other files/extractors when safe. |
+| Analysis cancelled/disposed | Clean up parser/tree resources where required and avoid publishing partial stale results as complete analysis. |
+
+An Output Channel or structured local logging mechanism should expose actionable debugging information without dumping full source code unnecessarily.
+
+---
+
+## 11. Performance and Resource Strategy
+
+Performance targets are provisional until benchmarks exist.
+
+The high-level strategy is:
+
+- do an initial scoped analysis and favor correctness;
+- debounce repeated document events;
+- cancel or supersede obsolete work;
+- reuse unchanged parse/extraction results when invalidation is correct;
+- use incremental Tree-sitter parsing for updated documents if the selected binding supports it reliably;
+- recompute only affected relationships when dependencies are known;
+- fall back to a scoped/full scan when cross-file dependencies cannot be safely identified;
+- expose analysis coverage/progress without flooding the UI;
+- ensure normal typing remains responsive.
+
+The proof of concept should measure cold-start cost, grammar load time, first useful result, parse/extraction/matching phases, single-file edit latency, large-file/workspace behavior, memory stability and final packaged size. Firm numeric service-level budgets should be set after measurement rather than invented in this HLD.
+
+A separate worker or language-server process is not part of the first architecture. Add one only if profiling demonstrates an actual extension-host responsiveness or isolation problem.
+
+---
+
+## 12. Privacy and Security Boundaries
+
+The first release is local-first.
+
+- Source analysis runs in the local/remote VS Code extension host for the open workspace.
+- No source code, contract evidence or analysis report is uploaded to a hosted UNDRIFT service.
+- No account, cloud backend, required telemetry, external LLM or API key is needed.
+- Static analysis must not execute project code or package scripts.
+- File access must remain within the permitted workspace and extension-owned resources.
+- Generated/dependency output is excluded by default where appropriate and should not be automatically edited.
+- The extension must validate source ranges, document versions and workspace edits before applying a fix.
+- Future remote/LLM capabilities, if considered, require explicit opt-in, disclosure of what data leaves the workspace, and an independent safety review.
+
+The architecture must not rely on remote services for core correctness or routine supported detection.
+
+---
+
+## 13. Testing Architecture
+
+Testing should mirror component boundaries and end-to-end user workflows.
+
+### 13.1 Parser and extractor fixtures
+
+Use labeled, minimal source fixtures for:
+
+- direct supported fetch/Axios calls;
+- supported Express app/router routes;
+- simple mounted prefixes where implemented;
+- inline request and response objects;
+- explicit interfaces and aliases that are in the supported matrix;
+- syntax errors/incomplete buffers;
+- dynamic paths and unsupported client wrappers;
+- Unicode text and position conversion.
+
+### 13.2 Core rule fixtures
+
+Include both valid and broken relationships. Test:
+
+- exact match and compatible shapes;
+- missing provider and no-known-consumer semantics;
+- route and method mismatch;
+- request and response field/type mismatch;
+- optionality/nullability distinctions;
+- intentional naming transformation or configured mapping;
+- weak/ambiguous candidates;
+- unresolved type evidence;
+- findings disappearing or changing after repair.
+
+Tests must avoid treating every difference as a defect.
+
+### 13.3 VS Code integration tests
+
+Use an extension-host test suite for:
+
+- activation and command registration;
+- workspace scan and result delivery;
+- diagnostics and sidebar/report linkage;
+- clearing/updating findings after edits;
+- rejecting stale analysis results;
+- Quick Fix preview/acceptance and workspace edits;
+- stale-proposal rejection;
+- re-analysis and verification after applying a fix.
+
+### 13.4 Acceptance evidence
+
+A V0/V1 milestone is not complete merely because the extension compiles. The team should preserve test fixtures and benchmark results that demonstrate the full detect → explain → propose → review/apply → re-analyze → verify loop on the declared supported patterns.
+
+---
+
+## 14. Implementation Package Direction
+
+The logical architecture can be implemented in a compact npm workspace:
 
 ```text
-semantic match:
-0.91
+undrift/
+├── apps/
+│   └── vscode-extension/       # VS Code host adapter and UI
+├── packages/
+│   ├── core/                   # normalized model, matcher, drift, fixes, reporting
+│   ├── parser-adapter/         # Tree-sitter binding and grammar lifecycle
+│   └── analyzer-typescript/    # JS/TS/JSX/TSX extraction + Express patterns
+├── tests/
+│   ├── fixtures/
+│   └── scenarios/
+├── docs/
+├── package.json
+└── tsconfig.base.json
 ```
 
-The system should retain reasons such as:
+This is an initial logical organization, not a mandate to publish every package independently. The repository may keep the parser adapter and initial analyzer inside `packages/core` temporarily if boundaries are still clear. Split packages when it improves dependency control and independent testing, not solely to maximize folder count.
+
+Potential future adapters can include Prisma, Fastify/NestJS, Python frameworks, and other sources such as OpenAPI. They should emit normalized observations and reuse the same analysis/report pipeline.
+
+---
+
+## 15. Architecture Decisions and Deferred Questions
+
+### 15.1 Committed decisions
+
+- VS Code-first local extension.
+- TypeScript implementation.
+- In-process asynchronous core for the initial release.
+- Tree-sitter as the shared syntax parsing foundation.
+- Language/framework adapters feeding a common normalized evidence model.
+- Initial JavaScript/TypeScript/JSX/TSX frontend and Express backend vertical slice.
+- Editor-independent matcher/drift rules and report semantics.
+- Evidence/provenance and uncertainty retained through the pipeline.
+- Native, reviewed workspace edits with stale-proposal validation.
+- Re-analysis after fixes before claiming resolution.
+- No required backend, database, LLM, API key, or cloud service.
+- Future CLI/CI integrations must reuse the shared core.
+
+### 15.2 Technical proof-of-concept gates
+
+1. **Parser binding and grammar packaging:** validate `web-tree-sitter`/WASM against the official Node.js binding alternative.
+2. **Semantic depth:** test direct route extraction, imported types, helper-hidden response shapes, dynamic routes, and source positions; decide whether an optional TypeScript semantic adapter is needed for useful initial coverage.
+3. **Incremental behavior:** establish what the chosen binding supports and measure whether per-edit incremental parsing provides meaningful benefit.
+4. **Route matching:** validate normalization for the supported route and mounted-prefix patterns to avoid unsafe fuzzy matching.
+5. **Repair scope:** select a small class of deterministic fixes and verify proposal invalidation and post-edit analysis.
+
+### 15.3 Deferred architecture options
+
+- LSP or separate analysis process;
+- worker threads;
+- CLI, Git hooks, CI;
+- Prisma and other framework/language adapters;
+- OpenAPI/specification and generated SDK ingestion;
+- runtime observations;
+- persistent analysis index/database;
+- optional AI-assisted resolution;
+- browser-host VS Code support;
+- multi-repository and team-level behavior.
+
+These options do not belong in the first implementation unless a validated requirement changes the scope.
+
+---
+
+## 16. Delivery Sequence
+
+### Phase 1 — Parser and packaging proof of concept
+Load Tree-sitter and a TypeScript/TSX grammar inside a bundled extension artifact. Validate node/source positions, syntax-error behavior, asset packaging, and baseline parse performance.
+
+**Exit criterion:** The packaged extension can reliably parse representative JS/TS/JSX/TSX files and report source ranges.
+
+### Phase 2 — Extraction and normalized evidence
+Extract a defined set of frontend consumers and Express providers. Capture method/path, supported request/response shapes, source evidence, provenance and unsupported-pattern warnings.
+
+**Exit criterion:** Labeled fixtures produce predictable normalized observations.
+
+### Phase 3 — Shared analysis core
+Match consumers/providers, run deterministic compatibility rules, and emit stable findings/explanations without importing VS Code APIs.
+
+**Exit criterion:** Valid, drifted and ambiguous scenarios produce distinct, tested outcomes.
+
+### Phase 4 — VS Code integration
+Add diagnostics, sidebar/report, commands, hover/details, status and changed-document coordination.
+
+**Exit criterion:** Developers can inspect source-linked findings from the IDE.
+
+### Phase 5 — Repair and reverification
+Implement a small safe fix class, review/acceptance flow, stale proposal checks, workspace edits, and re-analysis.
+
+**Exit criterion:** At least one representative mismatch completes the entire loop and the result is verified from the updated source.
+
+### Phase 6 — Prototype validation and scope decision
+Run labeled fixture tests, benchmark performance, test a representative real project, and evaluate the prototype with developers. Use measured misses and false positives to determine whether to add semantic resolution or expand supported frameworks.
+
+**Exit criterion:** The next engineering phase follows observed gaps rather than assumptions.
+
+---
+
+## 17. HLD Summary
+
+UNDRIFT is a **local-first VS Code extension backed by an editor-independent, language-neutral analysis core**. Tree-sitter provides the common syntax foundation; language and framework adapters turn source into normalized evidence; matching and deterministic rules turn evidence into drift findings; explanations and repair proposals flow to VS Code for developer review; and current source is re-analyzed to verify resolution.
+
+The architecture is designed to add language/framework support by adding compatible parsers and extractors while reusing the central contract, finding, report and repair workflow. It does not pretend that syntax parsing alone delivers semantic understanding, and it does not add TypeScript compiler coupling, LSP, cloud services, databases, Prisma, or AI requirements before the proof of concept demonstrates a need.
+
+The primary success criterion is not the number of parsed files or warnings. It is a reliable, evidence-backed developer loop:
 
 ```text
-same normalized tokens
-same owner type
-same source model
-same usage context
-```
-
-Confidence is used to determine whether an automatic fix is appropriate.
-
----
-
-# 46. Security Boundary
-
-UNDRIFT should avoid treating secret values as contract data.
-
-The analyzer should ignore or avoid reading values from:
-
-```text
-.env
-.env.local
-credential files
-private keys
-```
-
-where the contents are not required for contract analysis.
-
-The architecture does not require access to production credentials or database credentials for the MVP.
-
----
-
-# 47. Privacy Boundary
-
-The default architecture is local.
-
-```text
-Source code
-   ↓
-Local extraction
-   ↓
-Local graph
-   ↓
-Local report
-```
-
-No source synchronization with a UNDRIFT-hosted backend is necessary.
-
-If future external semantic services are introduced, the semantic resolver should receive only the minimum necessary structured information.
-
----
-
-# 48. Performance Architecture
-
-Performance is addressed through several layers.
-
-## Initial scan
-
-Allowed to perform broad project indexing.
-
-## Incremental analysis
-
-Prefer re-analysis of changed/affected files.
-
-## Debouncing
-
-Coalesce rapid editor events.
-
-## Caching
-
-Reuse unchanged source analysis where possible.
-
-## Selective graph recomputation
-
-Re-evaluate only relationships affected by changed observations when practical.
-
----
-
-# 49. Extensibility Architecture
-
-Framework support is isolated through adapters.
-
-```text
-                 Extraction Framework
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-     Frontend         Backend          Database
-      Adapters         Adapters          Adapters
-        │                │                │
-     ┌──┼──┐          ┌──┼──┐          ┌──┼──┐
-     ▼  ▼  ▼          ▼  ▼  ▼          ▼  ▼  ▼
-   React ...         Express ...      Prisma ...
-```
-
-The matching and drift layers consume normalized domain models and therefore should not need framework-specific rules.
-
----
-
-# 50. Future IDE Support
-
-Because Core has no dependency on VS Code APIs:
-
-```text
-             UNDRIFT CORE
-             /    |     \
-            /     |      \
-        VS Code   CLI     Future IDE
-```
-
-A future IDE integration would provide a new adapter/presentation layer.
-
-The Core contract graph and drift engine remain reusable.
-
----
-
-# 51. Architectural Decision: No Separate UNDRIFT Server
-
-### Decision
-
-Do not create a separate local HTTP server for the hackathon MVP.
-
-### Reason
-
-The product does not require process isolation or remote computation.
-
-Direct Core invocation provides:
-
-- simpler setup;
-- fewer runtime failure modes;
-- lower implementation complexity;
-- easier shared typing;
-- faster iteration.
-
-A separate process can be introduced later if Core becomes resource-heavy or requires stronger isolation.
-
----
-
-# 52. Architectural Decision: No Runtime API Proxy
-
-UNDRIFT will not sit between frontend and backend traffic during normal MVP operation.
-
-The primary analysis source is the repository itself.
-
-Reason:
-
-- the product's value is detecting drift during coding;
-- static source provides direct explanations and source locations;
-- runtime instrumentation creates setup and data complexity;
-- runtime data is unnecessary for the core hackathon scenario.
-
-Runtime verification can become a later extension.
-
----
-
-# 53. Architectural Decision: No Required API Specification
-
-The MVP does not require a complete manually-authored OpenAPI/Pact contract before analysis.
-
-Instead:
-
-```text
-Source code
-    ↓
-Implicit contract discovery
-    ↓
-Normalized contract
-```
-
-This is central to UNDRIFT's product thesis.
-
-The product is designed for repositories where documentation may be incomplete or where different code-generation/development steps produced divergent assumptions.
-
----
-
-# 54. Architectural Decision: Deterministic Before Semantic
-
-The system should first answer objective questions:
-
-```text
-Does this route exist?
-Does this method match?
-Does this field exist?
-Do these types conflict?
-```
-
-Only ambiguous questions proceed to semantic reasoning:
-
-```text
-Could userName and displayName mean the same thing?
-```
-
-This reduces unnecessary AI dependence and improves predictability.
-
----
-
-# 55. Architectural Decision: Core Does Not Edit Files
-
-Core outputs structured proposals.
-
-```text
-Core
- ↓
-FixProposal
-```
-
-The IDE decides when/how to apply it.
-
-This ensures:
-
-- Core remains IDE-independent;
-- changes are user-controlled;
-- VS Code can provide native previews/actions;
-- future CLI/CI modes can choose different application policies.
-
----
-
-# 56. Primary End-to-End Architecture
-
-The complete system flow is:
-
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│                           DEVELOPER                              │
-└─────────────────────────────┬────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                            VS CODE                               │
-│                                                                  │
-│  Editor                                                         │
-│    │                                                             │
-│    ├── Change Events                                             │
-│    ├── Diagnostics                                               │
-│    ├── Hover                                                     │
-│    ├── Quick Fix                                                 │
-│    ├── Sidebar                                                   │
-│    └── Report                                                    │
-│                              │                                   │
-│                              ▼                                   │
-│                    UNDRIFT EXTENSION                             │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-                         Core API calls
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                           UNDRIFT CORE                            │
-│                                                                  │
-│  Workspace Indexer                                               │
-│          ↓                                                       │
-│  Source Extractors                                               │
-│          ↓                                                       │
-│  Contract Normalizer                                             │
-│          ↓                                                       │
-│  Contract Registry                                               │
-│          ↓                                                       │
-│  Contract Graph                                                  │
-│          ↓                                                       │
-│  Matching Engine                                                 │
-│          ↓                                                       │
-│  Drift Engine                                                    │
-│          ↓                                                       │
-│  Fix Engine                                                      │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-            ┌──────────────────┼──────────────────┐
-            ▼                  ▼                  ▼
-       Frontend             Backend             Prisma
-       React/TS              Express/TS          Schema
-            │                  │                  │
-            └──────────────────┼──────────────────┘
-                               ▼
-                         Contract State
-                               │
-                               ▼
-                         Drift Findings
-                               │
-                               ▼
-                       Developer Resolution
+DISCOVER → MATCH → DETECT → EXPLAIN
+        → REVIEW/APPLY → RE-ANALYZE → VERIFY
 ```
 
 ---
 
-# 57. Core Responsibility Boundary
+## 18. Reference Documentation
 
-UNDRIFT Core answers:
+Re-check upstream documentation when pinning runtime and grammar versions:
 
-```text
-What exists?
-What connects?
-What disagrees?
-Why does it disagree?
-What can be changed?
-```
-
-The VS Code extension answers:
-
-```text
-Where should I show it?
-How should the developer interact with it?
-How should an approved change be applied?
-```
-
-This separation is the key architectural boundary of the product.
+- Tree-sitter documentation: https://tree-sitter.github.io/tree-sitter/
+- Tree-sitter WebAssembly binding: https://github.com/tree-sitter/tree-sitter/blob/master/lib/binding_web/README.md
+- TypeScript Tree-sitter grammars: https://github.com/tree-sitter/tree-sitter-typescript
+- VS Code extension architecture: https://code.visualstudio.com/api/
+- VS Code extension bundling: https://code.visualstudio.com/api/working-with-extensions/bundling-extension
+- TypeScript Compiler API, for optional semantic analysis evaluation: https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API
+- Vitest documentation: https://vitest.dev/guide/
 
 ---
 
-# 58. Hackathon MVP Architecture
-
-The minimum viable architecture is:
-
-```text
-VS Code Extension
-       │
-       ▼
-UNDRIFT Core
-       │
-       ├── Frontend Extractor
-       ├── Backend Extractor
-       ├── Contract Model
-       ├── Matcher
-       ├── Drift Engine
-       └── Fix Engine
-```
-
-Then add, in priority order:
-
-```text
-Prisma Extractor
-Incremental Analysis
-Semantic Resolver
-CLI
-Inline Completion
-Contract History
-```
-
-The product should remain useful even when the lower-priority modules are absent.
-
----
-
-# 59. Architecture Quality Goals
-
-The architecture should satisfy these properties:
-
-## Cohesion
-
-Each module owns one major responsibility.
-
-## Low Coupling
-
-Core modules should not depend on VS Code.
-
-## Determinism
-
-Objective contract checks should produce repeatable results.
-
-## Extensibility
-
-New framework adapters should plug into extraction without rewriting the matcher.
-
-## Testability
-
-Core analysis should be runnable without starting VS Code.
-
-## Safety
-
-Source changes require developer approval.
-
-## Performance
-
-Common editor changes should not require full project analysis.
-
----
-
-# 60. Final Architecture Summary
-
-UNDRIFT is a **local code-intelligence system with a VS Code-native interface**.
-
-The architecture is centered on:
-
-```text
-Source Code
-    ↓
-Extraction
-    ↓
-Normalization
-    ↓
-Contract Registry
-    ↓
-Contract Graph
-    ↓
-Matching
-    ↓
-Drift Detection
-    ↓
-Fix Proposal
-    ↓
-VS Code Interaction
-    ↓
-Workspace Edit
-    ↓
-Re-analysis
-```
-
-The architectural distinction that must remain intact is:
-
-```text
-                   UNDRIFT PRODUCT
-
-              ┌─────────────────────┐
-              │    UNDRIFT CORE      │
-              └──────────┬──────────┘
-                         │
-              ┌──────────┴──────────┐
-              │                     │
-        VS Code Extension         CLI
-```
-
-IBM Bob 2.0 is external to this product architecture.
-
-It is the AI development environment used by the UNDRIFT team during the hackathon to assist with design, implementation, debugging, testing, and documentation. It is not required for a developer to run UNDRIFT.
-
-The HLD therefore preserves the core product proposition:
-
-> **UNDRIFT continuously reconstructs the implicit integration contracts of an application and makes contract drift visible and actionable inside the developer's existing workflow.**
+**End of HLD — Version 1.0-draft**

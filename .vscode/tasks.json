@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "build",
+      "path": "apps/vscode-extension",
+      "problemMatcher": [],
+      "group": "build",
+      "label": "npm: build - apps/vscode-extension"
+    }
+  ]
+}

@@ -8,6 +8,12 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@undrift/core": ["packages/core/dist"],
+      "@undrift/parser-tree-sitter": ["packages/parser-tree-sitter/dist"],
+      "@undrift/analyzer-js-ts": ["packages/analyzer-js-ts/dist"]
+    }
   }
 }

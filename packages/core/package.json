@@ -8,13 +8,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "echo \"Core tests not configured yet\"",
-    "lint": "echo \"Core lint not configured yet\""
-  },
-  "dependencies": {
-    "ts-morph": "^27.0.2"
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
   }
 }

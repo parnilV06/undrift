@@ -1,0 +1,8 @@
+node_modules
+dist
+out
+coverage
+*.vsix
+.undrift
+docs/**
+package-lock.json
