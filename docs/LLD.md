@@ -62,7 +62,8 @@ If an old scaffold or previous LLD conflicts with these documents, the current P
 9. **Verification is analysis-based:** applying an edit is not evidence that a mismatch is repaired; current source must be analyzed again.
 10. **Correctness before incremental cleverness:** use a scoped/full re-analysis whenever dependency invalidation cannot be proven correct.
 11. **Add adapters, not engines:** language and framework support is added by producing the normalized evidence model and reusing the same matching/detection workflow.
-12. **Keep V0 small:** no database, hosted backend, required LLM, Prisma dependency, separate language server, or CLI requirement for the first end-to-end version.
+12. **Keep storage local-first:** persist the latest complete analysis snapshot and finding lifecycle history in VS Code-managed workspace storage; no external database (no SQLite, no remote DB), no hosted backend, no required LLM, no repository `.undrift/` storage for history, and no mandatory Git dependency.
+13. **Multi-tier state separation & coverage gating:** current source code is authoritative; snapshots represent the last known complete analyzed state; historical events log meaningful transitions at observation timestamps; incomplete or failed analyses never overwrite valid snapshots or emit false resolution events.
 
 ---
 
@@ -78,6 +79,7 @@ undrift/
 │       │   ├── activation/
 │       │   ├── commands/
 │       │   ├── workspace/
+│       │   ├── storage/          # VS Code workspace storage adapter (storageUri & workspaceState)
 │       │   ├── analysis/
 │       │   ├── diagnostics/
 │       │   ├── providers/
@@ -93,11 +95,18 @@ undrift/
 │   │   ├── src/
 │   │   │   ├── domain/
 │   │   │   ├── ports/
+│   │   │   │   ├── parser.ts
+│   │   │   │   ├── analyzer.ts
+│   │   │   │   ├── resolver.ts
+│   │   │   │   ├── engine.ts
+│   │   │   │   ├── fixes.ts
+│   │   │   │   └── persistence.ts # StateStoragePort & StateReconciliationPort
 │   │   │   ├── config/
 │   │   │   ├── pipeline/
 │   │   │   ├── normalization/
 │   │   │   ├── matching/
 │   │   │   ├── rules/
+│   │   │   ├── reconciliation/   # snapshot-to-snapshot reconciliation & lifecycle events
 │   │   │   ├── explanations/
 │   │   │   ├── fixes/
 │   │   │   ├── reporting/
@@ -139,11 +148,11 @@ undrift/
 
 | Package | Owns | Must not own |
 |---|---|---|
-| `apps/vscode-extension` | VS Code activation, workspace events, diagnostics, views, commands, accepted edits | Contract comparison rules or parser-specific extraction |
-| `packages/core` | Domain model, pipeline coordination contracts, normalization, matching, drift rules, explanations, fix proposals, reports | VS Code imports or Tree-sitter runtime objects |
+| `apps/vscode-extension` | VS Code activation, workspace events, storage coordination (`storageUri` directory / `workspaceState` key-value), diagnostics, views, commands, accepted edits | Contract comparison rules, parser-specific extraction, or writing history to `.undrift/` repository directory |
+| `packages/core` | Domain model, pipeline coordination contracts, normalization, matching, drift rules, state reconciliation, lifecycle transitions, explanations, fix proposals, reports | VS Code imports, Tree-sitter runtime objects, or external database drivers |
 | `packages/parser-tree-sitter` | Tree-sitter binding and grammar lifecycle; syntax-node facade; source position conversion | API contract semantics or drift classification |
 | `packages/analyzer-js-ts` | Supported JavaScript/TypeScript patterns; frontend and Express extraction; local reference/shape extraction | VS Code UI or independent duplicate drift engine |
-| `tests` | Cross-package fixtures, golden outputs, end-to-end scenarios | Production behavior not reachable through supported interfaces |
+| `tests` | Cross-package fixtures, golden outputs, end-to-end scenarios, persistence reconciliation suites | Production behavior not reachable through supported interfaces |
 
 Package boundaries are logical boundaries first. It is acceptable to keep an analyzer inside the core package temporarily if dependency boundaries and tests stay clear. Do not split packages merely to maximize folder count.
 
@@ -151,7 +160,7 @@ Package boundaries are logical boundaries first. It is acceptable to keep an ana
 
 ```text
 apps/vscode-extension
-       │ wires adapters and displays results
+       │ wires adapters, storage, and displays results
        ▼
 packages/core ◄──────── packages/analyzer-js-ts
        ▲                           ▲
@@ -636,6 +645,108 @@ export interface AnalysisResult {
 
 The result has an explicit `complete` indicator because an empty findings array from incomplete analysis must not look equivalent to a clean, completed supported scan.
 
+### 4.14 Persisted analysis snapshot
+
+The snapshot records the last known successfully completed analysis state for a workspace. The types below define candidate conceptual shapes for persistent records and are subject to refinement during implementation. They do not replicate complete source code, which remains authoritative on disk/editor buffers.
+
+```ts
+export interface PersistedFindingRecord {
+  id: FindingId;
+  ruleId: RuleId;
+  category: Finding["category"];
+  severity: FindingSeverity;
+  state: FindingState;
+  title: string;
+  summary: string;
+  evidenceStrength: EvidenceStrength;
+  relationshipId?: RelationshipId;
+  sourceLocations: SourceSpan[];
+  expected?: unknown;
+  observed?: unknown;
+  limitations: AnalysisWarning[];
+  firstObservedAt: number;
+  lastConfirmedAt: number;
+}
+
+export interface AnalysisCoverageSummary {
+  complete: boolean;
+  filesScanned: number;
+  filesWithWarnings: number;
+  unresolvedPatterns: number;
+  warnings: AnalysisWarning[];
+}
+
+export interface AnalysisSnapshot {
+  schemaVersion: number;
+  snapshotId: string;
+  workspaceId: WorkspaceId;
+  generation: number;
+  analyzedAt: number;
+  coverage: AnalysisCoverageSummary;
+  findings: readonly PersistedFindingRecord[];
+  integrityHash?: string;
+}
+```
+
+### 4.15 Finding lifecycle events
+
+Lifecycle events log meaningful transitions between completed analyses. The types below define candidate conceptual event models. Intermediate typing or raw keystrokes do not generate events.
+
+```ts
+export type FindingLifecycleTransition =
+  | "detected"
+  | "changed"
+  | "resolved"
+  | "reintroduced";
+
+export type FindingLifecycleState = "active" | "resolved" | "suppressed";
+
+export interface FindingLifecycleContext {
+  previousSeverity?: FindingSeverity;
+  newSeverity?: FindingSeverity;
+  previousSummary?: string;
+  newSummary?: string;
+  primaryLocation?: SourceSpan;
+  reason?: string;
+}
+
+export interface FindingLifecycleEvent {
+  eventId: string;
+  workspaceId: WorkspaceId;
+  findingId: FindingId;
+  transitionKind: FindingLifecycleTransition;
+  observedAt: number;
+  triggerGeneration: number;
+  previousState?: FindingLifecycleState;
+  newState: FindingLifecycleState;
+  context?: FindingLifecycleContext;
+}
+
+export interface FindingLifecycleHistory {
+  schemaVersion: number;
+  workspaceId: WorkspaceId;
+  events: readonly FindingLifecycleEvent[];
+}
+```
+
+### 4.16 State reconciliation model
+
+```ts
+export interface StateReconciliationOptions {
+  allowResolutionOnlyIfCoverageComplete: boolean;
+}
+
+export interface ReconciliationResult {
+  workspaceId: WorkspaceId;
+  reconciledAt: number;
+  previousSnapshot?: AnalysisSnapshot;
+  currentSnapshot: AnalysisSnapshot;
+  eventsEmitted: readonly FindingLifecycleEvent[];
+  unchangedFindingCount: number;
+  coverageSufficient: boolean;
+}
+```
+
 ---
 
 ## 5. Core Ports and Interfaces
@@ -779,6 +890,52 @@ export interface FixGenerationContext {
 ```
 
 Fix generators create proposals only. They must not mutate source or call VS Code APIs.
+
+### 5.6 State persistence port
+
+This port manages reading and writing the latest complete analysis snapshot and historical lifecycle events to workspace-scoped storage.
+
+```ts
+export interface HistoryFilter {
+  findingId?: FindingId;
+  transitionKind?: FindingLifecycleTransition;
+  sinceTimestamp?: number;
+  limit?: number;
+}
+
+export interface RetentionPolicy {
+  retentionDays?: number;
+  maxEventsPerWorkspace?: number;
+}
+
+export interface StatePersistencePort {
+  readonly id: string;
+  loadLatestSnapshot(workspaceId: WorkspaceId): Promise<AnalysisSnapshot | undefined>;
+  saveSnapshot(workspaceId: WorkspaceId, snapshot: AnalysisSnapshot): Promise<void>;
+  loadLifecycleHistory(workspaceId: WorkspaceId, filter?: HistoryFilter): Promise<readonly FindingLifecycleEvent[]>;
+  appendLifecycleEvents(workspaceId: WorkspaceId, events: readonly FindingLifecycleEvent[]): Promise<void>;
+  pruneLifecycleHistory(workspaceId: WorkspaceId, policy: RetentionPolicy): Promise<number>;
+  clearCache(): Promise<void>;
+  resetHistory(workspaceId: WorkspaceId): Promise<void>;
+}
+```
+
+The port implementation in the VS Code host layer connects to VS Code-managed workspace storage: `ExtensionContext.storageUri` (workspace storage directory) is the candidate location for structured snapshot and lifecycle history files, coordinated with `ExtensionContext.workspaceState` (VS Code-managed workspace-scoped key-value persistence) as a possible mechanism for lightweight metadata. Duplicated metadata must never become an independent source of truth and must remain recoverable. It must not write history into the user's repository (`.undrift/`), must not use an embedded SQLite database, and must not connect to remote servers. The exact division of storage duties between `storageUri` and `workspaceState` is provisional and evaluated in POC-F.
+
+### 5.7 State reconciliation port
+
+This port compares a newly completed analysis with the previous complete snapshot to derive finding lifecycle transitions and update snapshot records.
+
+```ts
+export interface StateReconciliationPort {
+  readonly id: string;
+  reconcile(
+    currentResult: AnalysisResult,
+    previousSnapshot: AnalysisSnapshot | undefined,
+    options?: StateReconciliationOptions
+  ): ReconciliationResult;
+}
+```
 
 ---
 
@@ -1057,6 +1214,179 @@ Some Tree-sitter operations may not support interruption at every internal step.
 The first correct implementation may parse the supplied workspace snapshot in a scoped/full scan. Live changes are debounced, and an obsolete result is ignored. Add caches and selective invalidation incrementally.
 
 Do not claim dependency-aware incremental analysis until the implementation can identify which observations and relationships depend on a changed file. When an import, alias, router mount, or shared type may affect multiple files, use a safe broader scan if the dependency graph is not trustworthy.
+
+### 8.7 State reconciliation and persistence stage
+
+Once the engine finishes drift detection and builds findings, the analysis passes through the state reconciliation stage before results are published to the presentation layer.
+
+```text
+AnalysisResult (fresh run)
+        │
+        ▼
+Evaluate coverage sufficiency (AnalysisResult.complete)
+        │
+        ├── Incomplete / Failed ──► Preserve previous snapshot intact;
+        │                           suppress resolution / reintroduction events;
+        │                           publish attempt report
+        │
+        └── Sufficiently Complete
+                    │
+                    ▼
+          Load previous complete AnalysisSnapshot
+                    │
+                    ▼
+          Correlate findings by stable FindingId
+                    │
+                    ├── Present in current, absent in previous snapshot:
+                    │     ├── Previously resolved in history ──► emit 'reintroduced'
+                    │     └── Never observed in history ───────► emit 'detected'
+                    │
+                    ├── Present in both current and previous snapshot:
+                    │     ├── Material differences (severity/shape/route) ──► emit 'changed'
+                    │     └── Materially identical ─────────────────────────► NO event (unchanged)
+                    │
+                    └── Present in previous snapshot, absent in current:
+                          └── Coverage verified complete ───────────────────► emit 'resolved'
+                    │
+                    ▼
+          Construct updated AnalysisSnapshot
+                    │
+                    ▼
+          Atomic write to VS Code workspace storage (snapshot + new events)
+                    │
+                    ▼
+          Execute retention pruning on historical events (snapshot preserved)
+                    │
+                    ▼
+          Publish ReconciliationResult & updated report
+```
+
+#### Step-by-step reconciliation algorithm
+
+```text
+ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentionPolicy):
+  INPUT:
+    currentResult: AnalysisResult
+    previousSnapshot: AnalysisSnapshot or null
+    historyStore: StatePersistencePort
+    retentionPolicy: RetentionPolicy
+
+  OUTPUT:
+    ReconciliationResult
+
+  1. CHECK COVERAGE SUFFICIENCY:
+     IF NOT currentResult.complete OR currentResult.warnings.hasCriticalCoverageFailure():
+       RETURN ReconciliationResult(
+         workspaceId: currentResult.workspaceId,
+         reconciledAt: currentResult.generatedAt,
+         previousSnapshot: previousSnapshot,
+         currentSnapshot: previousSnapshot, // PRESERVE UNCHANGED
+         eventsEmitted: [],
+         unchangedFindingCount: previousSnapshot ? previousSnapshot.findings.length : 0,
+         coverageSufficient: false
+       )
+
+  2. INDEX PREVIOUS AND CURRENT FINDINGS:
+     prevMap = new Map<FindingId, PersistedFindingRecord>()
+     IF previousSnapshot != null:
+       FOR EACH f IN previousSnapshot.findings:
+         prevMap.set(f.id, f)
+
+     currMap = new Map<FindingId, Finding>()
+     FOR EACH f IN currentResult.findings:
+       currMap.set(f.id, f)
+
+     newEvents = []
+     persistedRecords = []
+
+  3. RECONCILE CURRENT FINDINGS:
+     FOR EACH (id, currFinding) IN currMap:
+       prevRecord = prevMap.get(id)
+
+       IF prevRecord == null:
+         // Finding was not in previous snapshot
+         wasPreviouslyResolved = historyStore.hasHistoricalState(id, "resolved")
+         transition = wasPreviouslyResolved ? "reintroduced" : "detected"
+
+         event = createLifecycleEvent(
+           workspaceId: currentResult.workspaceId,
+           findingId: id,
+           transitionKind: transition,
+           observedAt: currentResult.generatedAt,
+           triggerGeneration: currentResult.generation,
+           previousState: wasPreviouslyResolved ? "resolved" : undefined,
+           newState: "active",
+           context: extractContext(currFinding)
+         )
+         newEvents.append(event)
+
+         record = toPersistedFindingRecord(currFinding, firstObservedAt: currentResult.generatedAt, lastConfirmedAt: currentResult.generatedAt)
+         persistedRecords.append(record)
+
+       ELSE:
+         // Finding exists in both snapshots
+         IF isMateriallyChanged(prevRecord, currFinding):
+           event = createLifecycleEvent(
+             workspaceId: currentResult.workspaceId,
+             findingId: id,
+             transitionKind: "changed",
+             observedAt: currentResult.generatedAt,
+             triggerGeneration: currentResult.generation,
+             previousState: prevRecord.state,
+             newState: currFinding.state,
+             context: extractDeltaContext(prevRecord, currFinding)
+           )
+           newEvents.append(event)
+         ELSE:
+           // UNCHANGED: generate NO new lifecycle event
+           NO_OP()
+
+         record = toPersistedFindingRecord(currFinding, firstObservedAt: prevRecord.firstObservedAt, lastConfirmedAt: currentResult.generatedAt)
+         persistedRecords.append(record)
+
+  4. RECONCILE RESOLVED FINDINGS:
+     FOR EACH (id, prevRecord) IN prevMap:
+       IF NOT currMap.has(id):
+         // Finding was present before, now absent from a complete scan -> RESOLVED
+         event = createLifecycleEvent(
+           workspaceId: currentResult.workspaceId,
+           findingId: id,
+           transitionKind: "resolved",
+           observedAt: currentResult.generatedAt,
+           triggerGeneration: currentResult.generation,
+           previousState: prevRecord.state,
+           newState: "resolved",
+           context: { primaryLocation: prevRecord.sourceLocations[0], reason: "Absent from completed analysis" }
+         )
+         newEvents.append(event)
+
+  5. CONSTRUCT NEW SNAPSHOT:
+     newSnapshot = AnalysisSnapshot(
+       schemaVersion: CURRENT_PERSISTENCE_SCHEMA_VERSION,
+       snapshotId: generateUUID(),
+       workspaceId: currentResult.workspaceId,
+       generation: currentResult.generation,
+       analyzedAt: currentResult.generatedAt,
+       coverage: extractCoverage(currentResult),
+       findings: persistedRecords
+     )
+
+  6. ATOMIC PERSISTENCE & PRUNING:
+     historyStore.saveSnapshot(currentResult.workspaceId, newSnapshot)
+     historyStore.appendLifecycleEvents(currentResult.workspaceId, newEvents)
+     historyStore.pruneLifecycleHistory(currentResult.workspaceId, retentionPolicy)
+
+  7. RETURN RESULT:
+     RETURN ReconciliationResult(
+       workspaceId: currentResult.workspaceId,
+       reconciledAt: currentResult.generatedAt,
+       previousSnapshot: previousSnapshot,
+       currentSnapshot: newSnapshot,
+       eventsEmitted: newEvents,
+       unchangedFindingCount: persistedRecords.length - newEvents.length,
+       coverageSufficient: true
+     )
+```
 
 ---
 
@@ -1360,8 +1690,10 @@ The extension is an adapter around the core. It translates editor/workspace even
 
 - registers commands and views;
 - creates diagnostic collections, status items, tree providers and output channel;
-- builds concrete parser/analyzer registries and the analysis engine;
+- initializes the workspace storage persistence adapter (`ExtensionContext.storageUri` directory and `ExtensionContext.workspaceState`);
+- builds concrete parser/analyzer registries, the state reconciliation engine, and the analysis engine;
 - initializes workspace event handlers;
+- coordinates the initial workspace open flow (restoring last-known snapshot and lifecycle history);
 - owns disposables and calls `dispose()` at deactivation.
 
 This is the only area that should assemble all implementation-specific dependencies. Avoid importing the full extension activation module from core or analyzer packages.
@@ -1389,7 +1721,15 @@ The extension-side coordinator owns:
 - debounce/cancellation;
 - snapshot creation;
 - current-analysis status/progress;
+- session restoration on workspace open:
+  1. loads latest complete snapshot and lifecycle history from workspace storage;
+  2. publishes snapshot as "last known state" to tree and report views;
+  3. triggers fresh analysis of current workspace files;
+  4. coordinates state reconciliation upon completion;
+  5. saves updated snapshot and new events crash-safely;
+  6. updates presentation to "freshly verified";
 - accepting only non-stale `AnalysisResult` objects;
+- failure semantics: ensuring incomplete/failed analyses never overwrite the valid persisted snapshot or emit false resolution events;
 - publishing result updates to UI providers;
 - scheduling re-analysis after accepted fixes.
 
@@ -1414,24 +1754,27 @@ A finding may identify multiple source locations, but the first release may use 
 
 The tree provider presents findings grouped by category or severity and should show:
 
+- state indicator badge: clearly distinguishing **Last Known Analyzed State** (with timestamp of last analysis) from **Freshly Verified Current Source**;
 - category and severity;
 - concise title;
 - confidence/evidence class or uncertainty indicator;
 - consumer/provider side when identified;
-- current state (active/suppressed/incomplete);
+- current state (active/suppressed/incomplete/resolved);
+- historical lifecycle tag (`detected`, `changed`, `resolved`, `reintroduced`) and observation timestamp;
 - source navigation for each available location.
 
 Tree grouping must not imply certainty not present in the underlying `Finding`.
 
 ### 14.6 Finding details/report
 
-A report view can use a VS Code WebviewPanel or another suitable native view. It consumes the normalized `AnalysisResult` and renders:
+A report view can use a VS Code WebviewPanel or another suitable native view. It consumes the normalized `AnalysisResult`, the reconciled `AnalysisSnapshot`, and `FindingLifecycleHistory`, rendering:
 
-- summary counts;
+- summary counts and presentation state indicator (last-known vs. freshly analyzed);
 - findings grouped by category/severity;
 - expected versus observed data;
-- relevant source links;
+- relevant source links (marked as historical references from analysis time);
 - evidence and limitations;
+- finding lifecycle history timeline (transitions, observation timestamps, delta summaries);
 - fix proposal options;
 - analysis coverage/warnings.
 
@@ -1450,13 +1793,28 @@ Initial commands should include equivalents of:
 - Explain Finding;
 - Refresh Findings;
 - Ignore/Suppress Finding when project configuration supports it;
-- Re-check affected relationship after manual correction.
+- Re-check affected relationship after manual correction;
+- Reset Drift History (clears persisted lifecycle history independently of disposable caches);
+- Clear Analysis Cache (clears temporary AST/observation caches without deleting finding history).
 
 A status bar item may report analyzing/clean/findings/incomplete states. Notifications should be selective and should not repeatedly show unchanged results.
 
 ### 14.9 Disposal and resource ownership
 
 Every VS Code listener, tree, diagnostic collection, status item, cancellation source, parser, and view registration must be registered for cleanup. The composition root owns the engine; the engine owns parser/analyzer resources it creates or registers according to the chosen contract. Do not dispose a parser/tree that another in-flight analysis is still using.
+
+### 14.10 Workspace persistent storage adapter
+
+The extension implements `StatePersistencePort` using VS Code-managed workspace storage:
+
+1. **Storage Mechanism and Candidate API Responsibilities:**
+   - `vscode.ExtensionContext.storageUri`: the workspace-specific storage directory on disk, evaluated as the candidate location for persisting structured JSON files for the latest complete analysis snapshot (`AnalysisSnapshot`) and finding lifecycle history (`FindingLifecycleHistory`).
+   - `vscode.ExtensionContext.workspaceState`: VS Code-managed workspace-scoped key-value persistence, evaluated as a possible mechanism for lightweight metadata, generation IDs, analysis timestamps, and fast lookup indexes.
+   - **Provisional Allocation & Reconciliation:** The exact division of storage duties and coordination between `storageUri` and `workspaceState` (including fallback behavior if `storageUri` is undefined in virtual or untitled workspaces) is provisional and subject to POC-F validation. If both mechanisms are utilized, duplicated metadata in `workspaceState` must never become an independent source of truth and must remain fully recoverable or reconcilable from the primary persistent records.
+2. **Workspace Isolation:** All persisted keys/files are partitioned by the workspace folder identity. State cannot leak between different repository windows.
+3. **Crash-Safe and Recoverable Writes:** Storage updates require crash-safe and recoverable persistence. A write-to-temporary-file and rename pattern in `storageUri` (or atomic key updates in `workspaceState`) is the candidate implementation, but universal atomicity cannot be assumed across all supported extension-host filesystem environments; POC-F will validate cross-environment reliability. Interrupted writes must never leave partial or corrupt data.
+4. **Schema Versioning & Recovery:** Each persisted payload contains a `schemaVersion` header. If stored data is corrupted, malformed, or of an unsupported version, UNDRIFT logs a warning, quarantines the invalid data, and initializes a clean baseline. It never fabricates history or accepts corrupt records.
+5. **Storage Boundaries:** The adapter MUST NOT write history to the user's project repository (`.undrift/`), MUST NOT require SQLite or an embedded database, and MUST NOT connect to remote services or clouds.
 
 ---
 
@@ -1467,6 +1825,11 @@ V0 may run with defaults. A later V1 configuration should be local, versioned, r
 Candidate shape:
 
 ```ts
+export interface HistoryRetentionConfig {
+  retentionDays?: number;
+  maxEventsPerWorkspace?: number;
+}
+
 export interface UndriftConfig {
   version: 1;
   include?: string[];
@@ -1478,6 +1841,7 @@ export interface UndriftConfig {
   rules?: Record<string, { enabled?: boolean; severity?: FindingSeverity }>;
   suppressions?: FindingSuppression[];
   mappings?: IntentionalMapping[];
+  historyRetention?: HistoryRetentionConfig;
 }
 
 export interface FindingSuppression {
@@ -1495,7 +1859,7 @@ export interface IntentionalMapping {
 }
 ```
 
-This is a proposal for LLD discussion, not a finalized public schema. The final configuration filename, mapping semantics, and behavior for unknown keys should be confirmed before implementation.
+This is a proposal for LLD discussion, not a finalized public schema. The final configuration filename, mapping semantics, exact history retention defaults and limits, and behavior for unknown keys remain open implementation decisions.
 
 Rules:
 
@@ -1510,34 +1874,74 @@ Rules:
 
 ## 16. Caching, State and Finding Identity
 
-### 16.1 Initial state strategy
+### 16.1 Five-tier state architecture
 
-No database is required. Workspace source is the current source of truth. Derived parser trees, observations, relationships, findings, and reports live in memory and can be rebuilt.
+To ensure reliable finding tracking across sessions without violating the primacy of the developer's code, UNDRIFT establishes a five-tier state model:
 
-### 16.2 Cache layers
+1. **Tier 1: Current Source Code (Authoritative Source of Truth):**
+   - Editor buffers, workspace files, and disk contents.
+   - Always authoritative for the current state of the workspace.
+2. **Tier 2: In-Memory Working State (Ephemeral):**
+   - Active Tree-sitter parse trees, byte offset tables, and transient analyzer data.
+   - Discarded upon editor buffer edits or session termination.
+3. **Tier 3: Disposable Analysis Caches (Ephemeral Performance Layer):**
+   - Parsed AST caches, normalized observation caches, and match indexes.
+   - Keyed by file content hashes and configuration versions.
+   - Safely discardable and rebuildable from source code at any time.
+4. **Tier 4: Latest Complete Analysis Snapshot (Persisted Last Known State):**
+   - Persisted in VS Code-managed workspace storage (`storageUri` directory candidate for snapshot files; `workspaceState` for metadata).
+   - Represents the most recent successfully completed analysis.
+   - Restored on session start as "last known state" until re-analyzed.
+   - **Never overwritten by incomplete, interrupted, cancelled, or failed runs.**
+5. **Tier 5: Finding Lifecycle History (Persisted Transition Log):**
+   - Persisted in VS Code-managed workspace storage (`storageUri` directory candidate for lifecycle event history files; `workspaceState` for metadata).
+   - Records meaningful transitions: `detected`, `changed`, `resolved`, and `reintroduced` with observation/confirmation timestamps.
+   - Unchanged findings produce no new events.
+   - Pruned by configurable retention independently of the Tier 4 snapshot.
 
-The implementation may add caches in this order:
+### 16.2 History reset vs. cache clearing
 
-1. parse result/tree per document content hash;
-2. extraction output per document content hash and analyzer/config version;
-3. local declaration/index data per affected document set;
-4. relationships/findings per observation revision;
-5. report per analysis generation.
+The architecture strictly separates disposable performance caches from user-meaningful finding history:
 
-A cache key must account for every input that affects the result. If an import, route mount, type alias, configuration mapping, parser grammar or analyzer rule changes, dependent observations/results need invalidation.
+- **Cache Clearing:** Discards Tier 3 data (e.g., cached ASTs, extractor outputs). Clearing caches forces a clean re-scan and parse of the workspace from source code, but leaves Tier 4 (latest snapshot) and Tier 5 (finding lifecycle history) intact.
+- **History Reset:** An independent user operation that clears Tier 5 lifecycle events and/or resets the Tier 4 snapshot to a clean baseline. History reset never alters project source code or workspace configuration.
+- **Retention Pruning:** Background pruning removes expired Tier 5 lifecycle events based on configured retention policies. Pruning operates strictly on historical event records and **must never delete or degrade the Tier 4 latest complete snapshot**, ensuring the current last-known state remains available regardless of event age.
 
-### 16.3 Correctness fallback
+### 16.3 Stable finding identity
 
-When dependency relationships are unknown, invalidate broadly and run a workspace/scoped scan. A correct full pass is preferred over returning stale or incomplete results while claiming they are current.
+To recognize whether a finding is unchanged, changed, resolved, or reintroduced across completed analyses, UNDRIFT requires deterministic, stable finding identity:
 
-### 16.4 Identity
+- **Formula Requirements (Conceptual Design):** Finding identity derives deterministically from:
+  1. the stable rule ID (e.g., `UND120`, `UND300`);
+  2. the normalized relationship endpoint identity (HTTP method, normalized route pattern);
+  3. the specific target property, parameter name, or field key involved;
+  4. consumer and provider roles where applicable.
+- **Invariance:** Finding identity MUST NOT depend on array indexes, transient memory addresses, or raw line numbers that shift when unrelated lines are added above the finding.
+- **Material Change Criteria:** If a finding's severity, expected/observed types, or core conflict changes while its identity remains intact, state reconciliation flags a `changed` transition. If its core identity disappears from a sufficiently complete scan, it is flagged as `resolved`. If it reappears later, it is flagged as `reintroduced`.
+- **Open Decisions:** The exact canonical serialization format, hashing algorithm (e.g., cryptographic SHA-256 vs. Murmur/FNV digest), and exact quantitative/qualitative criteria defining when a change is "material" remain open implementation decisions.
 
-- `ObservationId` should be stable for unchanged source-derived constructs where practical.
-- `RelationshipId` should derive from observation identities and relationship kind, not array order.
-- `FindingId` should derive from stable rule identity, relationship/observation keys, and a field/path key when relevant.
-- `FixProposalId` may be scoped to the current finding and analysis generation; stale proposals must never be reused after relevant source changes.
+### 16.4 Crash-safe storage writes and invalid-data recovery
 
-A material code change may correctly change an ID. Stability is intended to minimize flicker for unchanged issues, not force identity across different semantics.
+Persistent state operations must be crash-safe and recoverable:
+
+1. **Crash-Safe Persistence Pattern:** Snapshot and event updates must satisfy crash-safe and recoverable persistence requirements (e.g., writing to a temporary file in `storageUri` followed by rename, or atomic `workspaceState.update`). Universal atomicity of file renames cannot be assumed across all filesystem environments and will be validated in POC-F. Interrupted writes must leave the previous valid snapshot and event history intact, and any duplicated metadata must remain recoverable.
+2. **Schema Versioning:** All persisted payloads include an integer `schemaVersion` header.
+3. **Safe Recovery:** If persisted data is missing, corrupted, or incompatible with the current schema:
+   - UNDRIFT logs a structured local warning;
+   - Quarantines or resets the corrupted file without failing workspace activation;
+   - Falls back to a clean first-time baseline;
+   - Triggers fresh analysis of current workspace source;
+   - **Never fabricates history or accepts partially corrupted state.**
+
+### 16.5 Workspace isolation and multi-day gap handling
+
+- **Workspace Isolation:** State is strictly partitioned by workspace folder identity. Snapshots and history cannot leak across different workspaces or editor windows.
+- **Ambiguous and Multi-Root Workspaces:** Workspace partitioning details for unsupported or ambiguous workspace setups (such as multi-root workspaces or untitled/unsaved workspaces where folder identity is ambiguous) remain an open implementation decision.
+- **Multi-Day Gaps:** UNDRIFT does not run in the background while VS Code is closed. When reopening after days or weeks:
+  1. The restored snapshot is displayed as "last known state" with its original analysis timestamp.
+  2. Fresh analysis runs and reconciles against the restored snapshot.
+  3. **Event timestamps reflect when UNDRIFT observed/confirmed the transition**, not an invented estimate of when source changes occurred while VS Code was closed.
+  4. The presentation layer clearly presents the gap between completed analyses.
 
 ---
 
@@ -1553,6 +1957,9 @@ A material code change may correctly change an ID. Stability is intended to mini
 | Analyzer exception | Isolate the failing analyzer/document when safe | Write useful local logs and continue independent work |
 | Invalid config | Return configuration warning and documented defaults | Identify the config source/location |
 | Cancelled/superseded analysis | Stop at safe boundaries; discard stale output | Keep latest valid result or show current analysis state |
+| Incomplete or failed analysis | Preserve previous complete snapshot intact; suppress false resolution and reintroduction events | Display analysis attempt status while keeping last complete state available |
+| Persisted storage corrupted / invalid schema | Log warning; quarantine or reinitialize state safely without fabricating history | Notify user via output log; establish clean baseline via fresh analysis |
+| Storage write failure during reconciliation | Abort write safely; preserve previous valid snapshot and event history | Surface local storage warning |
 | Source changed during proposal | Refuse to apply stale edit | Ask for fresh analysis |
 | Fix does not resolve mismatch | Keep finding active after re-analysis | Show remaining mismatch; do not imply success |
 | Workspace changed during scan | Mark result stale/incomplete as appropriate | Ignore stale generation and schedule latest scan |
@@ -1564,14 +1971,18 @@ Unexpected failures should include enough context for debugging—phase, analyze
 ## 18. Privacy and Safety Requirements
 
 1. All V0/V1 analysis happens locally within the opened workspace or permitted extension-host workspace.
-2. No source code or derived contract graph is uploaded to a UNDRIFT service.
-3. There is no required server, database, account, LLM provider, or model API key.
-4. The analyzer does not execute source, install dependencies, run package scripts, or launch application services.
-5. File discovery respects the workspace boundary and ignore rules.
-6. Generated/dependency files should be excluded from normal analysis/fixes unless explicitly configured.
-7. Proposed edits are reviewed and validated against current snapshots before application.
-8. All multi-file edits are described by explicit edit intents; no arbitrary shell command is generated/executed as a fix.
-9. Any future remote/AI capability would require explicit opt-in and clear disclosure of any data leaving the workspace.
+2. Analysis snapshots and finding lifecycle history are stored exclusively in VS Code-managed workspace storage (`ExtensionContext.storageUri` directory candidate for structured snapshot and history files; `ExtensionContext.workspaceState` for metadata).
+3. No source code or derived contract graph is uploaded to a UNDRIFT service or remote database.
+4. Persistent state does not write into a `.undrift/` repository directory.
+5. Entire source files are not duplicated into persistent storage; source references point to past file paths and line ranges and may become stale as the codebase evolves.
+6. There is no required server, database, account, LLM provider, or model API key.
+7. Git is not a mandatory dependency and source-control analytics are not performed.
+8. The analyzer does not execute source, install dependencies, run package scripts, or launch application services.
+9. File discovery respects the workspace boundary and ignore rules.
+10. Generated/dependency files should be excluded from normal analysis/fixes unless explicitly configured.
+11. Proposed edits are reviewed and validated against current snapshots before application.
+12. All multi-file edits are described by explicit edit intents; no arbitrary shell command is generated/executed as a fix.
+13. Any future remote/AI capability would require explicit opt-in and clear disclosure of any data leaving the workspace.
 
 ---
 
@@ -1675,27 +2086,44 @@ Specific cases:
 - successful fix re-analysis clears the intended finding;
 - incomplete re-analysis does not mark a finding resolved.
 
-### 19.6 Integration tests: core
+### 19.6 Unit tests: state reconciliation and persistence
+
+The state reconciliation engine must be thoroughly tested with unit fixtures:
+
+- **Coverage gating:** an incomplete or failed analysis result (`complete: false` or critical warnings) preserves the previous complete snapshot intact, emits zero resolution/reintroduction events, and returns `coverageSufficient: false`.
+- **First-time analysis:** a fresh analysis with no pre-existing snapshot or history emits `detected` for each finding and creates an initial snapshot.
+- **Unchanged finding suppression:** a finding present in both previous and current snapshots with identical severity, shape, and rule code produces **no new lifecycle event**.
+- **Material change transition:** a finding with altered severity, expected/observed shape, or conflict details emits a `changed` lifecycle event.
+- **Finding resolution:** a finding present in the previous snapshot but absent from a completed, sufficiently complete subsequent analysis emits a `resolved` lifecycle event.
+- **Finding reintroduction:** a finding previously resolved that is observed again in a subsequent analysis emits a `reintroduced` lifecycle event.
+- **Retention pruning:** pruning expired lifecycle events removes old events according to the retention policy while **leaving the latest complete snapshot completely intact**.
+- **Crash recovery:** corrupted, malformed, or invalidly versioned storage files are quarantined and re-initialized to a clean baseline without failing activation or fabricating history.
+
+### 19.7 Integration tests: core
 
 A complete fixture workspace should be passed through the real parser adapter, analyzer, matching, and rule engine. Compare normalized JSON/golden outputs for observations, relationships, findings, warnings, and source positions.
 
 Golden files should be intentionally reviewed when rules change, so false-positive behavior isn't silently normalized.
 
-### 19.7 Extension-host tests
+### 19.8 Extension-host tests
 
 Run through a VS Code extension host to verify:
 
 - activation, commands and contribution registration;
 - workspace scan and open-buffer precedence;
 - diagnostics and tree/report linkage;
+- session restoration: workspace opens, restores last-known snapshot and history, displays "last known state" indicator, triggers fresh analysis, and transitions to "freshly verified";
+- snapshot-to-snapshot reconciliation across simulated file edits and sessions;
+- incomplete/interrupted runs preserve the valid snapshot;
 - changed document invalidates stale output;
 - analysis generation prevents old results replacing new ones;
 - accepted and rejected Quick Fix flow;
 - invalidated fix proposals are not applied;
 - result refresh after accepted fix;
+- crash-safe persistence and recovery from invalid storage data;
 - resource/listener disposal on deactivation.
 
-### 19.8 Evaluation metrics
+### 19.9 Evaluation metrics
 
 Track the metrics specified by the PRD, including true positives, false positives, seeded drifts missed, accuracy by rule category, successful re-verification, first-use time, responsiveness, and warning/noise levels. Keep a labeled fixture catalog so every rule can be improved against reproducible examples.
 
@@ -1745,6 +2173,12 @@ Verify open-buffer precedence, debounce/cancel behavior, generation checks, acce
 
 **Decision:** decide whether the in-process model meets responsiveness goals or whether profiling justifies further concurrency architecture.
 
+### POC-F — State persistence, reconciliation, and session recovery
+
+Validate workspace-scoped storage serialization, session restoration on extension activation, snapshot-to-snapshot reconciliation, coverage failure gating, and retention pruning.
+
+**Decision:** evaluate the provisional allocation between `ExtensionContext.storageUri` file persistence and `ExtensionContext.workspaceState` key-value metadata, validate crash-safe write performance and filesystem reliability across supported environments, ensure metadata recovery, and confirm that snapshot and history persistence operate reliably without performance degradation or data corruption.
+
 ---
 
 ## 21. Implementation Sequence
@@ -1777,13 +2211,16 @@ Verify open-buffer precedence, debounce/cancel behavior, generation checks, acce
 
 **Exit:** valid, drifted, and unresolved relationships produce distinct results.
 
-### Phase 4 — VS Code diagnostics/report
+### Phase 4 — VS Code integration, persistence, and state reconciliation
 
-- wire workspace snapshot provider and analysis coordinator;
+- wire workspace snapshot provider, analysis coordinator, and storage adapter;
+- implement workspace-scoped persistence for latest complete analysis snapshot and lifecycle history;
+- implement the 8-step session open and state reconciliation pipeline;
+- enforce coverage sufficiency failure semantics;
 - add diagnostics, sidebar/report, source navigation, commands and status;
 - debounce and discard stale analysis.
 
-**Exit:** a developer sees a concrete mismatch and can inspect both source sides.
+**Exit:** a developer sees findings from IDE, can close and reopen VS Code retaining finding history, and observes verified transitions upon fresh analysis.
 
 ### Phase 5 — Reviewable repair and verification
 
@@ -1818,6 +2255,11 @@ The first complete slice is not considered done until:
 - [ ] drift rules have positive and negative fixtures;
 - [ ] findings explain expected versus observed data;
 - [ ] a finding can be opened from a diagnostic/sidebar/report and navigates to available source sides;
+- [ ] closing and reopening VS Code restores the last known complete snapshot as "last known state";
+- [ ] fresh analysis after workspace open reconciles findings, producing `detected`, `changed`, `resolved`, or `reintroduced` transitions;
+- [ ] incomplete or failed analysis preserves previous snapshot and suppresses false resolution events;
+- [ ] persistent state is stored in VS Code workspace storage, not in user repo (`.undrift/`), without requiring external/embedded database;
+- [ ] retention pruning does not destroy or degrade the latest complete snapshot;
 - [ ] one supported repair proposal is reviewable and applied only after user acceptance;
 - [ ] stale proposals are rejected;
 - [ ] post-edit analysis confirms resolution only when supported checks establish it;
@@ -1842,9 +2284,17 @@ The following remain intentionally outside the finalized implementation details 
 - LSP/multi-editor support;
 - OpenAPI/generated SDK ingestion;
 - runtime evidence and multi-repository analysis;
-- any optional AI/remote semantic capability.
+- any optional AI/remote semantic capability;
+- SQLite, embedded, or remote databases (excluded from scope);
+- storing history in `.undrift/` repository directory (excluded from scope);
+- Git history integration as a mandatory dependency (excluded from scope).
 
-Future extensions should contribute observations and provenance to the shared model. They must not create a parallel drift engine or compromise local-first defaults.
+**Open implementation decisions (intentionally unresolved in this design):**
+1. *Storage API allocation and division of responsibilities:* Exact division of responsibilities between `ExtensionContext.storageUri` (candidate for structured snapshot/history files) and `ExtensionContext.workspaceState` (key-value metadata/indexing), crash-safe write strategy, and low-level JSON serialization format (provisional in design; validated in POC-F).
+2. *Retention settings schema and default limits:* Specific retention duration (e.g. days), event-count limits, and user-facing configuration schema.
+3. *Stable finding identity algorithm details:* Exact canonical serialization format and cryptographic hashing function.
+4. *Material change threshold criteria:* Exact degree of route, method, schema, or location delta that constitutes a `changed` finding versus an unchanged finding.
+5. *Multi-root and unsaved workspace partitioning:* Low-level directory mapping when no workspace root folder is formally saved.
 
 ---
 

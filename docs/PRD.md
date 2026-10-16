@@ -19,6 +19,8 @@ UNDRIFT's first product surface is planned to be a VS Code extension. Its analys
 
 The long-term product ambition is broader than route validation: UNDRIFT should become an integration-intelligence layer that understands what connected components expect, provide, and transform; identifies where those assumptions diverge; explains the likely consequences; and helps developers reconcile them safely.
 
+Across development sessions, UNDRIFT retains its previous analysis state and finding lifecycle history. When a developer reopens a workspace after days away, UNDRIFT restores the last known complete analysis, reconciles it against fresh analysis of the current source code, and surfaces what was newly detected, changed, resolved, or reintroduced without losing context.
+
 This PRD separates the long-term vision from the first useful release. It records product requirements and hypotheses without pretending that every technical choice or market assumption has already been validated.
 
 ---
@@ -39,7 +41,7 @@ This tagline is a working draft and may change after prototype testing.
 
 ## 2.3 One-Line Description
 
-UNDRIFT continuously discovers integration contracts between application components, detects and explains their drift, and helps developers safely resolve the mismatch directly in the IDE.
+UNDRIFT continuously discovers integration contracts between application components, detects and explains their drift, tracks finding lifecycle across sessions, and helps developers safely resolve mismatches directly in the IDE.
 
 ---
 
@@ -59,6 +61,8 @@ A developer should be able to answer:
 - Which representation should be treated as authoritative?
 - What is the safest repair?
 - Did the repair actually resolve the issue?
+- What was found in the last completed analysis of this project?
+- Which integration issues were newly detected, materially changed, resolved, or reintroduced since the last analysis?
 
 UNDRIFT should answer these questions using evidence from source code and, as the product matures, additional evidence from specifications, generated clients, Git history, tests, and runtime observations.
 
@@ -245,6 +249,18 @@ The developer optionally checks staged changes before committing. This is a late
 ## UC-12 — Explain change impact
 A change to a route, response type, or shared definition is traced to the connected relationships UNDRIFT can identify. Broad change-causality and full impact analysis may follow after the initial release.
 
+## UC-13 — Restore last known analysis state on workspace reopen
+A developer opens a previously analyzed workspace after hours or days away. UNDRIFT immediately restores the previous analysis state and finding history as the last known state, clearly distinguished from the current source code, while initiating a fresh analysis in the background.
+
+## UC-14 — Track finding lifecycle over time
+The developer inspects a finding to understand when it was first detected, whether its contract details have materially changed across analyses, whether it was previously resolved, or if it represents a regression (reintroduced finding).
+
+## UC-15 — Reconcile state after multi-day gap
+A developer returns to a workspace after code was modified while UNDRIFT was not running. UNDRIFT reconciles the newly completed analysis against the last complete persisted snapshot, highlighting what changed between the two completed analyses without fabricating intermediate activity.
+
+## UC-16 — Configure history retention
+The developer configures history retention policies to control how long finding lifecycle transitions are retained, ensuring that history cleanup never deletes the current last-known snapshot or conflates history with disposable analysis caches.
+
 ---
 
 # 8. Product Principles
@@ -272,6 +288,15 @@ Frontend code, backend implementation, database schema, specifications, generate
 
 ## 8.8 Recognize intentional transformations
 A database may use snake_case while an API uses camelCase through an intentional serializer. Such differences should not automatically be called drift if the transformation is understood or explicitly configured.
+
+## 8.9 Clear separation of state authority
+Current source code is always authoritative for the current state of the workspace. The latest persisted complete analysis snapshot represents the last known analyzed state. Persisted lifecycle events represent an historical observation log. Disposable analysis caches exist purely for performance. None of these layers should be conflated.
+
+## 8.10 Observation timestamps, not invented edit times
+Timestamps recorded in finding history represent when a transition was observed or verified by a completed analysis run. UNDRIFT does not claim continuous observation while closed and must not invent source modification timestamps.
+
+## 8.11 Retain finding history without event bloat
+Meaningful history captures transitions (detected, changed, resolved, reintroduced) across completed, sufficiently complete analyses. Intermediate keystrokes and materially unchanged findings across consecutive runs must not generate historical event noise.
 
 ---
 
@@ -311,6 +336,10 @@ V1 should harden the prototype into a tool another developer can install and eva
 - safe/reviewable Quick Fixes for supported cases;
 - manual-resolution flow;
 - incremental re-analysis;
+- persistent workspace-scoped analysis state (retaining the latest complete analysis snapshot);
+- finding lifecycle history tracking (detected, changed, resolved, reintroduced);
+- reliable session reconciliation when reopening previously analyzed workspaces;
+- configurable history retention;
 - ignore/suppression rules for intentional exceptions;
 - explicit handling of unsupported dynamic patterns;
 - fixtures and tests covering valid relationships as well as known drift;
@@ -365,21 +394,22 @@ These are options to validate, not commitments to implement immediately.
 A VS Code extension providing:
 
 - a sidebar/activity entry;
-- current integration status;
+- current integration status, distinguishing whether displayed data represents the **last known persisted state** or a **fresh analysis of current source**;
 - drift findings grouped by severity/category;
+- finding lifecycle history (first detected, materially changed, resolved, or reintroduced);
 - source diagnostics;
 - hover explanations;
 - code actions/Quick Fixes;
 - a full report;
-- commands to analyze or refresh.
+- commands to analyze, refresh, or clear disposable caches.
 
 ## 10.2 Passive, contextual, and explicit interactions
 
-**Passive:** an unobtrusive status indicator reports whether actionable findings exist.
+**Passive:** an unobtrusive status indicator reports whether actionable findings exist and clarifies if an analysis is in progress or displaying last known state.
 
 **Contextual:** a source location may display a diagnostic or relevant code action.
 
-**Explicit:** the developer opens the report or runs a command to analyze, refresh, explain, or request a fix.
+**Explicit:** the developer opens the report or runs a command to analyze, refresh, inspect finding history, explain, or request a fix.
 
 ## 10.3 Notifications
 Notifications should be selective and configurable. Unchanged findings should not repeatedly notify the user. New, high-confidence actionable drift may deserve a badge or notification; informational findings should generally remain passive.
@@ -456,6 +486,16 @@ Severity and confidence are separate:
 - **Confidence** describes the strength of evidence for the finding or inferred relationship.
 
 The product must not imply calibrated statistical certainty without evaluation.
+
+## 11.5 Finding Lifecycle Transitions and History Model
+Alongside current contract status, UNDRIFT maintains a historical record of meaningful finding lifecycle transitions across completed analyses:
+
+1. **Detected:** A finding is observed for the first time in a completed, sufficiently complete analysis.
+2. **Changed:** An existing finding materially changes between completed analyses (e.g., modified route, field type, or severity).
+3. **Resolved:** A previously known finding is absent from a subsequent sufficiently complete analysis of the relevant scope.
+4. **Reintroduced:** A finding that was previously marked resolved is detected again in a subsequent completed analysis.
+
+Findings that remain materially unchanged across runs do not generate new lifecycle events. Intermediate editor keystrokes and incomplete analysis passes never create lifecycle events. Stable finding identity across analyses ensures that UNDRIFT tracks the evolution of a problem rather than treating each run as isolated facts.
 
 ---
 
@@ -577,12 +617,15 @@ The first release should analyze source locally and should not require a hosted 
 Requirements:
 
 - no cloud account required for basic analysis;
-- no external database required;
-- no source-code telemetry by default;
+- no external database or embedded database (such as SQLite) required;
+- persistent analysis state and finding history must use VS Code-managed, workspace-scoped extension storage (workspace storage directory candidate `storageUri` and workspace-scoped key-value persistence `workspaceState`);
+- persistent history must not be stored in a `.undrift/` directory or anywhere inside the user's project repository;
+- no source-code telemetry or history uploads to external services;
 - no raw source logging during normal operation;
+- do not persist full source file copies; source files remain authoritative, and historical source references/spans may become stale over time;
 - avoid collecting secret values as contract evidence;
 - disclose what data is sent if an optional external semantic service is introduced;
-- keep project configuration and suppression data local by default.
+- keep project configuration, suppression data, and analysis history strictly local and workspace-isolated.
 
 Privacy behavior must be documented clearly before public release.
 
@@ -605,6 +648,10 @@ Privacy behavior must be documented clearly before public release.
 - reviewable repairs;
 - reverification;
 - current integration report;
+- persistent latest complete analysis snapshot in VS Code workspace storage;
+- historical finding lifecycle tracking (detected, changed, resolved, reintroduced);
+- reliable state reconciliation across workspace opens and multi-day gaps;
+- configurable history retention;
 - suppression of intentional findings;
 - explicit handling of unsupported/dynamic patterns;
 - labeled test fixtures containing valid and broken relationships.
@@ -621,11 +668,15 @@ Privacy behavior must be documented clearly before public release.
 - hosted team management or billing;
 - full visual graph editing;
 - silent source changes;
-- automatic resolution of every mismatch.
+- automatic resolution of every mismatch;
+- exhaustive per-keystroke history or continuous background observation while the IDE is closed;
+- exhaustive audit logs of every analysis run;
+- mandatory Git repository integration or source-control analytics dependency;
+- remote server, cloud database, or embedded database (e.g., SQLite) for persistence.
 
 ## 16.3 Areas to evaluate later
 
-- Git history and change attribution;
+- Git history and change attribution (optional supplemental evidence, not a mandatory dependency);
 - API specification and generated-SDK ingestion;
 - CLI/npm package;
 - pre-commit and CI checks;
@@ -781,6 +832,21 @@ V1 should meet these outcomes for the explicitly supported patterns.
 - [ ] Run a small prototype evaluation with developers.
 - [ ] Record limitations and prioritize improvements using evidence.
 
+## Persistence, History, and Session Reconciliation
+- [ ] On first analysis of a workspace, persist the complete analysis snapshot without fabricating prior states or events.
+- [ ] When opening a previously analyzed workspace, restore the latest complete snapshot as "last known state" while running fresh analysis.
+- [ ] Record a `detected` lifecycle event when a finding is observed for the first time in a completed analysis.
+- [ ] Record a `changed` lifecycle event when an existing finding materially changes between completed analyses.
+- [ ] Record a `resolved` lifecycle event when a previously known finding is absent from a subsequent sufficiently complete analysis of the relevant scope.
+- [ ] Record a `reintroduced` lifecycle event when a previously resolved finding is detected again.
+- [ ] Avoid generating lifecycle events for materially unchanged findings across analyses.
+- [ ] Avoid generating lifecycle events for intermediate editor keystrokes or cancelled/failed analyses.
+- [ ] When an analysis fails or is materially incomplete, preserve the previous complete snapshot and do not emit false resolution or reintroduction events.
+- [ ] Ensure event timestamps reflect the analysis observation/verification time, not an invented source modification time.
+- [ ] Provide configurable history retention that prunes expired events without deleting or corrupting the latest complete analysis snapshot.
+- [ ] Ensure that clearing disposable analysis caches does not reset the user's historical finding lifecycle timeline.
+- [ ] Ensure analysis state and history are strictly isolated to the relevant workspace in VS Code-managed storage.
+
 ---
 
 # 21. Risks and Mitigations
@@ -824,6 +890,21 @@ V1 should meet these outcomes for the explicitly supported patterns.
 **Risk:** The name or desired package/extension identifier may conflict with another project.
 
 **Mitigation:** Check package, Marketplace, domain, and relevant trademark considerations before public launch.
+
+## Risk 9 — Stale persisted analysis mistaken for current code state
+**Risk:** A developer returning after days or pulling external branch changes may mistakenly trust persisted findings as reflecting current code.
+
+**Mitigation:** Distinctly present persisted data as "last known state"; automatically initiate fresh analysis on workspace open; visibly display observation timestamps.
+
+## Risk 10 — Incomplete analysis falsely resolving findings
+**Risk:** An interrupted, failed, or partially scoped analysis pass fails to see an endpoint and falsely concludes that prior findings were resolved.
+
+**Mitigation:** Enforce strict coverage semantics: findings are resolved only when the relevant scope is analyzed with sufficient completeness; incomplete runs preserve previous complete snapshot.
+
+## Risk 11 — History bloat and noise from keystrokes
+**Risk:** Recording events for every editor keystroke or identical runs would overwhelm storage and obscure meaningful changes.
+
+**Mitigation:** Restrict history to meaningful lifecycle transitions across completed, sufficiently complete analyses; suppress events for unchanged findings.
 
 ---
 
@@ -915,6 +996,11 @@ These are intentionally unresolved:
 12. What evidence do developers need before trusting explanations and repairs?
 13. What is the best way to handle multiple repositories that contain opposite sides of an API boundary?
 14. Which capabilities are genuinely differentiating after direct comparison with existing tools?
+15. What should be the default history retention duration (e.g., number of days, event count, or storage-size limit)?
+16. What is the preferred user-settings interface and configuration schema for history retention?
+17. What specific criteria should classify a finding change as "material" (e.g., severity change, route change, shape difference) versus minor formatting adjustments?
+18. How should finding history and analysis snapshots be partitioned and presented for unsupported or ambiguous workspace setups (such as multi-root or untitled/unsaved workspaces)?
+19. How should the provisional division of storage responsibilities between workspace-scoped file storage candidate (`storageUri`) and key-value persistence (`workspaceState`) be validated and optimized for startup performance and responsiveness?
 
 ---
 
