@@ -17,11 +17,16 @@ The ERD is a **logical/runtime model**, not a physical database schema.
 
 ### 1.1 Important persistence decision
 
-The current TRD specifies that V0/V1 do not require a database. Analysis state can live in memory and be rebuilt from source. The entities in this ERD describe the information UNDRIFT needs to model during analysis, regardless of whether that information is held in memory or serialized for testing/reporting.
+The architecture does not require an external relational database, embedded database (such as SQLite), or remote persistence service. However, UNDRIFT persists the **latest complete analysis snapshot** and **finding lifecycle history** across VS Code sessions within **VS Code-managed, workspace-scoped extension storage** (`ExtensionContext.storageUri` workspace directory as the candidate for structured snapshot and history files, and `ExtensionContext.workspaceState` as a possible mechanism for lightweight workspace metadata; exact allocation is provisional pending validation).
 
-Only user-authored project settings—such as intentional mappings or suppressions—may need persistent configuration files in the first release. Do not introduce a database merely because an ERD exists.
+This document establishes the logical entities and relationships governing both in-memory analysis and persisted state:
+- **Current source code** remains authoritative for the workspace.
+- **Analysis runs and transient AST caches** remain ephemeral working state.
+- **The latest complete analysis snapshot** represents the last known analyzed state and is preserved across sessions.
+- **Finding lifecycle events** track historical transitions (`detected`, `changed`, `resolved`, `reintroduced`) with observation timestamps.
+- **Disposable caches** can be cleared without destroying finding history.
 
-If future product requirements justify persistent analysis history, cross-session caches, team workflows, or cross-repository data, this logical ERD can inform a later physical storage design. That future schema may need additional lifecycle, retention, indexing, and migration decisions.
+Storage boundaries are strictly enforced: no history in a `.undrift/` repository directory, no required SQLite dependency, no remote server or cloud database, and no mandatory Git dependency.
 
 ---
 
@@ -33,6 +38,8 @@ The following Mermaid ER diagram describes the core logical entities. Optionalit
 erDiagram
     WORKSPACE ||--o{ SOURCE_DOCUMENT : contains
     WORKSPACE ||--o{ ANALYSIS_RUN : analyzed_in
+    WORKSPACE ||--o| ANALYSIS_SNAPSHOT : persists_latest
+    WORKSPACE ||--o{ FINDING_LIFECYCLE_EVENT : tracks_history
     WORKSPACE ||--o| PROJECT_CONFIG : configures
     WORKSPACE ||--o{ SUPPRESSION : defines
     WORKSPACE ||--o{ INTENTIONAL_MAPPING : defines
@@ -54,6 +61,10 @@ erDiagram
     CONTRACT_RELATIONSHIP o|--o{ FINDING : contextualizes
     FINDING ||--o{ FINDING_EVIDENCE : references
     EVIDENCE ||--o{ FINDING_EVIDENCE : supports
+
+    ANALYSIS_RUN |o--o| ANALYSIS_SNAPSHOT : promotes_if_complete
+    ANALYSIS_SNAPSHOT ||--o{ FINDING : captures_known_state
+    FINDING ||--o{ FINDING_LIFECYCLE_EVENT : undergoes_transition
 
     FINDING ||--o{ FIX_PROPOSAL : has_options
     ANALYSIS_RUN ||--o{ FIX_PROPOSAL : generated_during
@@ -80,6 +91,30 @@ erDiagram
         datetime completedAt
         string status
         boolean complete
+    }
+
+    ANALYSIS_SNAPSHOT {
+        string id PK
+        string workspaceId FK
+        string runId FK
+        int generation
+        datetime analyzedAt
+        int schemaVersion
+        boolean complete
+        string coverageSummary
+        string integrityHash
+    }
+
+    FINDING_LIFECYCLE_EVENT {
+        string id PK
+        string workspaceId FK
+        string findingId FK
+        string transitionKind
+        datetime observedAt
+        int triggerGeneration
+        string previousState
+        string newState
+        string contextSummary
     }
 
     ANALYSIS_INPUT {
@@ -213,11 +248,13 @@ Represents the workspace or workspace session being analyzed.
 **Relationships**
 - Contains source documents in scope.
 - Has zero or more analysis runs.
+- Persists zero or one latest complete analysis snapshot (`ANALYSIS_SNAPSHOT`) in VS Code workspace storage.
+- Owns zero or more historical finding lifecycle events (`FINDING_LIFECYCLE_EVENT`) in VS Code workspace storage.
 - May have one effective project configuration.
 - May define suppressions and intentional mappings.
 
 **Notes**
-A workspace entity does not imply a hosted account or persistent workspace registry. In V0 it may be an in-memory object associated with the currently opened VS Code workspace.
+A workspace entity does not imply a hosted account or remote registry. It is partitioned locally within VS Code-managed, workspace-scoped storage.
 
 ### 3.2 SOURCE_DOCUMENT
 
@@ -236,7 +273,7 @@ Represents a source/configuration document discoverable in the workspace.
 - Can contain multiple evidence spans and proposed edit targets.
 
 **Notes**
-The canonical in-memory `SourceDocument` also carries source text, editor document version, and dirty-buffer state. Those high-volume/runtime fields do not have to be persisted in any future database schema.
+The canonical in-memory `SourceDocument` also carries source text, editor document version, and dirty-buffer state. Current source code is authoritative; historical snapshots point to source locations at the time of analysis and may become stale as the codebase evolves.
 
 ### 3.3 ANALYSIS_RUN
 
@@ -254,9 +291,10 @@ Represents one analysis generation over a workspace snapshot.
 - Belongs to one workspace.
 - Includes document snapshots through `ANALYSIS_INPUT`.
 - Produces observations, relationships, findings, and proposals.
+- Promotes to `ANALYSIS_SNAPSHOT` if and only if `status == "completed"` and `complete == true` with sufficient coverage.
 
 **Notes**
-In V0, the run may exist only in memory. The generation check prevents stale results from replacing results for more recent source changes. A run can finish without being complete if relevant files or analyzers failed.
+Incomplete, cancelled, or failed runs do NOT promote to snapshots and do NOT overwrite the persisted `ANALYSIS_SNAPSHOT`.
 
 ### 3.4 ANALYSIS_INPUT
 
@@ -351,7 +389,7 @@ A relationship with a consumer but no provider can support a “no compatible pr
 Represents a rule result surfaced to the developer.
 
 **Key attributes**
-- `id`: stable identity for an unchanged issue where practical.
+- `id`: stable identity for an unchanged issue where practical (derived from rule, endpoint, property).
 - `runId`: analysis generation that emitted it.
 - `relationshipId`: optional relationship being described.
 - `ruleId`: stable rule identifier such as `UND120`.
@@ -360,6 +398,8 @@ Represents a rule result surfaced to the developer.
 
 **Relationships**
 - Belongs to one analysis run.
+- Captured in `ANALYSIS_SNAPSHOT` when part of a completed analysis.
+- Correlated across analyses via stable ID to produce `FINDING_LIFECYCLE_EVENT` records.
 - May refer to one contract relationship.
 - References multiple evidence records through `FINDING_EVIDENCE`.
 - May have zero or more fix proposals.
@@ -426,6 +466,7 @@ Represents the effective user-authored project configuration.
 - Rule severity overrides.
 - Intentional mappings.
 - Suppression references or embedded suppression configuration.
+- History retention settings (configurable duration and/or event count).
 
 **Relationship**
 A workspace has zero or one effective configuration document for the current initial design. VS Code user settings may override some behavior, but their final precedence belongs in the configuration design.
@@ -461,6 +502,51 @@ Represents a developer-declared transformation or relationship, such as a known 
 **Rules**
 Mappings are explicit configuration evidence, not a blanket instruction to consider arbitrary differences compatible. They must be validated, scoped, visible in explanations, and tested. The exact supported mapping kinds should expand only alongside defined semantics and fixtures.
 
+### 3.15 ANALYSIS_SNAPSHOT
+
+Represents the persisted last known successfully completed analysis for the workspace.
+
+**Key attributes**
+- `id`: unique snapshot identifier.
+- `workspaceId`: owning workspace.
+- `runId`: reference to the originating completed `ANALYSIS_RUN`.
+- `generation`: generation counter of the completed analysis.
+- `analyzedAt`: timestamp when analysis completed.
+- `schemaVersion`: serialization format version for forward compatibility.
+- `complete`: boolean indicator (must be `true`; incomplete runs never promote to snapshots).
+- `coverageSummary`: summary of files analyzed, warnings, and limitations.
+- `integrityHash`: verification hash for crash/corruption detection.
+
+**Relationships**
+- Owned by one `WORKSPACE` (at most one latest snapshot per workspace).
+- Promoted from one completed `ANALYSIS_RUN`.
+- Captures the known states of `FINDING` entities for cross-session restoration and comparison.
+
+**Notes**
+Persisted in VS Code workspace-scoped storage. Restored upon workspace open as "last known state". Preserved intact if subsequent analyses fail or are incomplete.
+
+### 3.16 FINDING_LIFECYCLE_EVENT
+
+Represents a historical record of a meaningful finding lifecycle transition observed across completed analyses.
+
+**Key attributes**
+- `id`: unique event identifier.
+- `workspaceId`: owning workspace.
+- `findingId`: stable finding identity undergoing the transition.
+- `transitionKind`: `detected`, `changed`, `resolved`, or `reintroduced`.
+- `observedAt`: timestamp when the transition was observed/confirmed by analysis.
+- `triggerGeneration`: analysis generation that confirmed the transition.
+- `previousState`: previous finding state (`active`, `resolved`, or undefined for first detection).
+- `newState`: resulting finding state.
+- `contextSummary`: delta summary (e.g., previous vs. new severity, changed field shape, or resolved reason).
+
+**Relationships**
+- Owned by one `WORKSPACE`.
+- References one logical `FINDING` via stable finding identity.
+
+**Notes**
+Unchanged findings generate NO new events across analyses. Historical events are pruned according to configured retention policies without destroying or degrading the `ANALYSIS_SNAPSHOT`. Observation timestamps represent analysis confirmation times, never invented source-edit times while VS Code was closed.
+
 ---
 
 ## 4. Cardinality and Integrity Rules
@@ -483,8 +569,14 @@ The ERD encodes the main relationships. The following constraints are also requi
 14. Project configuration and suppressions do not overwrite the extracted source evidence.
 15. A relationship in `verified` state must be backed by a completed current analysis for the relevant supported checks.
 16. A no-known-consumer label must always retain the analyzed-scope limitation.
+17. Only an `ANALYSIS_RUN` with `complete == true` and sufficient coverage can be promoted to or overwrite the workspace's `ANALYSIS_SNAPSHOT`. Incomplete, interrupted, cancelled, or failed runs must preserve the previous snapshot intact.
+18. Findings in `ANALYSIS_SNAPSHOT` correspond to findings across runs via stable finding identity.
+19. A finding absent from a new run can only emit a `resolved` event if the analysis run has verified sufficient coverage (`complete == true`).
+20. Retention policy prunes `FINDING_LIFECYCLE_EVENT` records independently of `ANALYSIS_SNAPSHOT`; pruning must never delete or degrade the current snapshot.
+21. `observedAt` timestamps in `FINDING_LIFECYCLE_EVENT` represent the timestamp when UNDRIFT observed/confirmed the transition, never an invented source-edit time.
+22. Persistence writes of `ANALYSIS_SNAPSHOT` and `FINDING_LIFECYCLE_EVENT` to VS Code workspace storage must be crash-safe and recoverable to prevent inconsistent or partial records.
 
-For the in-memory model, these constraints should be enforced in constructors/factories and test assertions where practical. If a persistent store is added later, equivalent constraints can be represented with foreign keys/check constraints and transaction boundaries.
+For the in-memory model, these constraints are enforced in domain constructors, state reconciliation logic, and test assertions.
 
 ---
 
@@ -497,11 +589,13 @@ The ERD is a relational view of logical concepts. It does not require the runtim
 | `WORKSPACE` | Workspace identity/root set held by the extension/coordinator |
 | `SOURCE_DOCUMENT` | `SourceDocument` snapshot, generally supplied by VS Code |
 | `ANALYSIS_RUN` | `AnalysisRequest` / `AnalysisResult` generation |
+| `ANALYSIS_SNAPSHOT` | `AnalysisSnapshot` persisted in VS Code workspace storage |
+| `FINDING_LIFECYCLE_EVENT` | `FindingLifecycleEvent` in persisted lifecycle history |
 | `ANALYSIS_INPUT` | Snapshot metadata and parse-state accounting |
 | `OBSERVATION` | `ApiObservation` and other normalized facts |
 | `EVIDENCE` | `EvidenceRef` plus source span/provenance |
 | `CONTRACT_RELATIONSHIP` | `ContractRelationship` |
-| `FINDING` | `Finding` |
+| `FINDING` | `Finding` (and `PersistedFindingRecord` in snapshot) |
 | `FINDING_EVIDENCE` | Evidence references attached to finding explanations |
 | `FIX_PROPOSAL` | `FixProposal` |
 | `PROPOSED_EDIT` | Version/hash-bound edit intent |
@@ -509,7 +603,7 @@ The ERD is a relational view of logical concepts. It does not require the runtim
 | `SUPPRESSION` | A user-authored suppression entry |
 | `INTENTIONAL_MAPPING` | A user-authored mapping entry |
 
-The runtime can choose composite maps, arrays, or indexed collections for efficiency. The logical cardinality should remain consistent.
+The runtime can choose composite maps, arrays, or indexed collections for efficiency. The logical cardinality remains consistent.
 
 ---
 
@@ -521,13 +615,13 @@ The runtime can choose composite maps, arrays, or indexed collections for effici
 CREATED
   ↓
 RUNNING
-  ├── COMPLETED (complete = true)
-  ├── COMPLETED (complete = false; warnings/coverage limits)
-  ├── CANCELLED / SUPERSEDED
-  └── FAILED
+  ├── COMPLETED (complete = true) ──► Reconciled & promoted to ANALYSIS_SNAPSHOT
+  ├── COMPLETED (complete = false; coverage limits) ──► Preserves previous snapshot intact
+  ├── CANCELLED / SUPERSEDED ──► Preserves previous snapshot intact
+  └── FAILED ──► Preserves previous snapshot intact
 ```
 
-The `complete` flag describes the completeness of supported analysis within the requested scope. It does not mean all languages/frameworks or all runtime behaviors were understood.
+The `complete` flag describes the completeness of supported analysis within the requested scope. Incomplete runs never overwrite snapshots or emit false resolution events.
 
 ### 6.2 Relationship lifecycle
 
@@ -543,15 +637,33 @@ IGNORED (if configured)
 
 `ORPHANED` denotes a provider with no known consumer in scope; it is not a claim about external clients. A missing provider can also be represented by a waiting/unresolved relationship or rule finding, depending on the final status/UI mapping.
 
-### 6.3 Finding lifecycle
+### 6.3 Finding lifecycle and history transitions
 
 ```text
-ACTIVE
- ├── SUPPRESSED (explicit user/config choice)
- └── RESOLVED (a later complete-enough analysis confirms the issue is absent)
+             [First observed in completed run]
+                            │
+                            ▼
+                        DETECTED (active)
+                         │      │
+       [Absent from a    │      │ [Material change
+       subsequent        │      │  in finding nature]
+       complete run]     │      │
+                         ▼      ▼
+                     RESOLVED  CHANGED (active)
+                         │
+        [Observed again  │
+        after resolution]│
+                         ▼
+                    REINTRODUCED (active)
 ```
 
-A finding is not resolved merely because a fix proposal was generated, accepted, or applied. Resolution comes from current analysis evidence.
+1. **Detected:** Finding observed for the first time in a completed analysis.
+2. **Changed:** An existing finding materially changes between completed analyses.
+3. **Resolved:** A previously known finding is absent from a sufficiently complete subsequent analysis of relevant scope.
+4. **Reintroduced:** A previously resolved finding is detected again.
+5. **Unchanged:** Findings that remain materially identical produce **no new lifecycle events**.
+
+A finding is not resolved merely because a fix proposal was generated, accepted, or applied. Resolution comes from fresh analysis evidence.
 
 ### 6.4 Fix proposal lifecycle
 
@@ -568,46 +680,70 @@ PROPOSED
 
 If post-edit analysis is incomplete, the outcome should be `UNRESOLVED` or equivalent—not `VERIFIED`.
 
+### 6.5 Session restoration and snapshot reconciliation lifecycle
+
+```text
+VS Code Workspace Opened
+          │
+          ▼
+Restore latest complete ANALYSIS_SNAPSHOT & FINDING_LIFECYCLE_EVENT log
+          │
+          ├── Data exists ──► Expose as "last known state" in UI
+          └── No history ───► Clean first-time workspace baseline
+          │
+          ▼
+Trigger fresh analysis against current workspace source
+          │
+          ▼
+Evaluate coverage & completion
+          │
+          ├── Incomplete / Failed ──► Retain previous ANALYSIS_SNAPSHOT;
+          │                           suppress resolution / reintroduction events
+          │
+          └── Complete Run ─────────► Reconcile findings via stable FindingId:
+                                       - derive detected, changed, resolved, reintroduced
+                                       - filter unchanged findings
+                                       - crash-safe write of updated snapshot & events
+                                       - prune history per retention policy
+                                       - update presentation to "freshly verified"
+```
+
 ---
 
-## 7. Persistence and Future Database Considerations
+## 7. Persistence and Storage Architecture
 
-No database is required for the first product release. Do not implement SQL schema, migrations, database client setup, or hosted persistence simply to satisfy the existence of an ERD.
+UNDRIFT avoids requiring an external or embedded database (such as SQLite), remote server, cloud storage, or telemetry pipeline. Persistence is implemented using **VS Code-managed, workspace-scoped extension storage**: the workspace storage directory (`ExtensionContext.storageUri`) is evaluated as the candidate location for structured snapshot and finding lifecycle history files, while `ExtensionContext.workspaceState` (VS Code-managed workspace-scoped key-value persistence) is a possible mechanism for lightweight workspace metadata. The exact division of responsibilities remains provisional pending validation in POC-F. If both mechanisms are utilized, duplicated metadata in `workspaceState` must never become an independent source of truth and must remain fully recoverable or reconcilable from primary persistent records.
 
-If later requirements justify persistence, first define the concrete use case:
+### 7.1 Multi-tier state separation
 
-- Should findings survive extension restarts?
-- Is a workspace-level cache necessary after performance measurement?
-- Is historical drift/change tracking useful?
-- Will a team or CI workflow share state across machines?
-- Does the product need multi-repository identity or permissions?
+The logical model strictly enforces five distinct tiers:
+1. **Current Source Code:** Authoritative for current code state.
+2. **In-Memory Working State:** Transient parse trees and active editor buffers.
+3. **Disposable Analysis Caches:** Ephemeral caches (ASTs, extractor outputs); safely discardable without losing history.
+4. **Latest Complete Analysis Snapshot (`ANALYSIS_SNAPSHOT`):** Persisted last known analyzed state; restored on session open; never overwritten by incomplete runs.
+5. **Finding Lifecycle History (`FINDING_LIFECYCLE_EVENT`):** Persisted transition log; pruned independently of the snapshot.
 
-A local cache might use a versioned local index file or a small embedded database. A future hosted team product would require a separate architecture and security review. The existing ERD is a starting conceptual model, not a commitment to either storage choice.
+### 7.2 Storage mechanics and integrity
 
-Any future persisted schema should add:
-- schema/version migration strategy;
-- retention and cache invalidation rules;
-- workspace/source identity strategy;
-- indexes based on demonstrated query patterns;
-- atomic update strategy so a partial analysis does not replace a good result;
-- compatibility rules for old results generated by previous analyzer versions;
-- a clear boundary between current source truth, disposable derived cache, and user-authored configuration.
+- **Crash-Safe and Recoverable Persistence:** Updates to the snapshot and lifecycle history require crash-safe and recoverable persistence so interrupted writes never leave partial or contradictory states. While writing to a temporary file followed by rename is a candidate strategy for `storageUri` alongside atomic key updates in `workspaceState`, universal rename atomicity is not assumed across all supported extension-host filesystem environments and will be validated in POC-F.
+- **Schema Versioning:** Entities include integer schema versions. Incompatible or corrupted storage is quarantined safely, resetting to a clean baseline without fabricating history.
+- **Workspace Isolation:** Data is strictly isolated by workspace identity. Findings cannot leak across unrelated projects.
+- **Retention Pruning:** Expired lifecycle events are pruned according to user configuration. Pruning **never deletes or degrades the `ANALYSIS_SNAPSHOT`**.
+- **Storage Boundaries:** No history is stored in the project repository (`.undrift/`), no database is required, and Git is not a mandatory dependency.
 
 ---
 
 ## 8. Open Decisions
 
-These remain open until the implementation provides evidence:
+These remain open until justified by implementation evidence:
 
-1. Whether `AnalysisRun` and `AnalysisInput` require stable standalone IDs in the V0 runtime model or can be represented by generation metadata and snapshot maps.
-2. Whether evidence should be explicit objects or compact source/provenance fields inside observations/findings for first-release simplicity.
-3. Exact stable-ID and hashing strategy.
-4. Final persistence format and configuration filename for suppressions/mappings.
-5. Whether future cached/historical data merits an embedded database.
-6. How many consumers/providers a relationship may aggregate once real framework patterns are examined.
-7. Whether runtime event/specification evidence will later extend the same observation model or introduce explicit source-specific evidence entities.
-
-These choices must not introduce a database requirement into V0 by implication.
+1. **Storage API Allocation and Division of Responsibilities:** Exact division of responsibilities between `ExtensionContext.storageUri` (candidate for structured snapshot/history files) and `ExtensionContext.workspaceState` (candidate for lightweight workspace metadata/indexing), validation of write crash-safety across filesystem environments, and low-level JSON serialization format (provisional in design; validated in POC-F).
+2. **Retention Settings Schema and Limits:** Specific retention duration (days), maximum event counts per workspace, and user-facing configuration schema.
+3. **Stable Finding Identity Formula:** Exact canonical serialization format and cryptographic hashing function.
+4. **Material Change Thresholds:** Exact quantitative or qualitative criteria defining when a finding delta triggers `changed` versus remaining unchanged.
+5. **Multi-Root and Ambiguous Workspace Storage Partitioning:** File and directory mapping when no workspace root folder is formally saved (or in multi-root workspaces).
+6. Whether `AnalysisRun` and `AnalysisInput` require standalone IDs in runtime memory or can be represented by generation metadata.
+7. Whether future cached/historical data merits an embedded database (excluded from current scope).
 
 ---
 
@@ -615,27 +751,28 @@ These choices must not introduce a database requirement into V0 by implication.
 
 Before approving this ERD, verify that it:
 
-- [ ] models the entities referenced by the current LLD;
-- [ ] distinguishes source documents from versioned analysis inputs;
+- [ ] models the entities referenced by the current LLD and HLD;
+- [ ] incorporates `ANALYSIS_SNAPSHOT` and `FINDING_LIFECYCLE_EVENT` in VS Code workspace storage;
+- [ ] distinguishes source documents from versioned analysis inputs and persisted snapshots;
 - [ ] separates extracted observations from inferred relationships and findings;
-- [ ] preserves evidence and source spans;
+- [ ] preserves evidence and source spans without replicating entire source files;
 - [ ] permits missing consumer/provider sides without claiming global absence;
-- [ ] distinguishes suppressed, unresolved, active, and resolved findings;
-- [ ] keeps fix proposals separate from accepted/applied edits;
-- [ ] binds proposed edits to a source snapshot;
+- [ ] models finding lifecycle transitions (`detected`, `changed`, `resolved`, `reintroduced`);
+- [ ] ensures incomplete or failed analyses do not overwrite valid snapshots or emit false resolutions;
+- [ ] binds proposed edits to a source snapshot and requires re-analysis for resolution;
 - [ ] treats configuration as user-authored input rather than analysis output;
-- [ ] does not imply a required database;
-- [ ] leaves future history/team persistence as a separate decision.
+- [ ] does not mandate SQLite, a remote database, or an external persistence service;
+- [ ] enforces workspace isolation and crash-safe storage writes.
 
 ---
 
 ## 10. Definition
 
-UNDRIFT's ERD defines the conceptual data relationships used by its analysis workflow:
+UNDRIFT's ERD defines the conceptual data relationships used by its analysis and persistence workflow:
 
-**Workspace → Source snapshot → Observation → Evidence → Contract relationship → Finding → Fix proposal → Proposed edit → Re-analysis outcome.**
+**Workspace → Source snapshot → Observation → Evidence → Contract relationship → Finding → Fix proposal → Proposed edit → Re-analysis outcome → Analysis snapshot → Finding lifecycle events.**
 
-Configuration, suppressions, and intentional mappings remain distinct user-authored inputs. The initial implementation keeps derived data in memory and re-derives the current answer from source. This preserves the local-first product direction while providing an explicit data model for implementation, testing, and possible future persistence.
+Configuration, suppressions, and intentional mappings remain distinct user-authored inputs. Current source code is authoritative; the persisted snapshot records the last known analyzed state; and lifecycle events record what UNDRIFT observed across completed analyses. This preserves the local-first product direction while providing an explicit, robust data model for cross-session state reconciliation.
 
 ---
 
