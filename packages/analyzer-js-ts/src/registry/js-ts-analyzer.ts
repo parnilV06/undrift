@@ -10,6 +10,14 @@ import type {
 import { extractFetchObservations } from "../frontend/fetch-extractor";
 import { extractAxiosObservations } from "../frontend/axios-extractor";
 import { extractExpressObservations } from "../backend/express-extractor";
+import {
+  LocalDeclarationIndex,
+  isLocalDeclarationIndex
+} from "../project-index/local-declaration-index";
+import {
+  LocalReferenceResolver,
+  createLocalReferenceResolver
+} from "../project-index/local-reference-resolver";
 
 const SUPPORTED_LANGUAGES = new Set([
   "javascript",
@@ -30,6 +38,8 @@ const SUPPORTED_EXTENSIONS = [".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"];
 export class JsTsAnalyzer implements LanguageAnalyzerPort {
   readonly id = "analyzer-js-ts";
 
+  constructor(private readonly resolver?: LocalReferenceResolver) {}
+
   /**
    * Determines if this analyzer supports the given language and document URI.
    */
@@ -47,11 +57,28 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
   async analyze(input: AnalyzerInput, signal?: AbortSignal): Promise<AnalyzerOutput> {
     signal?.throwIfAborted();
 
-    // Run frontend extractors
-    const fetchResult = extractFetchObservations(input.document, input.parsed, signal);
-    const axiosResult = extractAxiosObservations(input.document, input.parsed, signal);
+    let resolver = this.resolver;
+    if (!resolver && input.projectIndex) {
+      if (isLocalDeclarationIndex(input.projectIndex)) {
+        resolver = createLocalReferenceResolver(input.projectIndex);
+      } else if (
+        "resolver" in input.projectIndex &&
+        input.projectIndex.resolver instanceof LocalReferenceResolver
+      ) {
+        resolver = input.projectIndex.resolver;
+      } else if (
+        "declarationIndex" in input.projectIndex &&
+        isLocalDeclarationIndex(input.projectIndex.declarationIndex)
+      ) {
+        resolver = createLocalReferenceResolver(input.projectIndex.declarationIndex);
+      }
+    }
 
-    // Run backend extractors
+    // Run frontend extractors with resolver
+    const fetchResult = extractFetchObservations(input.document, input.parsed, signal, resolver);
+    const axiosResult = extractAxiosObservations(input.document, input.parsed, signal, resolver);
+
+    // Run backend extractors (Express extractor remains untouched)
     const expressResult = extractExpressObservations(input.document, input.parsed, signal);
 
     return {

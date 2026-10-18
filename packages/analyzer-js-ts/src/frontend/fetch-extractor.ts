@@ -21,6 +21,7 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -108,7 +109,8 @@ function extractPath(
   argNode: SyntaxNode,
   documentUri: DocumentUri,
   mapper: PositionMapper,
-  warnings: AnalysisWarning[]
+  warnings: AnalysisWarning[],
+  resolver?: LocalReferenceResolver
 ): ObservedValue<RoutePattern> {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
 
@@ -188,7 +190,41 @@ function extractPath(
     };
   }
 
-  // 3. Dynamic expression (variable, call, binary expression, etc.)
+  // 3. Local constant resolution via resolver for identifier expressions
+  if (argNode.kind === "identifier" && resolver) {
+    const refName = argNode.text();
+    const result = resolver.resolveConstant<string>(refName, documentUri, argNode.range);
+    if (result.state === "resolved") {
+      if (typeof result.value === "string") {
+        const routePattern = parseRoutePattern(result.value);
+        return {
+          state: "known",
+          value: routePattern,
+          strength: "resolved",
+          evidence: result.evidence
+        };
+      }
+
+      // Resolved, but not a valid string URL
+      const warning: AnalysisWarning = {
+        code: "UNSUPPORTED_PATTERN",
+        message: `Resolved constant '${refName}' is not a string URL: ${String(result.value)}`,
+        source: argSpan,
+        analyzerId: "analyzer-js-ts",
+        affectsCompleteness: true
+      };
+      warnings.push(warning);
+
+      return {
+        state: "dynamic",
+        expression: refName,
+        reason: `Constant '${refName}' resolved to non-string value`,
+        evidence: result.evidence
+      };
+    }
+  }
+
+  // 4. Dynamic expression (variable, call, binary expression, unresolved reference, etc.)
   const warning: AnalysisWarning = {
     code: "DYNAMIC_ROUTE",
     message: `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
@@ -635,7 +671,8 @@ export interface FetchExtractionResult {
 export function extractFetchObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  resolver?: LocalReferenceResolver
 ): FetchExtractionResult {
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
@@ -668,7 +705,7 @@ export function extractFetchObservations(
     const localWarnings: AnalysisWarning[] = [];
 
     // 1. Extract URL path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings);
+    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
 
     // 2. Extract options (method, request body)
     const optionsNode = args.length > 1 ? args[1] : undefined;
@@ -716,11 +753,14 @@ export function extractFetchObservations(
  * Extractor class conforming to extractor module architecture.
  */
 export class FetchExtractor {
+  constructor(private readonly resolver?: LocalReferenceResolver) {}
+
   extract(
     document: SourceDocument,
     parsed: ParsedDocument,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    resolver?: LocalReferenceResolver
   ): FetchExtractionResult {
-    return extractFetchObservations(document, parsed, signal);
+    return extractFetchObservations(document, parsed, signal, resolver ?? this.resolver);
   }
 }

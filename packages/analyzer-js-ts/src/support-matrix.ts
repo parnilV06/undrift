@@ -59,7 +59,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
     ],
     fieldsReliablyExtracted: ["method", "path"],
     knownLimitations: [
-      "Dynamic URL expressions without string literals are marked unresolved",
+      "Dynamic URL expressions without string literals or resolvable local constants are marked unresolved",
       "Wrapper function aliases require explicit support",
       "Request body shape extraction limited to direct JSON.stringify of object literals"
     ],
@@ -88,6 +88,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
     examples: ['axios.get("/api/users")', 'axios.post("/api/users", payload)'],
     fieldsReliablyExtracted: ["method", "path"],
     knownLimitations: [
+      "Dynamic URL expressions without string literals or resolvable local constants are marked unresolved",
       "Custom axios instance creators require import evidence",
       "Dynamic HTTP method dispatch marked unresolved",
       "Config object base URLs require project index resolution"

@@ -641,6 +641,7 @@ export function indexLocalDeclarations(
  */
 export class LocalDeclarationIndex implements ProjectIndexView {
   readonly [key: string]: unknown;
+  readonly isLocalDeclarationIndex = true;
   private readonly documents = new Map<DocumentUri, SourceDocument>();
   private readonly declarationsByDoc = new Map<DocumentUri, LocalDeclaration[]>();
   private readonly declarationsByName = new Map<string, LocalDeclaration[]>();
@@ -849,6 +850,21 @@ export class LocalDeclarationIndex implements ProjectIndexView {
   toProjectIndexView(): ProjectIndexView {
     return this;
   }
+}
+
+/**
+ * Type guard verifying if an unknown object conforms to LocalDeclarationIndex.
+ */
+export function isLocalDeclarationIndex(obj: unknown): obj is LocalDeclarationIndex {
+  return (
+    obj instanceof LocalDeclarationIndex ||
+    (typeof obj === "object" &&
+      obj !== null &&
+      "lookupSymbols" in obj &&
+      typeof (obj as { lookupSymbols?: unknown }).lookupSymbols === "function" &&
+      "getDocument" in obj &&
+      typeof (obj as { getDocument?: unknown }).getDocument === "function")
+  );
 }
 
 /**

@@ -22,6 +22,7 @@ export {
 } from "./backend/express-extractor";
 export {
   LocalDeclarationIndex,
+  isLocalDeclarationIndex,
   indexLocalDeclarations,
   createLocalDeclarationIndex,
   type LocalDeclaration,

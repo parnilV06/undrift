@@ -24,6 +24,7 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
   ["get", "GET"],
@@ -181,7 +182,8 @@ function extractPath(
   argNode: SyntaxNode,
   documentUri: DocumentUri,
   mapper: PositionMapper,
-  warnings: AnalysisWarning[]
+  warnings: AnalysisWarning[],
+  resolver?: LocalReferenceResolver
 ): ObservedValue<RoutePattern> {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
 
@@ -261,7 +263,41 @@ function extractPath(
     };
   }
 
-  // 3. Dynamic expression (variable, call, binary expression, etc.)
+  // 3. Local constant resolution via resolver for identifier expressions
+  if (argNode.kind === "identifier" && resolver) {
+    const refName = argNode.text();
+    const result = resolver.resolveConstant<string>(refName, documentUri, argNode.range);
+    if (result.state === "resolved") {
+      if (typeof result.value === "string") {
+        const routePattern = parseRoutePattern(result.value);
+        return {
+          state: "known",
+          value: routePattern,
+          strength: "resolved",
+          evidence: result.evidence
+        };
+      }
+
+      // Resolved, but not a valid string URL
+      const warning: AnalysisWarning = {
+        code: "UNSUPPORTED_PATTERN",
+        message: `Resolved constant '${refName}' is not a string URL: ${String(result.value)}`,
+        source: argSpan,
+        analyzerId: "analyzer-js-ts",
+        affectsCompleteness: true
+      };
+      warnings.push(warning);
+
+      return {
+        state: "dynamic",
+        expression: refName,
+        reason: `Constant '${refName}' resolved to non-string value`,
+        evidence: result.evidence
+      };
+    }
+  }
+
+  // 4. Dynamic expression (variable, call, binary expression, unresolved reference, etc.)
   const warning: AnalysisWarning = {
     code: "DYNAMIC_ROUTE",
     message: `Dynamic URL expression in Axios call cannot be statically resolved: ${argNode.text()}`,
@@ -615,7 +651,8 @@ export interface AxiosExtractionResult {
 export function extractAxiosObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  resolver?: LocalReferenceResolver
 ): AxiosExtractionResult {
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
@@ -692,7 +729,7 @@ export function extractAxiosObservations(
     }
 
     // 2. URL Path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings);
+    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
 
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
@@ -742,11 +779,14 @@ export function extractAxiosObservations(
  * Extractor class conforming to extractor module architecture.
  */
 export class AxiosExtractor {
+  constructor(private readonly resolver?: LocalReferenceResolver) {}
+
   extract(
     document: SourceDocument,
     parsed: ParsedDocument,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    resolver?: LocalReferenceResolver
   ): AxiosExtractionResult {
-    return extractAxiosObservations(document, parsed, signal);
+    return extractAxiosObservations(document, parsed, signal, resolver ?? this.resolver);
   }
 }
