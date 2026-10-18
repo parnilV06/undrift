@@ -9,6 +9,7 @@ import type {
 } from "@undrift/core";
 import { extractFetchObservations } from "../frontend/fetch-extractor";
 import { extractAxiosObservations } from "../frontend/axios-extractor";
+import { extractExpressObservations } from "../backend/express-extractor";
 
 const SUPPORTED_LANGUAGES = new Set([
   "javascript",
@@ -50,9 +51,16 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
     const fetchResult = extractFetchObservations(input.document, input.parsed, signal);
     const axiosResult = extractAxiosObservations(input.document, input.parsed, signal);
 
+    // Run backend extractors
+    const expressResult = extractExpressObservations(input.document, input.parsed, signal);
+
     return {
-      observations: [...fetchResult.observations, ...axiosResult.observations],
-      warnings: [...fetchResult.warnings, ...axiosResult.warnings]
+      observations: [
+        ...fetchResult.observations,
+        ...axiosResult.observations,
+        ...expressResult.observations
+      ],
+      warnings: [...fetchResult.warnings, ...axiosResult.warnings, ...expressResult.warnings]
     };
   }
 }

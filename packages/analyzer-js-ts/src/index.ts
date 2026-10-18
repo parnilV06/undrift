@@ -15,3 +15,8 @@ export {
   extractAxiosObservations,
   type AxiosExtractionResult
 } from "./frontend/axios-extractor";
+export {
+  ExpressExtractor,
+  extractExpressObservations,
+  type ExpressExtractionResult
+} from "./backend/express-extractor";

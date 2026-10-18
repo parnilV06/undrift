@@ -45,8 +45,7 @@ export interface SupportMatrixEntry {
  * Master catalog of planned and implemented patterns for the JavaScript/TypeScript ecosystem
  * as documented in LLD.md Section 7.2, Section 7.3, and Section 7.7.
  *
- * NOTE: As of Chunk 2.5, standard fetch and axios method call patterns are implemented and tested.
- * Express patterns remain documented with testStatus = "planned".
+ * NOTE: As of Chunk 2.6, standard fetch, axios, and express route patterns are implemented and tested.
  */
 export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
   {
@@ -127,7 +126,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Dynamic route definitions through loops or factories marked unresolved"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   },
   {
     patternId: "express-route-declaration-ts",
@@ -144,7 +143,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Imported router instances require project index resolution"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   }
 ];
 

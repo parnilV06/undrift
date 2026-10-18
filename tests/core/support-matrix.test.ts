@@ -52,27 +52,26 @@ describe("Support Matrix (Chunk 2.3)", () => {
   });
 
   describe("2. Planned vs. Implemented Capability Separation", () => {
-    it("reports exactly 4 implemented/tested patterns at Chunk 2.5", () => {
-      // Chunk 2.5 implements and tests standard fetch and axios patterns.
+    it("reports exactly 6 implemented/tested patterns at Chunk 2.6", () => {
+      // Chunk 2.6 implements and tests standard fetch, axios, and express patterns.
       const implemented = getImplementedPatterns();
-      expect(implemented).toHaveLength(4);
+      expect(implemented).toHaveLength(6);
       expect(implemented.map((p) => p.patternId)).toEqual([
         "fetch-standard-call",
         "fetch-standard-call-ts",
         "axios-method-call",
-        "axios-method-call-ts"
+        "axios-method-call-ts",
+        "express-route-declaration",
+        "express-route-declaration-ts"
       ]);
     });
 
-    it("catalogs remaining target patterns as 'planned'", () => {
+    it("catalogs 0 remaining target patterns as 'planned'", () => {
       const planned = getPlannedPatterns();
-      expect(planned.length).toBe(SUPPORT_MATRIX.length - 4);
-      for (const pattern of planned) {
-        expect(pattern.testStatus).toBe("planned");
-      }
+      expect(planned).toHaveLength(0);
     });
 
-    it("does not claim any fake Express extractor implementations", () => {
+    it("confirms all 6 documented framework patterns are tested", () => {
       const fetchPatterns = getPatternsByFramework("fetch");
       const axiosPatterns = getPatternsByFramework("axios");
       const expressPatterns = getPatternsByFramework("express");
@@ -87,9 +86,9 @@ describe("Support Matrix (Chunk 2.3)", () => {
         expect(pattern.testStatus).toBe("tested");
       }
 
-      expect(expressPatterns.length).toBeGreaterThan(0);
+      expect(expressPatterns.length).toBe(2);
       for (const pattern of expressPatterns) {
-        expect(pattern.testStatus).toBe("planned");
+        expect(pattern.testStatus).toBe("tested");
       }
     });
   });
