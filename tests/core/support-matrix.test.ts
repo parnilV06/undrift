@@ -52,32 +52,38 @@ describe("Support Matrix (Chunk 2.3)", () => {
   });
 
   describe("2. Planned vs. Implemented Capability Separation", () => {
-    it("reports 0 implemented patterns at Chunk 2.3", () => {
-      // Chunk 2.3 establishes the registry and matrix contracts only.
-      // AST extraction implementations begin in subsequent chunks.
+    it("reports exactly 2 implemented/tested patterns at Chunk 2.4", () => {
+      // Chunk 2.4 implements and tests standard fetch patterns.
       const implemented = getImplementedPatterns();
-      expect(implemented).toHaveLength(0);
-      expect(implemented).toEqual([]);
+      expect(implemented).toHaveLength(2);
+      expect(implemented.map((p) => p.patternId)).toEqual([
+        "fetch-standard-call",
+        "fetch-standard-call-ts"
+      ]);
     });
 
-    it("catalogs all documented target patterns as 'planned'", () => {
+    it("catalogs remaining target patterns as 'planned'", () => {
       const planned = getPlannedPatterns();
-      expect(planned.length).toBe(SUPPORT_MATRIX.length);
+      expect(planned.length).toBe(SUPPORT_MATRIX.length - 2);
       for (const pattern of planned) {
         expect(pattern.testStatus).toBe("planned");
       }
     });
 
-    it("does not claim any fake extractor implementations", () => {
+    it("does not claim any fake Axios or Express extractor implementations", () => {
       const fetchPatterns = getPatternsByFramework("fetch");
       const axiosPatterns = getPatternsByFramework("axios");
       const expressPatterns = getPatternsByFramework("express");
 
-      expect(fetchPatterns.length).toBeGreaterThan(0);
+      expect(fetchPatterns.length).toBe(2);
+      for (const pattern of fetchPatterns) {
+        expect(pattern.testStatus).toBe("tested");
+      }
+
       expect(axiosPatterns.length).toBeGreaterThan(0);
       expect(expressPatterns.length).toBeGreaterThan(0);
 
-      for (const pattern of [...fetchPatterns, ...axiosPatterns, ...expressPatterns]) {
+      for (const pattern of [...axiosPatterns, ...expressPatterns]) {
         expect(pattern.testStatus).toBe("planned");
       }
     });

@@ -45,9 +45,8 @@ export interface SupportMatrixEntry {
  * Master catalog of planned and implemented patterns for the JavaScript/TypeScript ecosystem
  * as documented in LLD.md Section 7.2, Section 7.3, and Section 7.7.
  *
- * NOTE: At Chunk 2.3, all extractor implementations are in subsequent Phase 2 chunks.
- * Therefore, all entries are documented with testStatus = "planned" and none are marked
- * "implemented" or "tested".
+ * NOTE: As of Chunk 2.4, standard fetch patterns are implemented and tested.
+ * All subsequent extractor patterns (Axios, Express) remain documented with testStatus = "planned".
  */
 export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
   {
@@ -66,7 +65,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Request body shape extraction limited to direct JSON.stringify of object literals"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   },
   {
     patternId: "fetch-standard-call-ts",
@@ -80,7 +79,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Dynamic method options expressions marked unresolved"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   },
   {
     patternId: "axios-method-call",
