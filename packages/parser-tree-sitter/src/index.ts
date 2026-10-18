@@ -13,6 +13,8 @@ export {
   type SupportedLanguageId
 } from "./grammar-registry/grammar-registry";
 
+export { TreeSitterParserAdapter, type TreeSitterParserAdapterOptions } from "./parser";
+
 export { PositionMapper } from "./position-mapping";
 export { SyntaxNodeFacade } from "./syntax-view/syntax-node-facade";
 

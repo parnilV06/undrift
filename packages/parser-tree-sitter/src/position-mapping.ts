@@ -369,6 +369,60 @@ export class PositionMapper {
   }
 
   /**
+   * Constructs a fully normalized SourceSpan from absolute UTF-16 code-unit offsets.
+   *
+   * @param startUtf16 Absolute UTF-16 start offset
+   * @param endUtf16 Absolute UTF-16 end offset
+   * @param uri Optional document URI override
+   * @throws PositionMappingError if offsets are invalid or startUtf16 > endUtf16
+   */
+  toSourceSpanFromUtf16(startUtf16: number, endUtf16: number, uri?: DocumentUri): SourceSpan {
+    if (startUtf16 > endUtf16) {
+      throw new PositionMappingError(
+        `Invalid UTF-16 range: startUtf16 (${startUtf16}) cannot be greater than endUtf16 (${endUtf16})`
+      );
+    }
+
+    let byteRange: ByteRange | undefined;
+    try {
+      byteRange = this.toByteRange(startUtf16, endUtf16);
+    } catch {
+      // In case offsets point inside low surrogates or mid-code points
+    }
+
+    return {
+      uri: uri ?? this.documentUri,
+      range: {
+        start: startUtf16,
+        end: endUtf16
+      },
+      start: this.utf16ToPosition(startUtf16),
+      end: this.utf16ToPosition(endUtf16),
+      byteRange
+    };
+  }
+
+  /**
+   * Constructs a fully normalized SourceSpan for a Tree-sitter AST node,
+   * properly accounting for web-tree-sitter UTF-16 string indices versus native byte offsets.
+   *
+   * @param node AST node with startIndex and endIndex
+   * @param uri Optional document URI override
+   */
+  toSourceSpanForNode(
+    node: { startIndex: number; endIndex: number; text?: string },
+    uri?: DocumentUri
+  ): SourceSpan {
+    if (
+      node.endIndex <= this.utf16Length &&
+      node.text === this.sourceText.slice(node.startIndex, node.endIndex)
+    ) {
+      return this.toSourceSpanFromUtf16(node.startIndex, node.endIndex, uri);
+    }
+    return this.toSourceSpan(node.startIndex, node.endIndex, uri);
+  }
+
+  /**
    * Retrieves the raw content of the specified line (including any trailing newline characters).
    *
    * @param lineIndex Zero-based line index
