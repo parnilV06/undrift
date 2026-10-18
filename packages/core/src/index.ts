@@ -63,3 +63,9 @@ export type {
   AnalyzerPort,
   ResolvedUndriftConfig
 } from "./ports/analyzer";
+
+export type {
+  SemanticResolutionRequest,
+  SemanticResolutionResult,
+  SemanticResolverPort
+} from "./ports/resolver";

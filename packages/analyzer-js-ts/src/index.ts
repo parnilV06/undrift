@@ -34,3 +34,9 @@ export {
   type LocalImportDeclaration,
   type LocalExportDeclaration
 } from "./project-index/local-declaration-index";
+export {
+  LocalReferenceResolver,
+  createLocalReferenceResolver,
+  type LocalResolutionState,
+  type LocalReferenceResult
+} from "./project-index/local-reference-resolver";
