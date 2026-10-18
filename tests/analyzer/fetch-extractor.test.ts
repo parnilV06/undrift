@@ -11,7 +11,7 @@ import type {
   SourceDocument
 } from "@undrift/core";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
-import { JsTsAnalyzer } from "../../packages/analyzer-js-ts/src/index";
+import { JsTsAnalyzer, extractFetchObservations } from "../../packages/analyzer-js-ts/src/index";
 
 describe("Frontend Fetch Call Extractor (Chunk 2.4)", () => {
   let parser: TreeSitterParserAdapter;
@@ -377,10 +377,16 @@ describe("Frontend Fetch Call Extractor (Chunk 2.4)", () => {
         axios.get("/api/users");
         axios.post("/api/posts", { title: "Hello" });
       `;
-      const output = await analyzeCode(code);
+      const { document, parsed } = await parseCode(code);
+      const fetchResult = extractFetchObservations(document, parsed);
 
-      expect(output.observations).toHaveLength(0);
-      expect(output.warnings).toHaveLength(0);
+      expect(fetchResult.observations).toHaveLength(0);
+      expect(fetchResult.warnings).toHaveLength(0);
+
+      // Verify integrated analyzer does not emit any fetch observations for axios calls
+      const output = await analyzeCode(code);
+      const fetchObservations = output.observations.filter((o) => o.framework === "fetch");
+      expect(fetchObservations).toHaveLength(0);
     });
 
     it("does not extract custom client member calls or unrelated function names", async () => {

@@ -10,3 +10,8 @@ export {
   extractFetchObservations,
   type FetchExtractionResult
 } from "./frontend/fetch-extractor";
+export {
+  AxiosExtractor,
+  extractAxiosObservations,
+  type AxiosExtractionResult
+} from "./frontend/axios-extractor";

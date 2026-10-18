@@ -8,6 +8,7 @@ import type {
   LanguageAnalyzerPort
 } from "@undrift/core";
 import { extractFetchObservations } from "../frontend/fetch-extractor";
+import { extractAxiosObservations } from "../frontend/axios-extractor";
 
 const SUPPORTED_LANGUAGES = new Set([
   "javascript",
@@ -45,12 +46,13 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
   async analyze(input: AnalyzerInput, signal?: AbortSignal): Promise<AnalyzerOutput> {
     signal?.throwIfAborted();
 
-    // Run frontend fetch extractor
+    // Run frontend extractors
     const fetchResult = extractFetchObservations(input.document, input.parsed, signal);
+    const axiosResult = extractAxiosObservations(input.document, input.parsed, signal);
 
     return {
-      observations: fetchResult.observations,
-      warnings: fetchResult.warnings
+      observations: [...fetchResult.observations, ...axiosResult.observations],
+      warnings: [...fetchResult.warnings, ...axiosResult.warnings]
     };
   }
 }

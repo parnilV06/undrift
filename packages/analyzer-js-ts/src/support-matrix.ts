@@ -45,8 +45,8 @@ export interface SupportMatrixEntry {
  * Master catalog of planned and implemented patterns for the JavaScript/TypeScript ecosystem
  * as documented in LLD.md Section 7.2, Section 7.3, and Section 7.7.
  *
- * NOTE: As of Chunk 2.4, standard fetch patterns are implemented and tested.
- * All subsequent extractor patterns (Axios, Express) remain documented with testStatus = "planned".
+ * NOTE: As of Chunk 2.5, standard fetch and axios method call patterns are implemented and tested.
+ * Express patterns remain documented with testStatus = "planned".
  */
 export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
   {
@@ -94,7 +94,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Config object base URLs require project index resolution"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   },
   {
     patternId: "axios-method-call-ts",
@@ -108,7 +108,7 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
       "Complex type arguments with mapped or conditional types marked partial"
     ],
     evidenceKind: "direct",
-    testStatus: "planned"
+    testStatus: "tested"
   },
   {
     patternId: "express-route-declaration",

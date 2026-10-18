@@ -52,25 +52,27 @@ describe("Support Matrix (Chunk 2.3)", () => {
   });
 
   describe("2. Planned vs. Implemented Capability Separation", () => {
-    it("reports exactly 2 implemented/tested patterns at Chunk 2.4", () => {
-      // Chunk 2.4 implements and tests standard fetch patterns.
+    it("reports exactly 4 implemented/tested patterns at Chunk 2.5", () => {
+      // Chunk 2.5 implements and tests standard fetch and axios patterns.
       const implemented = getImplementedPatterns();
-      expect(implemented).toHaveLength(2);
+      expect(implemented).toHaveLength(4);
       expect(implemented.map((p) => p.patternId)).toEqual([
         "fetch-standard-call",
-        "fetch-standard-call-ts"
+        "fetch-standard-call-ts",
+        "axios-method-call",
+        "axios-method-call-ts"
       ]);
     });
 
     it("catalogs remaining target patterns as 'planned'", () => {
       const planned = getPlannedPatterns();
-      expect(planned.length).toBe(SUPPORT_MATRIX.length - 2);
+      expect(planned.length).toBe(SUPPORT_MATRIX.length - 4);
       for (const pattern of planned) {
         expect(pattern.testStatus).toBe("planned");
       }
     });
 
-    it("does not claim any fake Axios or Express extractor implementations", () => {
+    it("does not claim any fake Express extractor implementations", () => {
       const fetchPatterns = getPatternsByFramework("fetch");
       const axiosPatterns = getPatternsByFramework("axios");
       const expressPatterns = getPatternsByFramework("express");
@@ -80,10 +82,13 @@ describe("Support Matrix (Chunk 2.3)", () => {
         expect(pattern.testStatus).toBe("tested");
       }
 
-      expect(axiosPatterns.length).toBeGreaterThan(0);
-      expect(expressPatterns.length).toBeGreaterThan(0);
+      expect(axiosPatterns.length).toBe(2);
+      for (const pattern of axiosPatterns) {
+        expect(pattern.testStatus).toBe("tested");
+      }
 
-      for (const pattern of [...axiosPatterns, ...expressPatterns]) {
+      expect(expressPatterns.length).toBeGreaterThan(0);
+      for (const pattern of expressPatterns) {
         expect(pattern.testStatus).toBe("planned");
       }
     });
