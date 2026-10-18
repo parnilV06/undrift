@@ -1,4 +1,14 @@
-// TODO(implementation): Define project configuration schema, default settings,
-// intentional mappings, and rule suppressions as specified in LLD.md.
-// No configuration loading has been implemented yet.
-export {};
+// Project configuration contracts as specified in LLD.md Section 4.4 and Section 14.
+
+/**
+ * Fully resolved and validated UNDRIFT project configuration as specified in LLD.md Section 4.4 and Section 14.
+ */
+export interface ResolvedUndriftConfig {
+  readonly version?: number;
+  readonly include?: readonly string[];
+  readonly exclude?: readonly string[];
+  readonly analyzers?: {
+    readonly [name: string]: boolean | undefined;
+  };
+  readonly [key: string]: unknown;
+}
