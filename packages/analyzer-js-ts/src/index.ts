@@ -20,3 +20,17 @@ export {
   extractExpressObservations,
   type ExpressExtractionResult
 } from "./backend/express-extractor";
+export {
+  LocalDeclarationIndex,
+  indexLocalDeclarations,
+  createLocalDeclarationIndex,
+  type LocalDeclaration,
+  type LocalDeclarationBase,
+  type LocalDeclarationKind,
+  type LocalVariableDeclaration,
+  type LocalFunctionDeclaration,
+  type LocalTypeAliasDeclaration,
+  type LocalInterfaceDeclaration,
+  type LocalImportDeclaration,
+  type LocalExportDeclaration
+} from "./project-index/local-declaration-index";
