@@ -1,6 +1,24 @@
-// TODO(implementation): Tree-sitter parser package entry point.
-// Will export TreeSitterParserAdapter, ParserRuntime, and GrammarRegistry
-// once the parser implementation begins.
-// No exports or implementation logic are provided yet.
+// Tree-sitter parser package entry point.
+// Exports runtime lifecycle management, grammar registry, and error classes.
 
-export {};
+export {
+  ParserRuntime,
+  type ParserRuntimeOptions,
+  type ParsedSnippetHandle
+} from "./runtime/parser-runtime";
+
+export {
+  GrammarRegistry,
+  type GrammarRegistryOptions,
+  type SupportedLanguageId
+} from "./grammar-registry/grammar-registry";
+
+export { PositionMapper } from "./position-mapping";
+export { SyntaxNodeFacade } from "./syntax-view/syntax-node-facade";
+
+export {
+  TreeSitterRuntimeError,
+  GrammarLoadError,
+  UnsupportedLanguageError,
+  PositionMappingError
+} from "./errors";

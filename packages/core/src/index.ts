@@ -1,6 +1,42 @@
-// TODO(implementation): Core package entry point.
-// Will export public domain models, ports, normalizers, rule engine, and analysis engine
-// once the core implementation begins.
-// No exports or implementation logic are provided yet.
+// Core package entry point for foundational domain contracts.
+// Public domain models, ports, normalizers, rule engine, and analysis engine
+// will be exported as subsequent implementation chunks are completed.
 
-export {};
+export type {
+  WorkspaceId,
+  DocumentUri,
+  ObservationId,
+  RelationshipId,
+  FindingId,
+  FixProposalId,
+  RuleId,
+  HttpMethod,
+  SourceDocument,
+  CompletenessStatus,
+  AnalysisCompleteness,
+  AnalysisStatus,
+  ParseStatus,
+  AnalysisCoverageSummary
+} from "./domain/types";
+
+export type {
+  TextRange,
+  Position,
+  ByteRange,
+  SourceSpan,
+  SourceSnapshotRef,
+  EvidenceStrength,
+  EvidenceSourceKind,
+  EvidenceRef,
+  ObservedValue
+} from "./domain/evidence";
+
+export type { WarningCode, AnalysisWarning } from "./domain/finding";
+
+export type {
+  ParseIssue,
+  SyntaxNode,
+  ParsedDocument,
+  ParseRequest,
+  ParserPort
+} from "./ports/parser";
