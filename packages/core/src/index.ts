@@ -34,9 +34,38 @@ export type {
 export type { WarningCode, AnalysisWarning } from "./domain/finding";
 
 export type {
+  RouteSegment,
+  RoutePattern,
+  PrimitiveTypeName,
+  TypeShape,
+  FieldShape,
+  ShapeObservation,
+  RequestShapeObservation,
+  ResponseShapeObservation,
+  EndpointObservation,
+  ObservationRole,
+  ApiObservation
+} from "./domain/observation";
+
+export type {
   ParseIssue,
   SyntaxNode,
   ParsedDocument,
   ParseRequest,
   ParserPort
 } from "./ports/parser";
+
+export type {
+  ProjectIndexView,
+  AnalyzerInput,
+  AnalyzerOutput,
+  LanguageAnalyzerPort,
+  AnalyzerPort,
+  ResolvedUndriftConfig
+} from "./ports/analyzer";
+
+export type {
+  SemanticResolutionRequest,
+  SemanticResolutionResult,
+  SemanticResolverPort
+} from "./ports/resolver";
