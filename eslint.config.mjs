@@ -8,7 +8,8 @@ export default tseslint.config(
       "**/out/**",
       "**/coverage/**",
       "**/*.wasm",
-      "**/*.vsix"
+      "**/*.vsix",
+      "tests/fixtures/workspaces/incomplete-coverage/src/server-broken.ts"
     ]
   },
   ...tseslint.configs.recommended,

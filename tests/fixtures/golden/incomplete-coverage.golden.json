@@ -1,0 +1,342 @@
+{
+  "workspaceId": "ws-incomplete-coverage",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": false,
+  "statistics": {
+    "filesConsidered": 2,
+    "filesParsed": 1,
+    "filesWithWarnings": 1,
+    "consumerObservations": 1,
+    "providerObservations": 0,
+    "relationships": 1,
+    "activeFindings": 1,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [
+    {
+      "id": "obs:src/client.ts:74-99",
+      "role": "consumer",
+      "languageId": "typescript",
+      "framework": "axios",
+      "extractorId": "axios-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-74",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 74,
+                  "end": 99
+                },
+                "start": {
+                  "line": 3,
+                  "character": 9
+                },
+                "end": {
+                  "line": 3,
+                  "character": 34
+                },
+                "byteRange": {
+                  "start": 74,
+                  "end": 99
+                }
+              },
+              "description": "HTTP method 'GET' from axios.get call"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "reports"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/reports"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-84",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 84,
+                  "end": 98
+                },
+                "start": {
+                  "line": 3,
+                  "character": 19
+                },
+                "end": {
+                  "line": 3,
+                  "character": 33
+                },
+                "byteRange": {
+                  "start": 84,
+                  "end": 98
+                }
+              },
+              "description": "Static URL literal '/api/reports' in Axios call"
+            }
+          ]
+        },
+        "responses": []
+      },
+      "source": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 74,
+            "end": 99
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 34
+          },
+          "byteRange": {
+            "start": 74,
+            "end": 99
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/client.ts",
+        "contentHash": "hash-client.ts"
+      },
+      "limitations": []
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:unmatched:obs:src/client.ts:74-99:none",
+      "state": "discovered",
+      "matchKind": "unmatched",
+      "evidence": [
+        {
+          "id": "ev-method-74",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 74,
+              "end": 99
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 34
+            },
+            "byteRange": {
+              "start": 74,
+              "end": 99
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-84",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 84,
+              "end": 98
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 33
+            },
+            "byteRange": {
+              "start": 84,
+              "end": 98
+            }
+          },
+          "description": "Static URL literal '/api/reports' in Axios call"
+        }
+      ],
+      "reasons": ["No compatible provider found in analyzed scope"],
+      "limitations": [],
+      "findingIds": []
+    }
+  ],
+  "findings": [
+    {
+      "id": "find:UND920:fbdb8cdb7bb7a03e",
+      "ruleId": "UND920",
+      "category": "analysis-limit",
+      "severity": "warning",
+      "state": "active",
+      "title": "Parse error limits analysis coverage",
+      "summary": "Syntax error: unexpected token: 'import express from \"express\";'",
+      "explanation": "**Incomplete parse or analysis scope limits coverage**: Syntax error: unexpected token: 'import express from \"express\";'\n\n- Observed: Syntax error: unexpected token: 'import express from \"express\";'\n\nReason: The parser encountered a syntax error or the file scope was incomplete.\n\nImpact: Absence of findings in this file cannot be considered proof of contract compatibility.\n\nSuggested next steps:\n  * Fix any syntax errors in the affected file.\n  * Re-run workspace analysis to restore full coverage.",
+      "evidenceStrength": "direct",
+      "observationIds": [],
+      "sourceLocations": [
+        {
+          "uri": "src/server-broken.ts",
+          "range": {
+            "start": 0,
+            "end": 109
+          },
+          "start": {
+            "line": 0,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 0
+          },
+          "byteRange": {
+            "start": 0,
+            "end": 109
+          }
+        }
+      ],
+      "limitations": [
+        {
+          "code": "PARSE_ERROR",
+          "message": "Syntax error: unexpected token: 'import express from \"express\";'",
+          "source": {
+            "uri": "src/server-broken.ts",
+            "range": {
+              "start": 0,
+              "end": 109
+            },
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 0
+            },
+            "byteRange": {
+              "start": 0,
+              "end": 109
+            }
+          },
+          "affectsCompleteness": true
+        }
+      ],
+      "fixProposalIds": [],
+      "structuredExplanation": {
+        "headline": "Incomplete parse or analysis scope limits coverage",
+        "summary": "Syntax error: unexpected token: 'import express from \"express\";'",
+        "observedDescription": "Syntax error: unexpected token: 'import express from \"express\";'",
+        "reason": "The parser encountered a syntax error or the file scope was incomplete.",
+        "possibleImpact": "Absence of findings in this file cannot be considered proof of contract compatibility.",
+        "evidenceStrength": "direct",
+        "sourceLocations": [
+          {
+            "uri": "src/server-broken.ts",
+            "range": {
+              "start": 0,
+              "end": 109
+            },
+            "start": {
+              "line": 0,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 0
+            },
+            "byteRange": {
+              "start": 0,
+              "end": 109
+            }
+          }
+        ],
+        "limitations": [
+          {
+            "code": "PARSE_ERROR",
+            "message": "Syntax error: unexpected token: 'import express from \"express\";'",
+            "source": {
+              "uri": "src/server-broken.ts",
+              "range": {
+                "start": 0,
+                "end": 109
+              },
+              "start": {
+                "line": 0,
+                "character": 0
+              },
+              "end": {
+                "line": 6,
+                "character": 0
+              },
+              "byteRange": {
+                "start": 0,
+                "end": 109
+              }
+            },
+            "affectsCompleteness": true
+          }
+        ],
+        "suggestedNextSteps": [
+          "Fix any syntax errors in the affected file.",
+          "Re-run workspace analysis to restore full coverage."
+        ]
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "code": "PARSE_ERROR",
+      "message": "Syntax error: unexpected token: 'import express from \"express\";'",
+      "source": {
+        "uri": "src/server-broken.ts",
+        "range": {
+          "start": 0,
+          "end": 109
+        },
+        "start": {
+          "line": 0,
+          "character": 0
+        },
+        "end": {
+          "line": 6,
+          "character": 0
+        },
+        "byteRange": {
+          "start": 0,
+          "end": 109
+        }
+      },
+      "affectsCompleteness": true
+    }
+  ]
+}

@@ -733,19 +733,22 @@ export interface FindingLifecycleHistory {
 
 ```ts
 export interface StateReconciliationOptions {
-  allowResolutionOnlyIfCoverageComplete: boolean;
+  allowResolutionOnlyIfCoverageComplete?: boolean;
+  historicalEvents?: readonly FindingLifecycleEvent[];
 }
 
 export interface ReconciliationResult {
   workspaceId: WorkspaceId;
   reconciledAt: number;
   previousSnapshot?: AnalysisSnapshot;
-  currentSnapshot: AnalysisSnapshot;
+  currentSnapshot?: AnalysisSnapshot;
   eventsEmitted: readonly FindingLifecycleEvent[];
   unchangedFindingCount: number;
   coverageSufficient: boolean;
 }
 ```
+
+`currentSnapshot` is optional (`AnalysisSnapshot | undefined`) because an incomplete first analysis yields no valid snapshot and must not manufacture a fake completed snapshot. `StateReconciliationOptions.historicalEvents` supplies explicit historical evidence so that the in-memory reconciler can identify `reintroduced` findings without performing file I/O or embedding storage adapters.
 
 ---
 
@@ -924,7 +927,7 @@ The port implementation in the VS Code host layer connects to VS Code-managed wo
 
 ### 5.7 State reconciliation port
 
-This port compares a newly completed analysis with the previous complete snapshot to derive finding lifecycle transitions and update snapshot records.
+This port compares a newly completed analysis with the previous complete snapshot to derive finding lifecycle transitions and update snapshot records. It is a pure, in-memory domain service; historical lifecycle events can be supplied via `options.historicalEvents` to identify `reintroduced` transitions without embedding persistence I/O into the core.
 
 ```ts
 export interface StateReconciliationPort {
@@ -1264,12 +1267,11 @@ Evaluate coverage sufficiency (AnalysisResult.complete)
 #### Step-by-step reconciliation algorithm
 
 ```text
-ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentionPolicy):
+ALGORITHM reconcileState(currentResult, previousSnapshot, options):
   INPUT:
     currentResult: AnalysisResult
-    previousSnapshot: AnalysisSnapshot or null
-    historyStore: StatePersistencePort
-    retentionPolicy: RetentionPolicy
+    previousSnapshot: AnalysisSnapshot or undefined
+    options: StateReconciliationOptions (optional; contains allowResolutionOnlyIfCoverageComplete, historicalEvents)
 
   OUTPUT:
     ReconciliationResult
@@ -1280,7 +1282,7 @@ ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentio
          workspaceId: currentResult.workspaceId,
          reconciledAt: currentResult.generatedAt,
          previousSnapshot: previousSnapshot,
-         currentSnapshot: previousSnapshot, // PRESERVE UNCHANGED
+         currentSnapshot: previousSnapshot, // PRESERVE UNCHANGED (undefined if first run was incomplete)
          eventsEmitted: [],
          unchangedFindingCount: previousSnapshot ? previousSnapshot.findings.length : 0,
          coverageSufficient: false
@@ -1305,7 +1307,8 @@ ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentio
 
        IF prevRecord == null:
          // Finding was not in previous snapshot
-         wasPreviouslyResolved = historyStore.hasHistoricalState(id, "resolved")
+         // Assess historical evidence from options.historicalEvents if provided
+         wasPreviouslyResolved = assessLatestResolvedState(id, currentResult.workspaceId, options?.historicalEvents)
          transition = wasPreviouslyResolved ? "reintroduced" : "detected"
 
          event = createLifecycleEvent(
@@ -1320,7 +1323,24 @@ ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentio
          )
          newEvents.append(event)
 
-         record = toPersistedFindingRecord(currFinding, firstObservedAt: currentResult.generatedAt, lastConfirmedAt: currentResult.generatedAt)
+         firstObs = wasPreviouslyResolved ? getEarliestHistoricalTimestamp(id, options?.historicalEvents) : currentResult.generatedAt
+         record = toPersistedFindingRecord(currFinding, firstObservedAt: firstObs, lastConfirmedAt: currentResult.generatedAt)
+         persistedRecords.append(record)
+
+       ELSE IF prevRecord.state == "resolved":
+         // Finding was explicitly marked resolved in previous snapshot
+         event = createLifecycleEvent(
+           workspaceId: currentResult.workspaceId,
+           findingId: id,
+           transitionKind: "reintroduced",
+           observedAt: currentResult.generatedAt,
+           triggerGeneration: currentResult.generation,
+           previousState: "resolved",
+           newState: "active",
+           context: extractContext(currFinding)
+         )
+         newEvents.append(event)
+         record = toPersistedFindingRecord(currFinding, firstObservedAt: prevRecord.firstObservedAt, lastConfirmedAt: currentResult.generatedAt)
          persistedRecords.append(record)
 
        ELSE:
@@ -1345,24 +1365,26 @@ ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentio
          persistedRecords.append(record)
 
   4. RECONCILE RESOLVED FINDINGS:
-     FOR EACH (id, prevRecord) IN prevMap:
-       IF NOT currMap.has(id):
-         // Finding was present before, now absent from a complete scan -> RESOLVED
-         event = createLifecycleEvent(
-           workspaceId: currentResult.workspaceId,
-           findingId: id,
-           transitionKind: "resolved",
-           observedAt: currentResult.generatedAt,
-           triggerGeneration: currentResult.generation,
-           previousState: prevRecord.state,
-           newState: "resolved",
-           context: { primaryLocation: prevRecord.sourceLocations[0], reason: "Absent from completed analysis" }
-         )
-         newEvents.append(event)
+     allowResolution = options?.allowResolutionOnlyIfCoverageComplete != false
+     IF allowResolution:
+       FOR EACH (id, prevRecord) IN prevMap:
+         IF NOT currMap.has(id):
+           // Finding was present before, now absent from a complete scan -> RESOLVED
+           event = createLifecycleEvent(
+             workspaceId: currentResult.workspaceId,
+             findingId: id,
+             transitionKind: "resolved",
+             observedAt: currentResult.generatedAt,
+             triggerGeneration: currentResult.generation,
+             previousState: prevRecord.state,
+             newState: "resolved",
+             context: { primaryLocation: prevRecord.sourceLocations[0], reason: "Absent from completed analysis" }
+           )
+           newEvents.append(event)
 
   5. CONSTRUCT NEW SNAPSHOT:
      newSnapshot = AnalysisSnapshot(
-       schemaVersion: CURRENT_PERSISTENCE_SCHEMA_VERSION,
+       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
        snapshotId: generateUUID(),
        workspaceId: currentResult.workspaceId,
        generation: currentResult.generation,
@@ -1371,12 +1393,8 @@ ALGORITHM reconcileState(currentResult, previousSnapshot, historyStore, retentio
        findings: persistedRecords
      )
 
-  6. ATOMIC PERSISTENCE & PRUNING:
-     historyStore.saveSnapshot(currentResult.workspaceId, newSnapshot)
-     historyStore.appendLifecycleEvents(currentResult.workspaceId, newEvents)
-     historyStore.pruneLifecycleHistory(currentResult.workspaceId, retentionPolicy)
-
-  7. RETURN RESULT:
+  6. RETURN RESULT:
+     // Note: Caller/coordinator persists newSnapshot and appends newEvents via StatePersistencePort
      RETURN ReconciliationResult(
        workspaceId: currentResult.workspaceId,
        reconciledAt: currentResult.generatedAt,
