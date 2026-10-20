@@ -1,0 +1,525 @@
+{
+  "workspaceId": "ws-valid-exact-match",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": true,
+  "statistics": {
+    "filesConsidered": 2,
+    "filesParsed": 2,
+    "filesWithWarnings": 0,
+    "consumerObservations": 1,
+    "providerObservations": 1,
+    "relationships": 1,
+    "activeFindings": 0,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [
+    {
+      "id": "obs:src/client.ts:72-95",
+      "role": "consumer",
+      "languageId": "typescript",
+      "framework": "axios",
+      "extractorId": "axios-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-72",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 72,
+                  "end": 95
+                },
+                "start": {
+                  "line": 3,
+                  "character": 9
+                },
+                "end": {
+                  "line": 3,
+                  "character": 32
+                },
+                "byteRange": {
+                  "start": 72,
+                  "end": 95
+                }
+              },
+              "description": "HTTP method 'GET' from axios.get call"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "users"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/users"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-82",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 82,
+                  "end": 94
+                },
+                "start": {
+                  "line": 3,
+                  "character": 19
+                },
+                "end": {
+                  "line": 3,
+                  "character": 31
+                },
+                "byteRange": {
+                  "start": 82,
+                  "end": 94
+                }
+              },
+              "description": "Static URL literal '/api/users' in Axios call"
+            }
+          ]
+        },
+        "responses": []
+      },
+      "source": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 72,
+            "end": 95
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 32
+          },
+          "byteRange": {
+            "start": 72,
+            "end": 95
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/client.ts",
+        "contentHash": "hash-client.ts"
+      },
+      "limitations": []
+    },
+    {
+      "id": "obs:src/server.ts:56-134",
+      "role": "provider",
+      "languageId": "typescript",
+      "framework": "express",
+      "extractorId": "express-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-56",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 56,
+                  "end": 134
+                },
+                "start": {
+                  "line": 4,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 2
+                },
+                "byteRange": {
+                  "start": 56,
+                  "end": 134
+                }
+              },
+              "description": "HTTP method 'GET' from app.get() route declaration"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "users"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/users"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-64",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 64,
+                  "end": 76
+                },
+                "start": {
+                  "line": 4,
+                  "character": 8
+                },
+                "end": {
+                  "line": 4,
+                  "character": 20
+                },
+                "byteRange": {
+                  "start": 64,
+                  "end": 76
+                }
+              },
+              "description": "Static route path '/api/users' in Express route declaration"
+            }
+          ]
+        },
+        "responses": [
+          {
+            "statusCode": {
+              "state": "known",
+              "value": 200,
+              "strength": "direct",
+              "evidence": [
+                {
+                  "id": "ev-status-96",
+                  "kind": "framework-convention",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 96,
+                      "end": 130
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 2
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 36
+                    },
+                    "byteRange": {
+                      "start": 96,
+                      "end": 130
+                    }
+                  },
+                  "description": "Default HTTP status code 200 for direct res.json()/res.send()"
+                }
+              ]
+            },
+            "body": {
+              "shape": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "name": "id",
+                    "type": {
+                      "kind": "literal",
+                      "value": 1
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-107",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 107,
+                            "end": 112
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 13
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 18
+                          },
+                          "byteRange": {
+                            "start": 107,
+                            "end": 112
+                          }
+                        },
+                        "description": "Field 'id' in response body payload"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "name",
+                    "type": {
+                      "kind": "literal",
+                      "value": "Alice"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-114",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 114,
+                            "end": 127
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 20
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 33
+                          },
+                          "byteRange": {
+                            "start": 114,
+                            "end": 127
+                          }
+                        },
+                        "description": "Field 'name' in response body payload"
+                      }
+                    ]
+                  }
+                ],
+                "additionalProperties": "unknown"
+              },
+              "completeness": "complete",
+              "evidence": [
+                {
+                  "id": "ev-body-105",
+                  "kind": "literal-syntax",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 105,
+                      "end": 129
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 35
+                    },
+                    "byteRange": {
+                      "start": 105,
+                      "end": 129
+                    }
+                  },
+                  "description": "Direct object literal response body in Express handler"
+                }
+              ]
+            },
+            "source": [
+              {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 96,
+                  "end": 130
+                },
+                "start": {
+                  "line": 5,
+                  "character": 2
+                },
+                "end": {
+                  "line": 5,
+                  "character": 36
+                },
+                "byteRange": {
+                  "start": 96,
+                  "end": 130
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "source": [
+        {
+          "uri": "src/server.ts",
+          "range": {
+            "start": 56,
+            "end": 134
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 134
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/server.ts",
+        "contentHash": "hash-server.ts"
+      },
+      "limitations": []
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:exact:obs:src/client.ts:72-95:obs:src/server.ts:56-134",
+      "state": "matched",
+      "matchKind": "exact",
+      "evidence": [
+        {
+          "id": "ev-method-72",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 72,
+              "end": 95
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 72,
+              "end": 95
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-82",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 82,
+              "end": 94
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 31
+            },
+            "byteRange": {
+              "start": 82,
+              "end": 94
+            }
+          },
+          "description": "Static URL literal '/api/users' in Axios call"
+        },
+        {
+          "id": "ev-method-56",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 56,
+              "end": 134
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 134
+            }
+          },
+          "description": "HTTP method 'GET' from app.get() route declaration"
+        },
+        {
+          "id": "ev-path-64",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 64,
+              "end": 76
+            },
+            "start": {
+              "line": 4,
+              "character": 8
+            },
+            "end": {
+              "line": 4,
+              "character": 20
+            },
+            "byteRange": {
+              "start": 64,
+              "end": 76
+            }
+          },
+          "description": "Static route path '/api/users' in Express route declaration"
+        }
+      ],
+      "reasons": ["Exact match on normalized HTTP method and route pattern shape"],
+      "limitations": [],
+      "findingIds": []
+    }
+  ],
+  "findings": [],
+  "warnings": []
+}

@@ -1,0 +1,637 @@
+{
+  "workspaceId": "ws-method-conflict",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": true,
+  "statistics": {
+    "filesConsidered": 2,
+    "filesParsed": 2,
+    "filesWithWarnings": 0,
+    "consumerObservations": 1,
+    "providerObservations": 1,
+    "relationships": 1,
+    "activeFindings": 1,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [
+    {
+      "id": "obs:src/client.ts:75-99",
+      "role": "consumer",
+      "languageId": "typescript",
+      "framework": "axios",
+      "extractorId": "axios-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-75",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 75,
+                  "end": 99
+                },
+                "start": {
+                  "line": 3,
+                  "character": 9
+                },
+                "end": {
+                  "line": 3,
+                  "character": 33
+                },
+                "byteRange": {
+                  "start": 75,
+                  "end": 99
+                }
+              },
+              "description": "HTTP method 'GET' from axios.get call"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "orders"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/orders"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-85",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 85,
+                  "end": 98
+                },
+                "start": {
+                  "line": 3,
+                  "character": 19
+                },
+                "end": {
+                  "line": 3,
+                  "character": 32
+                },
+                "byteRange": {
+                  "start": 85,
+                  "end": 98
+                }
+              },
+              "description": "Static URL literal '/api/orders' in Axios call"
+            }
+          ]
+        },
+        "responses": []
+      },
+      "source": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 75,
+            "end": 99
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 33
+          },
+          "byteRange": {
+            "start": 75,
+            "end": 99
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/client.ts",
+        "contentHash": "hash-client.ts"
+      },
+      "limitations": []
+    },
+    {
+      "id": "obs:src/server.ts:56-155",
+      "role": "provider",
+      "languageId": "typescript",
+      "framework": "express",
+      "extractorId": "express-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "POST",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-56",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 56,
+                  "end": 155
+                },
+                "start": {
+                  "line": 4,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 2
+                },
+                "byteRange": {
+                  "start": 56,
+                  "end": 155
+                }
+              },
+              "description": "HTTP method 'POST' from app.post() route declaration"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "orders"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/orders"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-65",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 65,
+                  "end": 78
+                },
+                "start": {
+                  "line": 4,
+                  "character": 9
+                },
+                "end": {
+                  "line": 4,
+                  "character": 22
+                },
+                "byteRange": {
+                  "start": 65,
+                  "end": 78
+                }
+              },
+              "description": "Static route path '/api/orders' in Express route declaration"
+            }
+          ]
+        },
+        "responses": [
+          {
+            "statusCode": {
+              "state": "known",
+              "value": 200,
+              "strength": "direct",
+              "evidence": [
+                {
+                  "id": "ev-status-98",
+                  "kind": "framework-convention",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 98,
+                      "end": 151
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 2
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 55
+                    },
+                    "byteRange": {
+                      "start": 98,
+                      "end": 151
+                    }
+                  },
+                  "description": "Default HTTP status code 200 for direct res.json()/res.send()"
+                }
+              ]
+            },
+            "body": {
+              "shape": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "name": "orderId",
+                    "type": {
+                      "kind": "literal",
+                      "value": "ord-123"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-109",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 109,
+                            "end": 127
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 13
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 31
+                          },
+                          "byteRange": {
+                            "start": 109,
+                            "end": 127
+                          }
+                        },
+                        "description": "Field 'orderId' in response body payload"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "status",
+                    "type": {
+                      "kind": "literal",
+                      "value": "confirmed"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-129",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 129,
+                            "end": 148
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 33
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 52
+                          },
+                          "byteRange": {
+                            "start": 129,
+                            "end": 148
+                          }
+                        },
+                        "description": "Field 'status' in response body payload"
+                      }
+                    ]
+                  }
+                ],
+                "additionalProperties": "unknown"
+              },
+              "completeness": "complete",
+              "evidence": [
+                {
+                  "id": "ev-body-107",
+                  "kind": "literal-syntax",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 107,
+                      "end": 150
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 54
+                    },
+                    "byteRange": {
+                      "start": 107,
+                      "end": 150
+                    }
+                  },
+                  "description": "Direct object literal response body in Express handler"
+                }
+              ]
+            },
+            "source": [
+              {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 98,
+                  "end": 151
+                },
+                "start": {
+                  "line": 5,
+                  "character": 2
+                },
+                "end": {
+                  "line": 5,
+                  "character": 55
+                },
+                "byteRange": {
+                  "start": 98,
+                  "end": 151
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "source": [
+        {
+          "uri": "src/server.ts",
+          "range": {
+            "start": 56,
+            "end": 155
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 155
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/server.ts",
+        "contentHash": "hash-server.ts"
+      },
+      "limitations": []
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:method-conflict:obs:src/client.ts:75-99:obs:src/server.ts:56-155",
+      "state": "matched",
+      "matchKind": "method-conflict",
+      "evidence": [
+        {
+          "id": "ev-method-75",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 75,
+              "end": 99
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 33
+            },
+            "byteRange": {
+              "start": 75,
+              "end": 99
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-85",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 85,
+              "end": 98
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 85,
+              "end": 98
+            }
+          },
+          "description": "Static URL literal '/api/orders' in Axios call"
+        },
+        {
+          "id": "ev-method-56",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 56,
+              "end": 155
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 155
+            }
+          },
+          "description": "HTTP method 'POST' from app.post() route declaration"
+        },
+        {
+          "id": "ev-path-65",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 65,
+              "end": 78
+            },
+            "start": {
+              "line": 4,
+              "character": 9
+            },
+            "end": {
+              "line": 4,
+              "character": 22
+            },
+            "byteRange": {
+              "start": 65,
+              "end": 78
+            }
+          },
+          "description": "Static route path '/api/orders' in Express route declaration"
+        }
+      ],
+      "reasons": ["Method conflict on route shape: consumer calls GET, provider accepts POST"],
+      "limitations": [],
+      "findingIds": []
+    }
+  ],
+  "findings": [
+    {
+      "id": "find:UND120:97963f7750378c43",
+      "ruleId": "UND120",
+      "category": "route",
+      "severity": "error",
+      "state": "active",
+      "title": "HTTP method conflict",
+      "summary": "Consumer calls GET on '/api/orders', but provider accepts POST.",
+      "explanation": "**HTTP method conflict on endpoint**: Consumer calls GET on '/api/orders', but provider accepts POST.\n\n- Expected: GET\n\n- Observed: POST\n\nReason: The endpoint route shape matches, but the HTTP methods conflict.\n\nImpact: Requests from this consumer will fail at runtime with a 404 or 405 Method Not Allowed error.\n\nSuggested next steps:\n  * Update the consumer call to use the HTTP method accepted by the provider.\n  * Or add a route handler for the requested HTTP method on the provider.",
+      "evidenceStrength": "direct",
+      "relationshipId": "rel:method-conflict:obs:src/client.ts:75-99:obs:src/server.ts:56-155",
+      "observationIds": ["obs:src/client.ts:75-99", "obs:src/server.ts:56-155"],
+      "sourceLocations": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 75,
+            "end": 99
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 33
+          },
+          "byteRange": {
+            "start": 75,
+            "end": 99
+          }
+        },
+        {
+          "uri": "src/server.ts",
+          "range": {
+            "start": 56,
+            "end": 155
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 155
+          }
+        }
+      ],
+      "expected": "GET",
+      "observed": "POST",
+      "limitations": [],
+      "fixProposalIds": [],
+      "structuredExplanation": {
+        "headline": "HTTP method conflict on endpoint",
+        "summary": "Consumer calls GET on '/api/orders', but provider accepts POST.",
+        "expectedDescription": "GET",
+        "observedDescription": "POST",
+        "reason": "The endpoint route shape matches, but the HTTP methods conflict.",
+        "possibleImpact": "Requests from this consumer will fail at runtime with a 404 or 405 Method Not Allowed error.",
+        "evidenceStrength": "direct",
+        "sourceLocations": [
+          {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 75,
+              "end": 99
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 33
+            },
+            "byteRange": {
+              "start": 75,
+              "end": 99
+            }
+          },
+          {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 56,
+              "end": 155
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 155
+            }
+          }
+        ],
+        "limitations": [],
+        "suggestedNextSteps": [
+          "Update the consumer call to use the HTTP method accepted by the provider.",
+          "Or add a route handler for the requested HTTP method on the provider."
+        ]
+      }
+    }
+  ],
+  "warnings": []
+}

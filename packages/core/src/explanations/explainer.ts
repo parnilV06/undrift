@@ -1,5 +1,4 @@
-// TODO(implementation): Generate human-readable explanations, rule summaries,
-// and actionable guidance for detected drift findings according to LLD.md.
-// No explanation generation logic has been implemented yet.
+// Structured finding explainer as specified in LLD.md Section 12.
+// Re-exports explanation construction logic from ../explaining/finding-explainer.
 
-export {};
+export * from "../explaining/finding-explainer";

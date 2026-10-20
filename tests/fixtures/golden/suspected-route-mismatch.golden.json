@@ -1,0 +1,639 @@
+{
+  "workspaceId": "ws-suspected-route-mismatch",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": true,
+  "statistics": {
+    "filesConsidered": 2,
+    "filesParsed": 2,
+    "filesWithWarnings": 0,
+    "consumerObservations": 1,
+    "providerObservations": 1,
+    "relationships": 1,
+    "activeFindings": 1,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [
+    {
+      "id": "obs:src/client.ts:74-97",
+      "role": "consumer",
+      "languageId": "typescript",
+      "framework": "axios",
+      "extractorId": "axios-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-74",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 74,
+                  "end": 97
+                },
+                "start": {
+                  "line": 3,
+                  "character": 9
+                },
+                "end": {
+                  "line": 3,
+                  "character": 32
+                },
+                "byteRange": {
+                  "start": 74,
+                  "end": 97
+                }
+              },
+              "description": "HTTP method 'GET' from axios.get call"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "users"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/users"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-84",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 84,
+                  "end": 96
+                },
+                "start": {
+                  "line": 3,
+                  "character": 19
+                },
+                "end": {
+                  "line": 3,
+                  "character": 31
+                },
+                "byteRange": {
+                  "start": 84,
+                  "end": 96
+                }
+              },
+              "description": "Static URL literal '/api/users' in Axios call"
+            }
+          ]
+        },
+        "responses": []
+      },
+      "source": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 74,
+            "end": 97
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 32
+          },
+          "byteRange": {
+            "start": 74,
+            "end": 97
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/client.ts",
+        "contentHash": "hash-client.ts"
+      },
+      "limitations": []
+    },
+    {
+      "id": "obs:src/server.ts:56-133",
+      "role": "provider",
+      "languageId": "typescript",
+      "framework": "express",
+      "extractorId": "express-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-56",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 56,
+                  "end": 133
+                },
+                "start": {
+                  "line": 4,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 2
+                },
+                "byteRange": {
+                  "start": 56,
+                  "end": 133
+                }
+              },
+              "description": "HTTP method 'GET' from app.get() route declaration"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "user"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/user"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-64",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 64,
+                  "end": 75
+                },
+                "start": {
+                  "line": 4,
+                  "character": 8
+                },
+                "end": {
+                  "line": 4,
+                  "character": 19
+                },
+                "byteRange": {
+                  "start": 64,
+                  "end": 75
+                }
+              },
+              "description": "Static route path '/api/user' in Express route declaration"
+            }
+          ]
+        },
+        "responses": [
+          {
+            "statusCode": {
+              "state": "known",
+              "value": 200,
+              "strength": "direct",
+              "evidence": [
+                {
+                  "id": "ev-status-95",
+                  "kind": "framework-convention",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 95,
+                      "end": 129
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 2
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 36
+                    },
+                    "byteRange": {
+                      "start": 95,
+                      "end": 129
+                    }
+                  },
+                  "description": "Default HTTP status code 200 for direct res.json()/res.send()"
+                }
+              ]
+            },
+            "body": {
+              "shape": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "name": "id",
+                    "type": {
+                      "kind": "literal",
+                      "value": 1
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-106",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 106,
+                            "end": 111
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 13
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 18
+                          },
+                          "byteRange": {
+                            "start": 106,
+                            "end": 111
+                          }
+                        },
+                        "description": "Field 'id' in response body payload"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "name",
+                    "type": {
+                      "kind": "literal",
+                      "value": "Alice"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-113",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server.ts",
+                          "range": {
+                            "start": 113,
+                            "end": 126
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 20
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 33
+                          },
+                          "byteRange": {
+                            "start": 113,
+                            "end": 126
+                          }
+                        },
+                        "description": "Field 'name' in response body payload"
+                      }
+                    ]
+                  }
+                ],
+                "additionalProperties": "unknown"
+              },
+              "completeness": "complete",
+              "evidence": [
+                {
+                  "id": "ev-body-104",
+                  "kind": "literal-syntax",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server.ts",
+                    "range": {
+                      "start": 104,
+                      "end": 128
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 35
+                    },
+                    "byteRange": {
+                      "start": 104,
+                      "end": 128
+                    }
+                  },
+                  "description": "Direct object literal response body in Express handler"
+                }
+              ]
+            },
+            "source": [
+              {
+                "uri": "src/server.ts",
+                "range": {
+                  "start": 95,
+                  "end": 129
+                },
+                "start": {
+                  "line": 5,
+                  "character": 2
+                },
+                "end": {
+                  "line": 5,
+                  "character": 36
+                },
+                "byteRange": {
+                  "start": 95,
+                  "end": 129
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "source": [
+        {
+          "uri": "src/server.ts",
+          "range": {
+            "start": 56,
+            "end": 133
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 133
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/server.ts",
+        "contentHash": "hash-server.ts"
+      },
+      "limitations": []
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:suspected-route-conflict:obs:src/client.ts:74-97:obs:src/server.ts:56-133",
+      "state": "matched",
+      "matchKind": "suspected-route-conflict",
+      "evidence": [
+        {
+          "id": "ev-method-74",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 74,
+              "end": 97
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 74,
+              "end": 97
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-84",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 84,
+              "end": 96
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 31
+            },
+            "byteRange": {
+              "start": 84,
+              "end": 96
+            }
+          },
+          "description": "Static URL literal '/api/users' in Axios call"
+        },
+        {
+          "id": "ev-method-56",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 56,
+              "end": 133
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 133
+            }
+          },
+          "description": "HTTP method 'GET' from app.get() route declaration"
+        },
+        {
+          "id": "ev-path-64",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 64,
+              "end": 75
+            },
+            "start": {
+              "line": 4,
+              "character": 8
+            },
+            "end": {
+              "line": 4,
+              "character": 19
+            },
+            "byteRange": {
+              "start": 64,
+              "end": 75
+            }
+          },
+          "description": "Static route path '/api/user' in Express route declaration"
+        }
+      ],
+      "reasons": [
+        "Suspected route mismatch: exactly one static segment differs with identical method and compatible parameters"
+      ],
+      "limitations": [],
+      "findingIds": []
+    }
+  ],
+  "findings": [
+    {
+      "id": "find:UND130:2258d8bb3d01747e",
+      "ruleId": "UND130",
+      "category": "route",
+      "severity": "warning",
+      "state": "active",
+      "title": "Suspected route mismatch",
+      "summary": "Consumer calls '/api/users' with GET, but the closest unique provider route is '/api/user'.",
+      "explanation": "**Suspected route mismatch**: Consumer calls '/api/users' with GET, but the closest unique provider route is '/api/user'.\n\n- Expected: /api/users\n\n- Observed: /api/user\n\nReason: Exactly one static path segment differs between the unique consumer and provider candidates with matching HTTP method.\n\nImpact: Requests from this consumer may receive a 404 Not Found error at runtime.\n\nSuggested next steps:\n  * Verify whether the consumer route has a typo or should be updated to match the provider.\n  * Or add the missing route to the backend provider.",
+      "evidenceStrength": "inferred",
+      "relationshipId": "rel:suspected-route-conflict:obs:src/client.ts:74-97:obs:src/server.ts:56-133",
+      "observationIds": ["obs:src/client.ts:74-97", "obs:src/server.ts:56-133"],
+      "sourceLocations": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 74,
+            "end": 97
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 32
+          },
+          "byteRange": {
+            "start": 74,
+            "end": 97
+          }
+        },
+        {
+          "uri": "src/server.ts",
+          "range": {
+            "start": 56,
+            "end": 133
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 133
+          }
+        }
+      ],
+      "expected": "/api/users",
+      "observed": "/api/user",
+      "limitations": [],
+      "fixProposalIds": [],
+      "structuredExplanation": {
+        "headline": "Suspected route mismatch",
+        "summary": "Consumer calls '/api/users' with GET, but the closest unique provider route is '/api/user'.",
+        "expectedDescription": "/api/users",
+        "observedDescription": "/api/user",
+        "reason": "Exactly one static path segment differs between the unique consumer and provider candidates with matching HTTP method.",
+        "possibleImpact": "Requests from this consumer may receive a 404 Not Found error at runtime.",
+        "evidenceStrength": "inferred",
+        "sourceLocations": [
+          {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 74,
+              "end": 97
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 74,
+              "end": 97
+            }
+          },
+          {
+            "uri": "src/server.ts",
+            "range": {
+              "start": 56,
+              "end": 133
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 133
+            }
+          }
+        ],
+        "limitations": [],
+        "suggestedNextSteps": [
+          "Verify whether the consumer route has a typo or should be updated to match the provider.",
+          "Or add the missing route to the backend provider."
+        ]
+      }
+    }
+  ],
+  "warnings": []
+}

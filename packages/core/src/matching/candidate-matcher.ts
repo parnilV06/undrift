@@ -1,5 +1,4 @@
-// TODO(implementation): Match consumer and provider observations
-// using the rules specified in LLD.md.
-// No matching logic has been implemented yet.
+// Candidate matching module as specified in LLD.md Section 10.
+// Re-exports contract matching logic and models.
 
-export {};
+export * from "./contract-matcher";

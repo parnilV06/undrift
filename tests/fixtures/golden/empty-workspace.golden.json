@@ -1,0 +1,21 @@
+{
+  "workspaceId": "ws-empty-workspace",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": true,
+  "statistics": {
+    "filesConsidered": 1,
+    "filesParsed": 1,
+    "filesWithWarnings": 0,
+    "consumerObservations": 0,
+    "providerObservations": 0,
+    "relationships": 0,
+    "activeFindings": 0,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [],
+  "relationships": [],
+  "findings": [],
+  "warnings": []
+}

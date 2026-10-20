@@ -6,3 +6,4 @@ coverage
 .undrift
 docs/**
 package-lock.json
+tests/fixtures/workspaces/incomplete-coverage/src/server-broken.ts

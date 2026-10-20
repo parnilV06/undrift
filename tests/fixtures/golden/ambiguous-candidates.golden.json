@@ -1,0 +1,845 @@
+{
+  "workspaceId": "ws-ambiguous-candidates",
+  "generation": 1,
+  "generatedAt": "<TIMESTAMP>",
+  "complete": true,
+  "statistics": {
+    "filesConsidered": 3,
+    "filesParsed": 3,
+    "filesWithWarnings": 0,
+    "consumerObservations": 1,
+    "providerObservations": 2,
+    "relationships": 2,
+    "activeFindings": 0,
+    "unresolvedPatterns": 0,
+    "durationMs": "<DURATION>"
+  },
+  "observations": [
+    {
+      "id": "obs:src/client.ts:72-95",
+      "role": "consumer",
+      "languageId": "typescript",
+      "framework": "axios",
+      "extractorId": "axios-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-72",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 72,
+                  "end": 95
+                },
+                "start": {
+                  "line": 3,
+                  "character": 9
+                },
+                "end": {
+                  "line": 3,
+                  "character": 32
+                },
+                "byteRange": {
+                  "start": 72,
+                  "end": 95
+                }
+              },
+              "description": "HTTP method 'GET' from axios.get call"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "items"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/items"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-82",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/client.ts",
+                "range": {
+                  "start": 82,
+                  "end": 94
+                },
+                "start": {
+                  "line": 3,
+                  "character": 19
+                },
+                "end": {
+                  "line": 3,
+                  "character": 31
+                },
+                "byteRange": {
+                  "start": 82,
+                  "end": 94
+                }
+              },
+              "description": "Static URL literal '/api/items' in Axios call"
+            }
+          ]
+        },
+        "responses": []
+      },
+      "source": [
+        {
+          "uri": "src/client.ts",
+          "range": {
+            "start": 72,
+            "end": 95
+          },
+          "start": {
+            "line": 3,
+            "character": 9
+          },
+          "end": {
+            "line": 3,
+            "character": 32
+          },
+          "byteRange": {
+            "start": 72,
+            "end": 95
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/client.ts",
+        "contentHash": "hash-client.ts"
+      },
+      "limitations": []
+    },
+    {
+      "id": "obs:src/server-v1.ts:56-127",
+      "role": "provider",
+      "languageId": "typescript",
+      "framework": "express",
+      "extractorId": "express-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-56",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server-v1.ts",
+                "range": {
+                  "start": 56,
+                  "end": 127
+                },
+                "start": {
+                  "line": 4,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 2
+                },
+                "byteRange": {
+                  "start": 56,
+                  "end": 127
+                }
+              },
+              "description": "HTTP method 'GET' from app.get() route declaration"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "items"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/items"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-64",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server-v1.ts",
+                "range": {
+                  "start": 64,
+                  "end": 76
+                },
+                "start": {
+                  "line": 4,
+                  "character": 8
+                },
+                "end": {
+                  "line": 4,
+                  "character": 20
+                },
+                "byteRange": {
+                  "start": 64,
+                  "end": 76
+                }
+              },
+              "description": "Static route path '/api/items' in Express route declaration"
+            }
+          ]
+        },
+        "responses": [
+          {
+            "statusCode": {
+              "state": "known",
+              "value": 200,
+              "strength": "direct",
+              "evidence": [
+                {
+                  "id": "ev-status-96",
+                  "kind": "framework-convention",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server-v1.ts",
+                    "range": {
+                      "start": 96,
+                      "end": 123
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 2
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 29
+                    },
+                    "byteRange": {
+                      "start": 96,
+                      "end": 123
+                    }
+                  },
+                  "description": "Default HTTP status code 200 for direct res.json()/res.send()"
+                }
+              ]
+            },
+            "body": {
+              "shape": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "name": "version",
+                    "type": {
+                      "kind": "literal",
+                      "value": "v1"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-107",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server-v1.ts",
+                          "range": {
+                            "start": 107,
+                            "end": 120
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 13
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 26
+                          },
+                          "byteRange": {
+                            "start": 107,
+                            "end": 120
+                          }
+                        },
+                        "description": "Field 'version' in response body payload"
+                      }
+                    ]
+                  }
+                ],
+                "additionalProperties": "unknown"
+              },
+              "completeness": "complete",
+              "evidence": [
+                {
+                  "id": "ev-body-105",
+                  "kind": "literal-syntax",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server-v1.ts",
+                    "range": {
+                      "start": 105,
+                      "end": 122
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 28
+                    },
+                    "byteRange": {
+                      "start": 105,
+                      "end": 122
+                    }
+                  },
+                  "description": "Direct object literal response body in Express handler"
+                }
+              ]
+            },
+            "source": [
+              {
+                "uri": "src/server-v1.ts",
+                "range": {
+                  "start": 96,
+                  "end": 123
+                },
+                "start": {
+                  "line": 5,
+                  "character": 2
+                },
+                "end": {
+                  "line": 5,
+                  "character": 29
+                },
+                "byteRange": {
+                  "start": 96,
+                  "end": 123
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "source": [
+        {
+          "uri": "src/server-v1.ts",
+          "range": {
+            "start": 56,
+            "end": 127
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 127
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/server-v1.ts",
+        "contentHash": "hash-server-v1.ts"
+      },
+      "limitations": []
+    },
+    {
+      "id": "obs:src/server-v2.ts:56-127",
+      "role": "provider",
+      "languageId": "typescript",
+      "framework": "express",
+      "extractorId": "express-extractor",
+      "endpoint": {
+        "method": {
+          "state": "known",
+          "value": "GET",
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-method-56",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server-v2.ts",
+                "range": {
+                  "start": 56,
+                  "end": 127
+                },
+                "start": {
+                  "line": 4,
+                  "character": 0
+                },
+                "end": {
+                  "line": 6,
+                  "character": 2
+                },
+                "byteRange": {
+                  "start": 56,
+                  "end": 127
+                }
+              },
+              "description": "HTTP method 'GET' from app.get() route declaration"
+            }
+          ]
+        },
+        "path": {
+          "state": "known",
+          "value": {
+            "segments": [
+              {
+                "kind": "static",
+                "value": "api"
+              },
+              {
+                "kind": "static",
+                "value": "items"
+              }
+            ],
+            "trailingSlash": "absent",
+            "queryHandling": "excluded-from-path",
+            "rawPath": "/api/items"
+          },
+          "strength": "direct",
+          "evidence": [
+            {
+              "id": "ev-path-64",
+              "kind": "literal-syntax",
+              "strength": "direct",
+              "source": {
+                "uri": "src/server-v2.ts",
+                "range": {
+                  "start": 64,
+                  "end": 76
+                },
+                "start": {
+                  "line": 4,
+                  "character": 8
+                },
+                "end": {
+                  "line": 4,
+                  "character": 20
+                },
+                "byteRange": {
+                  "start": 64,
+                  "end": 76
+                }
+              },
+              "description": "Static route path '/api/items' in Express route declaration"
+            }
+          ]
+        },
+        "responses": [
+          {
+            "statusCode": {
+              "state": "known",
+              "value": 200,
+              "strength": "direct",
+              "evidence": [
+                {
+                  "id": "ev-status-96",
+                  "kind": "framework-convention",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server-v2.ts",
+                    "range": {
+                      "start": 96,
+                      "end": 123
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 2
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 29
+                    },
+                    "byteRange": {
+                      "start": 96,
+                      "end": 123
+                    }
+                  },
+                  "description": "Default HTTP status code 200 for direct res.json()/res.send()"
+                }
+              ]
+            },
+            "body": {
+              "shape": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "name": "version",
+                    "type": {
+                      "kind": "literal",
+                      "value": "v2"
+                    },
+                    "presence": "required",
+                    "nullable": "no",
+                    "evidence": [
+                      {
+                        "id": "ev-field-107",
+                        "kind": "literal-syntax",
+                        "strength": "direct",
+                        "source": {
+                          "uri": "src/server-v2.ts",
+                          "range": {
+                            "start": 107,
+                            "end": 120
+                          },
+                          "start": {
+                            "line": 5,
+                            "character": 13
+                          },
+                          "end": {
+                            "line": 5,
+                            "character": 26
+                          },
+                          "byteRange": {
+                            "start": 107,
+                            "end": 120
+                          }
+                        },
+                        "description": "Field 'version' in response body payload"
+                      }
+                    ]
+                  }
+                ],
+                "additionalProperties": "unknown"
+              },
+              "completeness": "complete",
+              "evidence": [
+                {
+                  "id": "ev-body-105",
+                  "kind": "literal-syntax",
+                  "strength": "direct",
+                  "source": {
+                    "uri": "src/server-v2.ts",
+                    "range": {
+                      "start": 105,
+                      "end": 122
+                    },
+                    "start": {
+                      "line": 5,
+                      "character": 11
+                    },
+                    "end": {
+                      "line": 5,
+                      "character": 28
+                    },
+                    "byteRange": {
+                      "start": 105,
+                      "end": 122
+                    }
+                  },
+                  "description": "Direct object literal response body in Express handler"
+                }
+              ]
+            },
+            "source": [
+              {
+                "uri": "src/server-v2.ts",
+                "range": {
+                  "start": 96,
+                  "end": 123
+                },
+                "start": {
+                  "line": 5,
+                  "character": 2
+                },
+                "end": {
+                  "line": 5,
+                  "character": 29
+                },
+                "byteRange": {
+                  "start": 96,
+                  "end": 123
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "source": [
+        {
+          "uri": "src/server-v2.ts",
+          "range": {
+            "start": 56,
+            "end": 127
+          },
+          "start": {
+            "line": 4,
+            "character": 0
+          },
+          "end": {
+            "line": 6,
+            "character": 2
+          },
+          "byteRange": {
+            "start": 56,
+            "end": 127
+          }
+        }
+      ],
+      "snapshot": {
+        "uri": "src/server-v2.ts",
+        "contentHash": "hash-server-v2.ts"
+      },
+      "limitations": []
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:ambiguous:obs:src/client.ts:72-95:obs:src/server-v1.ts:56-127",
+      "state": "unresolved",
+      "matchKind": "ambiguous",
+      "evidence": [
+        {
+          "id": "ev-method-72",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 72,
+              "end": 95
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 72,
+              "end": 95
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-82",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 82,
+              "end": 94
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 31
+            },
+            "byteRange": {
+              "start": 82,
+              "end": 94
+            }
+          },
+          "description": "Static URL literal '/api/items' in Axios call"
+        },
+        {
+          "id": "ev-method-56",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server-v1.ts",
+            "range": {
+              "start": 56,
+              "end": 127
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 127
+            }
+          },
+          "description": "HTTP method 'GET' from app.get() route declaration"
+        },
+        {
+          "id": "ev-path-64",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server-v1.ts",
+            "range": {
+              "start": 64,
+              "end": 76
+            },
+            "start": {
+              "line": 4,
+              "character": 8
+            },
+            "end": {
+              "line": 4,
+              "character": 20
+            },
+            "byteRange": {
+              "start": 64,
+              "end": 76
+            }
+          },
+          "description": "Static route path '/api/items' in Express route declaration"
+        }
+      ],
+      "reasons": [
+        "Ambiguous candidate: multiple exact route and method matches found for consumer 'obs:src/client.ts:72-95'"
+      ],
+      "limitations": [],
+      "findingIds": []
+    },
+    {
+      "id": "rel:ambiguous:obs:src/client.ts:72-95:obs:src/server-v2.ts:56-127",
+      "state": "unresolved",
+      "matchKind": "ambiguous",
+      "evidence": [
+        {
+          "id": "ev-method-72",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 72,
+              "end": 95
+            },
+            "start": {
+              "line": 3,
+              "character": 9
+            },
+            "end": {
+              "line": 3,
+              "character": 32
+            },
+            "byteRange": {
+              "start": 72,
+              "end": 95
+            }
+          },
+          "description": "HTTP method 'GET' from axios.get call"
+        },
+        {
+          "id": "ev-path-82",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/client.ts",
+            "range": {
+              "start": 82,
+              "end": 94
+            },
+            "start": {
+              "line": 3,
+              "character": 19
+            },
+            "end": {
+              "line": 3,
+              "character": 31
+            },
+            "byteRange": {
+              "start": 82,
+              "end": 94
+            }
+          },
+          "description": "Static URL literal '/api/items' in Axios call"
+        },
+        {
+          "id": "ev-method-56",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server-v2.ts",
+            "range": {
+              "start": 56,
+              "end": 127
+            },
+            "start": {
+              "line": 4,
+              "character": 0
+            },
+            "end": {
+              "line": 6,
+              "character": 2
+            },
+            "byteRange": {
+              "start": 56,
+              "end": 127
+            }
+          },
+          "description": "HTTP method 'GET' from app.get() route declaration"
+        },
+        {
+          "id": "ev-path-64",
+          "kind": "literal-syntax",
+          "strength": "direct",
+          "source": {
+            "uri": "src/server-v2.ts",
+            "range": {
+              "start": 64,
+              "end": 76
+            },
+            "start": {
+              "line": 4,
+              "character": 8
+            },
+            "end": {
+              "line": 4,
+              "character": 20
+            },
+            "byteRange": {
+              "start": 64,
+              "end": 76
+            }
+          },
+          "description": "Static route path '/api/items' in Express route declaration"
+        }
+      ],
+      "reasons": [
+        "Ambiguous candidate: multiple exact route and method matches found for consumer 'obs:src/client.ts:72-95'"
+      ],
+      "limitations": [],
+      "findingIds": []
+    }
+  ],
+  "findings": [],
+  "warnings": []
+}

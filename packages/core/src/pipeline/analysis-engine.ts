@@ -1,6 +1,3 @@
-// TODO(implementation): Implement the end-to-end AnalysisEngine pipeline coordinator
-// executing workspace discovery, AST parsing, AST extraction, candidate matching,
-// rule evaluation, explanation generation, and report assembly.
-// No engine pipeline has been implemented yet.
+// Re-export AnalysisEngine from engine/analysis-engine as specified in LLD.md Section 8.1–8.2.
 
-export {};
+export { AnalysisEngine } from "../engine/analysis-engine";
