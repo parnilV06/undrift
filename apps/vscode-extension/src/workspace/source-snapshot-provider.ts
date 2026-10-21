@@ -216,23 +216,36 @@ export interface WorkspaceSnapshotOptions {
  * Creates the default accessor delegating to the live vscode extension API.
  */
 function createDefaultVsCodeAccessor(): WorkspaceAccessor {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const vscode = require("vscode");
+  let vscode: typeof import("vscode") | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    vscode = require("vscode");
+  } catch {
+    // Not running inside live VS Code extension host
+  }
+
   return {
-    getWorkspaceFolders: () => vscode.workspace.workspaceFolders,
+    getWorkspaceFolders: () => vscode?.workspace?.workspaceFolders,
     findFiles: async (include, exclude, maxResults, token) =>
-      vscode.workspace.findFiles(
-        include,
-        exclude,
-        maxResults,
-        token as import("vscode").CancellationToken
-      ),
-    readFile: async (uri) =>
-      vscode.workspace.fs.readFile(
+      vscode
+        ? vscode.workspace.findFiles(
+            include,
+            exclude,
+            maxResults,
+            token as import("vscode").CancellationToken
+          )
+        : [],
+    readFile: async (uri) => {
+      if (!vscode?.workspace?.fs) {
+        throw new Error("VS Code workspace filesystem is not available.");
+      }
+      return vscode.workspace.fs.readFile(
         typeof uri === "string" ? vscode.Uri.parse(uri) : (uri as import("vscode").Uri)
-      ),
-    getOpenDocuments: () => vscode.workspace.textDocuments,
-    getConfiguration: (section) => vscode.workspace.getConfiguration(section)
+      );
+    },
+    getOpenDocuments: () => vscode?.workspace?.textDocuments ?? [],
+    getConfiguration: (section) =>
+      vscode ? vscode.workspace.getConfiguration(section) : { get: () => undefined }
   };
 }
 
