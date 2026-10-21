@@ -1825,10 +1825,9 @@ Every VS Code listener, tree, diagnostic collection, status item, cancellation s
 
 The extension implements `StatePersistencePort` using VS Code-managed workspace storage:
 
-1. **Storage Mechanism and Candidate API Responsibilities:**
-   - `vscode.ExtensionContext.storageUri`: the workspace-specific storage directory on disk, evaluated as the candidate location for persisting structured JSON files for the latest complete analysis snapshot (`AnalysisSnapshot`) and finding lifecycle history (`FindingLifecycleHistory`).
-   - `vscode.ExtensionContext.workspaceState`: VS Code-managed workspace-scoped key-value persistence, evaluated as a possible mechanism for lightweight metadata, generation IDs, analysis timestamps, and fast lookup indexes.
-   - **Provisional Allocation & Reconciliation:** The exact division of storage duties and coordination between `storageUri` and `workspaceState` (including fallback behavior if `storageUri` is undefined in virtual or untitled workspaces) is provisional and subject to POC-F validation. If both mechanisms are utilized, duplicated metadata in `workspaceState` must never become an independent source of truth and must remain fully recoverable or reconcilable from the primary persistent records.
+1. **Storage Mechanism and API Allocation (POC-F Decision):**
+   - `vscode.ExtensionContext.storageUri`: the workspace-specific storage directory on disk, established as the authoritative location for persisting structured JSON files for the latest complete analysis snapshot (`AnalysisSnapshot`) and finding lifecycle history (`FindingLifecycleHistory`).
+   - **POC-F Concrete Decision:** Structured JSON files in `storageUri` partitioned by deterministic, filesystem-safe workspace keys (`workspaces/<workspaceKey>/`) provide complete, crash-safe persistence via write-to-temporary-file and rename. Duplicate metadata in `workspaceState` is omitted to eliminate split-brain synchronization hazards. If `storageUri` is undefined (e.g. untitled or virtual workspaces), storage operations explicitly report `StorageUnavailableError` rather than silently fabricating empty state.
 2. **Workspace Isolation:** All persisted keys/files are partitioned by the workspace folder identity. State cannot leak between different repository windows.
 3. **Crash-Safe and Recoverable Writes:** Storage updates require crash-safe and recoverable persistence. A write-to-temporary-file and rename pattern in `storageUri` (or atomic key updates in `workspaceState`) is the candidate implementation, but universal atomicity cannot be assumed across all supported extension-host filesystem environments; POC-F will validate cross-environment reliability. Interrupted writes must never leave partial or corrupt data.
 4. **Schema Versioning & Recovery:** Each persisted payload contains a `schemaVersion` header. If stored data is corrupted, malformed, or of an unsupported version, UNDRIFT logs a warning, quarantines the invalid data, and initializes a clean baseline. It never fabricates history or accepts corrupt records.
@@ -2195,7 +2194,7 @@ Verify open-buffer precedence, debounce/cancel behavior, generation checks, acce
 
 Validate workspace-scoped storage serialization, session restoration on extension activation, snapshot-to-snapshot reconciliation, coverage failure gating, and retention pruning.
 
-**Decision:** evaluate the provisional allocation between `ExtensionContext.storageUri` file persistence and `ExtensionContext.workspaceState` key-value metadata, validate crash-safe write performance and filesystem reliability across supported environments, ensure metadata recovery, and confirm that snapshot and history persistence operate reliably without performance degradation or data corruption.
+**Decision (Resolved in Chunk 4.1):** `ExtensionContext.storageUri` serves as the authoritative, workspace-scoped persistent storage provider using structured JSON files (`snapshot.json`, `history.json`) partitioned by deterministic workspace hash/key. Write-to-temp-and-rename guarantees crash-safe updates, malformed/incompatible records are safely quarantined, and unavailable `storageUri` is explicitly reported. `workspaceState` is not needed as secondary metadata storage, eliminating split-brain desynchronization risks.
 
 ---
 
