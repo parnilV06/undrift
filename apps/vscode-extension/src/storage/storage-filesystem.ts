@@ -137,6 +137,7 @@ export interface InMemoryStorageFileSystem extends StorageFileSystem {
     failOnWrite?: boolean;
     failOnRename?: boolean;
     failOnRead?: boolean;
+    failOnDelete?: boolean;
   };
 }
 
@@ -180,6 +181,9 @@ export function createInMemoryStorageFileSystem(): InMemoryStorageFileSystem {
       files.set(key, new Uint8Array(content));
     },
     delete: async (uri, options) => {
+      if (fsImpl.faultInjection?.failOnDelete) {
+        throw new Error("Fault injected: delete failed");
+      }
       const key = normalizeKey(uri);
       if (options?.recursive) {
         for (const k of Array.from(files.keys())) {
