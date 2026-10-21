@@ -11,10 +11,12 @@ import type {
 } from "@undrift/core";
 import { LIFECYCLE_HISTORY_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION } from "@undrift/core";
 import {
+  CorruptedRecordError,
   createInMemoryStorageFileSystem,
   type InMemoryStorageFileSystem,
   IncompleteSnapshotError,
   type StorageLogger,
+  StorageIOError,
   StorageUnavailableError,
   WorkspaceMismatchError,
   WorkspaceStatePersistenceAdapter
@@ -408,7 +410,7 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
   });
 
   // 11. Malformed JSON and unsupported schema recovery
-  it("11. recovers safely from malformed JSON and unsupported schema versions by quarantining", async () => {
+  it("11. surfaces typed errors and quarantines malformed JSON or unsupported schema versions", async () => {
     const ws: WorkspaceId = "ws-corruption";
     const snapshot = createSampleSnapshot(ws);
     await adapter.saveSnapshot(ws, snapshot);
@@ -422,16 +424,22 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     expect(snapshotFile).toBeDefined();
     inMemoryFs.files.set(snapshotFile!, new TextEncoder().encode("{ malformed json: true, "));
 
-    // loadLatestSnapshot should log warning, quarantine file, and return undefined
-    const recoveredSnapshot = await adapter.loadLatestSnapshot(ws);
-    expect(recoveredSnapshot).toBeUndefined();
-    expect(logger.warnings.some((w) => w.message.includes("Malformed JSON"))).toBe(true);
+    // loadLatestSnapshot should log warning, quarantine file, and throw CorruptedRecordError
+    await expect(adapter.loadLatestSnapshot(ws)).rejects.toThrow(CorruptedRecordError);
+    expect(logger.warnings.some((w) => w.message.includes("Malformed JSON in snapshot file"))).toBe(
+      true
+    );
 
     // Corrupted file moved to quarantine
+    expect(inMemoryFs.files.has(snapshotFile!)).toBe(false);
     const quarantined = Array.from(inMemoryFs.files.keys()).some(
       (k) => k.includes("quarantine") && k.includes(".corrupt.")
     );
     expect(quarantined).toBe(true);
+
+    // Subsequent load behaves consistently with a missing record
+    const subsequentSnapshot = await adapter.loadLatestSnapshot(ws);
+    expect(subsequentSnapshot).toBeUndefined();
 
     // Now test unsupported schema version in history
     await adapter.appendLifecycleEvents(ws, [createSampleEvent(ws, "evt-ok")]);
@@ -446,15 +454,35 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     });
     inMemoryFs.files.set(historyFile!, new TextEncoder().encode(badSchemaPayload));
 
-    const recoveredHistory = await adapter.loadLifecycleHistory(ws);
-    expect(recoveredHistory).toEqual([]);
+    // loadLifecycleHistory should log warning, quarantine file, and throw CorruptedRecordError
+    await expect(adapter.loadLifecycleHistory(ws)).rejects.toThrow(CorruptedRecordError);
     expect(
       logger.warnings.some((w) => w.message.includes("Unsupported lifecycle history schema"))
     ).toBe(true);
+
+    // Corrupted history file removed from original path
+    expect(inMemoryFs.files.has(historyFile!)).toBe(false);
+
+    // Subsequent load behaves consistently with a missing record
+    const subsequentHistory = await adapter.loadLifecycleHistory(ws);
+    expect(subsequentHistory).toEqual([]);
+
+    // Also test malformed JSON in history
+    await adapter.appendLifecycleEvents(ws, [createSampleEvent(ws, "evt-ok-2")]);
+    await adapter.clearCache();
+    const historyFile2 = Array.from(inMemoryFs.files.keys()).find((k) =>
+      k.endsWith("history.json")
+    );
+    expect(historyFile2).toBeDefined();
+    inMemoryFs.files.set(historyFile2!, new TextEncoder().encode("bad json ["));
+
+    await expect(adapter.loadLifecycleHistory(ws)).rejects.toThrow(CorruptedRecordError);
+    expect(inMemoryFs.files.has(historyFile2!)).toBe(false);
+    expect(await adapter.loadLifecycleHistory(ws)).toEqual([]);
   });
 
   // 12. Wrong workspace identity rejection
-  it("12. rejects records and operations with mismatched workspace identities", async () => {
+  it("12. rejects records and operations with mismatched workspace identities and surfaces typed error", async () => {
     const ws1: WorkspaceId = "workspace-1";
     const ws2: WorkspaceId = "workspace-2";
 
@@ -483,18 +511,22 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     });
     inMemoryFs.files.set(snapshotFile!, new TextEncoder().encode(modifiedPayload));
 
-    const result = await adapter.loadLatestSnapshot(ws1);
-    expect(result).toBeUndefined();
+    // Must surface WorkspaceMismatchError to caller
+    await expect(adapter.loadLatestSnapshot(ws1)).rejects.toThrow(WorkspaceMismatchError);
     expect(
       logger.warnings.some((w) => w.message.includes("does not match expected workspace"))
     ).toBe(true);
+    expect(inMemoryFs.files.has(snapshotFile!)).toBe(false);
+
+    // Subsequent load behaves as missing record
+    expect(await adapter.loadLatestSnapshot(ws1)).toBeUndefined();
   });
 
   // 13. Invalid events are not accepted as valid history
-  it("13. rejects invalid lifecycle events and quarantined corrupted event records", async () => {
+  it("13. rejects invalid lifecycle events and surfaces typed errors for corrupted records on disk", async () => {
     const ws: WorkspaceId = "ws-invalid-events";
 
-    // Rejects event with invalid transition kind
+    // Rejects event with invalid transition kind during append
     const badEvent = {
       ...createSampleEvent(ws, "evt-bad"),
       transitionKind: "invalid-transition" as unknown as FindingLifecycleEvent["transitionKind"]
@@ -505,6 +537,32 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     // Verify empty
     const history = await adapter.loadLifecycleHistory(ws);
     expect(history).toEqual([]);
+
+    // Persist a valid event, then corrupt the payload on disk with an invalid event state
+    await adapter.appendLifecycleEvents(ws, [createSampleEvent(ws, "evt-valid")]);
+    await adapter.clearCache();
+
+    const historyFile = Array.from(inMemoryFs.files.keys()).find((k) => k.endsWith("history.json"));
+    expect(historyFile).toBeDefined();
+
+    const corruptedHistory = JSON.stringify({
+      schemaVersion: LIFECYCLE_HISTORY_SCHEMA_VERSION,
+      workspaceId: ws,
+      events: [
+        {
+          ...createSampleEvent(ws, "evt-corrupt"),
+          newState: "invalid-state-name"
+        }
+      ]
+    });
+    inMemoryFs.files.set(historyFile!, new TextEncoder().encode(corruptedHistory));
+
+    // Must surface CorruptedRecordError to caller
+    await expect(adapter.loadLifecycleHistory(ws)).rejects.toThrow(CorruptedRecordError);
+    expect(inMemoryFs.files.has(historyFile!)).toBe(false);
+
+    // Subsequent load returns empty array
+    expect(await adapter.loadLifecycleHistory(ws)).toEqual([]);
   });
 
   // 14. Incomplete snapshots cannot replace valid complete snapshots
@@ -613,6 +671,34 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     for (let i = 0; i < concurrencyCount; i++) {
       expect(eventIds).toContain(`evt-concurrent-${i}`);
     }
+  });
+
+  // 18. Failed quarantine or storage I/O operation is not reported as successful empty history
+  it("18. never reports a failed storage I/O or failed quarantine operation as healthy empty data", async () => {
+    const ws: WorkspaceId = "ws-io-failure";
+
+    // 1. Storage read I/O failure
+    inMemoryFs.faultInjection = { failOnRead: true };
+    await expect(adapter.loadLatestSnapshot(ws)).rejects.toThrow(StorageIOError);
+    await expect(adapter.loadLifecycleHistory(ws)).rejects.toThrow(StorageIOError);
+    inMemoryFs.faultInjection = undefined;
+
+    // 2. Failed quarantine (both rename and delete fail)
+    const snap = createSampleSnapshot(ws);
+    await adapter.saveSnapshot(ws, snap);
+    await adapter.clearCache();
+
+    const snapshotFile = Array.from(inMemoryFs.files.keys()).find((k) =>
+      k.endsWith("snapshot.json")
+    );
+    expect(snapshotFile).toBeDefined();
+    inMemoryFs.files.set(snapshotFile!, new TextEncoder().encode("{ broken JSON"));
+
+    // Inject failure on both rename and delete
+    inMemoryFs.faultInjection = { failOnRename: true, failOnDelete: true };
+
+    await expect(adapter.loadLatestSnapshot(ws)).rejects.toThrow(StorageIOError);
+    expect(logger.errors.some((e) => e.message.includes("Failed to quarantine"))).toBe(true);
   });
 });
 

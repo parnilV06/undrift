@@ -266,13 +266,20 @@ export class WorkspaceStatePersistenceAdapter implements StatePersistencePort {
     } catch (qErr) {
       try {
         await this.fs.delete(fileUri, { recursive: false });
-      } catch {
-        // Best effort
+        this.logger.warn(
+          `Could not rename corrupted file ${fileUri.toString()} to quarantine, removed it: ${reason}`,
+          qErr
+        );
+      } catch (delErr) {
+        this.logger.error(
+          `Failed to quarantine or remove corrupted file ${fileUri.toString()}: ${reason}`,
+          delErr
+        );
+        throw new StorageIOError(
+          `Failed to quarantine corrupted file ${fileUri.toString()}: ${delErr instanceof Error ? delErr.message : String(delErr)}`,
+          delErr
+        );
       }
-      this.logger.warn(
-        `Could not quarantine corrupted file ${fileUri.toString()}, removed it: ${reason}`,
-        qErr
-      );
     }
   }
 
@@ -307,25 +314,31 @@ export class WorkspaceStatePersistenceAdapter implements StatePersistencePort {
       const text = Buffer.from(bytes).toString("utf8");
       raw = JSON.parse(text);
     } catch (parseErr) {
-      this.logger.warn(
-        `Malformed JSON in lifecycle history for workspace ${workspaceId}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
-      );
+      const msg = `Malformed JSON in lifecycle history for workspace ${workspaceId}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`;
+      this.logger.warn(msg);
       await this.quarantineCorruptedFile(historyUri, "Malformed JSON");
-      return [];
+      const entry = this.memoryCache.get(workspaceId);
+      if (entry) {
+        entry.history = undefined;
+      }
+      throw new CorruptedRecordError(msg, parseErr);
     }
 
     let validated: FindingLifecycleHistory;
     try {
       validated = validateLifecycleHistory(raw, workspaceId);
     } catch (valErr) {
-      this.logger.warn(
-        `Invalid lifecycle history record for workspace ${workspaceId}: ${valErr instanceof Error ? valErr.message : String(valErr)}`
-      );
+      const msg = `Invalid lifecycle history record for workspace ${workspaceId}: ${valErr instanceof Error ? valErr.message : String(valErr)}`;
+      this.logger.warn(msg);
       await this.quarantineCorruptedFile(
         historyUri,
         valErr instanceof Error ? valErr.message : "Validation error"
       );
-      return [];
+      const entry = this.memoryCache.get(workspaceId);
+      if (entry) {
+        entry.history = undefined;
+      }
+      throw valErr;
     }
 
     const entry = this.memoryCache.get(workspaceId) ?? {};
@@ -365,25 +378,31 @@ export class WorkspaceStatePersistenceAdapter implements StatePersistencePort {
       const text = Buffer.from(bytes).toString("utf8");
       raw = JSON.parse(text);
     } catch (parseErr) {
-      this.logger.warn(
-        `Malformed JSON in snapshot file for workspace ${workspaceId}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
-      );
+      const msg = `Malformed JSON in snapshot file for workspace ${workspaceId}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`;
+      this.logger.warn(msg);
       await this.quarantineCorruptedFile(snapshotUri, "Malformed JSON");
-      return undefined;
+      const entry = this.memoryCache.get(workspaceId);
+      if (entry) {
+        entry.snapshot = undefined;
+      }
+      throw new CorruptedRecordError(msg, parseErr);
     }
 
     let validated: AnalysisSnapshot;
     try {
       validated = validateSnapshot(raw, workspaceId);
     } catch (valErr) {
-      this.logger.warn(
-        `Invalid snapshot record for workspace ${workspaceId}: ${valErr instanceof Error ? valErr.message : String(valErr)}`
-      );
+      const msg = `Invalid snapshot record for workspace ${workspaceId}: ${valErr instanceof Error ? valErr.message : String(valErr)}`;
+      this.logger.warn(msg);
       await this.quarantineCorruptedFile(
         snapshotUri,
         valErr instanceof Error ? valErr.message : "Validation error"
       );
-      return undefined;
+      const entry = this.memoryCache.get(workspaceId);
+      if (entry) {
+        entry.snapshot = undefined;
+      }
+      throw valErr;
     }
 
     const entry = this.memoryCache.get(workspaceId) ?? {};
