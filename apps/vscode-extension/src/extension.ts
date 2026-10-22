@@ -103,7 +103,11 @@ export function activate(context: vscode.ExtensionContext): void {
     logger?.warn("Session restoration encountered an error during activation", err);
   });
 
-  // 11. Register undrift.scanWorkspace command
+  // 11. Register workspace change events with the analysis scheduler
+  const eventDisposables = coordinator.getScheduler().registerWorkspaceEvents();
+  context.subscriptions.push(eventDisposables);
+
+  // 12. Register undrift.scanWorkspace command
   const scanCommand = vscode.commands.registerCommand("undrift.scanWorkspace", async () => {
     if (!coordinator) {
       void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
@@ -111,7 +115,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     try {
-      const outcome = await coordinator.runWorkspaceScan();
+      const outcome = await coordinator.getScheduler().runImmediateScan();
 
       switch (outcome.status) {
         case "success": {
@@ -138,6 +142,16 @@ export function activate(context: vscode.ExtensionContext): void {
           void vscode.window.showWarningMessage(
             formatIncompleteScanMessage(filesCount, findingsCount, failuresCount)
           );
+          break;
+        }
+
+        case "cancelled": {
+          logger?.info("UNDRIFT: Workspace analysis was cancelled.");
+          break;
+        }
+
+        case "superseded": {
+          logger?.info("UNDRIFT: Workspace analysis was superseded by a newer scan.");
           break;
         }
 
