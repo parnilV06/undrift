@@ -1,5 +1,8 @@
-// TODO(implementation): Manage VS Code DiagnosticCollection, translating
-// UNDRIFT drift findings and warnings into in-editor diagnostics.
-// No diagnostics mapping logic has been implemented yet.
+// DiagnosticCollection abstractions and utilities for UNDRIFT.
 
-export {};
+export {
+  DIAGNOSTIC_COLLECTION_NAME,
+  DIAGNOSTIC_SOURCE,
+  type DiagnosticCollectionLike,
+  InMemoryDiagnosticCollection
+} from "./diagnostic-provider";
