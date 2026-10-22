@@ -22,7 +22,8 @@ import type {
 import {
   LIFECYCLE_HISTORY_SCHEMA_VERSION,
   SNAPSHOT_SCHEMA_VERSION,
-  StateReconciler
+  StateReconciler,
+  toPersistedFindingRecord
 } from "@undrift/core";
 import { AnalysisCoordinator, deriveWorkspaceId } from "../../apps/vscode-extension/src/activation";
 import type { ExtensionLogger } from "../../apps/vscode-extension/src/logging";
@@ -1599,5 +1600,205 @@ describe("Phase 4, Chunk 4.3: Session Restoration & Snapshot Reconciliation", ()
     });
 
     await expect(coordinator2.restoreSession()).rejects.toThrow(StorageIOError);
+  });
+
+  // 26. Regression test: normal completed scans with unchanged findings and generation gaps are not falsely classified as interrupted writes
+  it("26. ensures normal completed scans with unchanged findings and generation gaps are not falsely classified as interrupted writes", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    await coordinator.restoreSession();
+
+    // Scan 1: initial detection of f1 -> generation 1, 1 event emitted
+    const outcome1 = await coordinator.runWorkspaceScan();
+    expect(outcome1.status).toBe("success");
+    expect(outcome1.generation).toBe(1);
+    expect(outcome1.reconciliation?.eventsEmitted).toHaveLength(1);
+    expect(outcome1.reconciliation?.eventsEmitted[0].triggerGeneration).toBe(1);
+
+    // Scan 2: unchanged findings -> generation 2, 0 events emitted
+    const outcome2 = await coordinator.runWorkspaceScan();
+    expect(outcome2.status).toBe("success");
+    expect(outcome2.generation).toBe(2);
+    expect(outcome2.reconciliation?.eventsEmitted).toHaveLength(0);
+    expect(outcome2.reconciliation?.unchangedFindingCount).toBe(1);
+
+    // Scan 3: unchanged findings -> generation 3, 0 events emitted
+    const outcome3 = await coordinator.runWorkspaceScan();
+    expect(outcome3.status).toBe("success");
+    expect(outcome3.generation).toBe(3);
+    expect(outcome3.reconciliation?.eventsEmitted).toHaveLength(0);
+    expect(outcome3.reconciliation?.unchangedFindingCount).toBe(1);
+
+    // Inspect disk state: snapshot generation is 3, while history triggerGeneration is 1!
+    const diskSnapshot = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(diskSnapshot?.generation).toBe(3);
+
+    const diskHistory = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(diskHistory).toHaveLength(1);
+    expect(diskHistory[0].triggerGeneration).toBe(1);
+
+    // Simulate restart with a fresh AnalysisCoordinator instance pointing to the same persistence adapter
+    const restartedCoordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    const restoredState = await restartedCoordinator.restoreSession();
+
+    // Verify clean restoration: must NOT be quarantined, marked corrupted, or treated as interrupted write
+    expect(restoredState.status).toBe("restored");
+    expect(restoredState.seededGeneration).toBe(3);
+    expect(restoredState.snapshot?.generation).toBe(3);
+    expect(restoredState.history).toHaveLength(1);
+    expect(restoredState.warningMessage).toBeUndefined();
+
+    expect(restartedCoordinator.getLastKnownSnapshot()?.generation).toBe(3);
+    expect(restartedCoordinator.getLastKnownHistory()).toHaveLength(1);
+
+    // Subsequent scan on restarted coordinator resumes monotonically from generation 3 -> generation 4
+    const outcome4 = await restartedCoordinator.runWorkspaceScan();
+    expect(outcome4.status).toBe("success");
+    expect(outcome4.generation).toBe(4);
+    expect(outcome4.reconciliation?.previousSnapshot?.generation).toBe(3);
+    expect(outcome4.reconciliation?.unchangedFindingCount).toBe(1);
+    expect(outcome4.reconciliation?.eventsEmitted).toHaveLength(0);
+    expect(outcome4.persistenceStatus).toBe("saved");
+  });
+
+  // 27. Regression test: runtime append failure with existing prior snapshot rolls back to prior snapshot and retries cleanly
+  it("27. rolls back to prior snapshot on lifecycle-event append failure when prior snapshot exists and retries cleanly", async () => {
+    const persistence = createPersistenceAdapter();
+
+    // Seed prior snapshot at generation 10 with finding f1
+    const priorFinding = createSampleFinding("f1");
+    const priorSnapshot = createSampleSnapshot(testWorkspaceId, 10, [
+      toPersistedFindingRecord(priorFinding, 1700000000000, 1700000010000)
+    ]);
+    await persistence.saveSnapshot(testWorkspaceId, priorSnapshot);
+
+    const initialHistory: FindingLifecycleEvent[] = [
+      {
+        eventId: "evt:1:1",
+        workspaceId: testWorkspaceId,
+        findingId: "finding:f1",
+        transitionKind: "detected",
+        observedAt: 1700000000000,
+        triggerGeneration: 1,
+        newState: "active"
+      }
+    ];
+    await persistence.appendLifecycleEvents(testWorkspaceId, initialHistory);
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    // Engine detects f1 and new finding f2
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1"), createSampleFinding("f2")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    // Inject append failure on next scan
+    let failAppend = true;
+    const realAppend = persistence.appendLifecycleEvents.bind(persistence);
+    persistence.appendLifecycleEvents = async (ws, evts) => {
+      if (failAppend) {
+        throw new StorageIOError("Simulated disk error appending lifecycle events");
+      }
+      return realAppend(ws, evts);
+    };
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    await coordinator.restoreSession();
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(10);
+
+    // Scan 1: generation 11, append fails
+    const outcome1 = await coordinator.runWorkspaceScan();
+    expect(outcome1.status).toBe("success");
+    expect(outcome1.generation).toBe(11);
+    expect(outcome1.persistenceStatus).toBe("failed");
+    expect(outcome1.persistenceError).toContain("appending lifecycle events");
+
+    // In-memory coordinator snapshot is preserved at generation 10
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(10);
+    expect(coordinator.getLastKnownSnapshot()?.findings).toHaveLength(1);
+
+    // Disk snapshot is verified rolled back to generation 10
+    persistence.appendLifecycleEvents = realAppend;
+    const diskSnapshotAfterFail = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(diskSnapshotAfterFail?.generation).toBe(10);
+    expect(diskSnapshotAfterFail?.findings).toHaveLength(1);
+    expect(diskSnapshotAfterFail?.findings[0].id).toBe("finding:f1");
+
+    // Disk history remains untouched with 1 event
+    const diskHistoryAfterFail = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(diskHistoryAfterFail).toHaveLength(1);
+
+    // Scan 2 (retry): transient failure cleared
+    failAppend = false;
+    const outcome2 = await coordinator.runWorkspaceScan();
+    expect(outcome2.status).toBe("success");
+    expect(outcome2.generation).toBe(12);
+    expect(outcome2.persistenceStatus).toBe("saved");
+
+    // Disk snapshot safely advanced to generation 12 with both findings
+    const finalDiskSnapshot = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(finalDiskSnapshot?.generation).toBe(12);
+    expect(finalDiskSnapshot?.findings).toHaveLength(2);
+
+    // Disk history has exactly 2 events: f1 detected at gen 1, f2 detected at gen 12
+    const finalDiskHistory = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(finalDiskHistory).toHaveLength(2);
+    expect(finalDiskHistory.map((e) => e.findingId).sort()).toEqual(["finding:f1", "finding:f2"]);
+    expect(finalDiskHistory.find((e) => e.findingId === "finding:f2")?.triggerGeneration).toBe(12);
   });
 });
