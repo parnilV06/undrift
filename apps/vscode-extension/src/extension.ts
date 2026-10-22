@@ -8,6 +8,7 @@ import { JsTsAnalyzer } from "@undrift/analyzer-js-ts";
 import { AnalysisEngine, StateReconciler } from "@undrift/core";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
+import { DriftDiagnosticProvider } from "./diagnostics";
 import { OutputChannelLogger } from "./logging";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
 import { WorkspaceManager } from "./workspace";
@@ -37,6 +38,7 @@ let analyzer: JsTsAnalyzer | undefined;
 let engine: AnalysisEngine | undefined;
 let persistence: WorkspaceStatePersistenceAdapter | undefined;
 let reconciler: StateReconciler | undefined;
+let diagnosticProvider: DriftDiagnosticProvider | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 
 /**
@@ -88,13 +90,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // 8. Instantiate state reconciler
   reconciler = new StateReconciler();
 
-  // 9. Instantiate AnalysisCoordinator
+  // 9. Instantiate VS Code diagnostic provider
+  diagnosticProvider = new DriftDiagnosticProvider({ logger });
+  context.subscriptions.push(diagnosticProvider);
+
+  // 10. Instantiate AnalysisCoordinator
   coordinator = new AnalysisCoordinator({
     workspaceManager,
     engine,
     ownsEngine: true,
     persistence,
     reconciler,
+    diagnosticProvider,
     logger
   });
 
@@ -192,6 +199,15 @@ export async function deactivate(): Promise<void> {
       // Ignore cleanup error on deactivation
     }
     coordinator = undefined;
+  }
+
+  if (diagnosticProvider) {
+    try {
+      diagnosticProvider.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    diagnosticProvider = undefined;
   }
 
   persistence = undefined;

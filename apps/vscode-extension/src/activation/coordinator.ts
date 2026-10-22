@@ -25,6 +25,7 @@ import type {
 import { AnalysisEngine, StateReconciler } from "@undrift/core";
 import { JsTsAnalyzer } from "@undrift/analyzer-js-ts";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
+import type { DriftDiagnosticProvider } from "../diagnostics";
 import type { ExtensionLogger } from "../logging/output-channel";
 import {
   CorruptedRecordError,
@@ -209,6 +210,11 @@ export interface AnalysisCoordinatorOptions {
    * Optional debounce delay in milliseconds for coalescing live source changes.
    */
   debounceDelayMs?: number;
+
+  /**
+   * Optional diagnostic provider port for publishing accepted findings to VS Code diagnostics.
+   */
+  diagnosticProvider?: DriftDiagnosticProvider;
 }
 
 /**
@@ -280,6 +286,12 @@ export class AnalysisCoordinator {
   /** Debounced analysis scheduler. */
   private readonly scheduler: AnalysisScheduler;
 
+  /** Diagnostic provider for publishing accepted findings to VS Code diagnostics. */
+  private diagnosticProvider?: DriftDiagnosticProvider;
+
+  /** Listeners notified of accepted or finalized analysis outcomes. */
+  private readonly analysisResultListeners = new Set<(result: CoordinatorAnalysisResult) => void>();
+
   private disposed = false;
 
   constructor(options: AnalysisCoordinatorOptions = {}) {
@@ -289,6 +301,7 @@ export class AnalysisCoordinator {
     this.persistence = options.persistence;
     this.reconciler = options.reconciler ?? new StateReconciler();
     this.retentionPolicy = options.retentionPolicy;
+    this.diagnosticProvider = options.diagnosticProvider;
 
     this.scheduler = new AnalysisScheduler({
       coordinator: this,
@@ -316,6 +329,61 @@ export class AnalysisCoordinator {
    */
   public getScheduler(): AnalysisScheduler {
     return this.scheduler;
+  }
+
+  /**
+   * Returns the attached diagnostic provider if configured.
+   */
+  public getDiagnosticProvider(): DriftDiagnosticProvider | undefined {
+    return this.diagnosticProvider;
+  }
+
+  /**
+   * Attaches or updates the diagnostic provider.
+   */
+  public setDiagnosticProvider(provider?: DriftDiagnosticProvider): void {
+    this.diagnosticProvider = provider;
+  }
+
+  /**
+   * Registers a listener notified on any accepted or finalized scan result.
+   */
+  public onAnalysisCompleted(listener: (result: CoordinatorAnalysisResult) => void): {
+    dispose(): void;
+  } {
+    this.analysisResultListeners.add(listener);
+    return {
+      dispose: () => {
+        this.analysisResultListeners.delete(listener);
+      }
+    };
+  }
+
+  /**
+   * Emits an analysis outcome to the diagnostic provider and registered listeners.
+   */
+  private emitAnalysisOutcome(outcome: CoordinatorAnalysisResult): CoordinatorAnalysisResult {
+    if (this.disposed) {
+      return outcome;
+    }
+
+    if (this.diagnosticProvider) {
+      try {
+        this.diagnosticProvider.updateDiagnostics(outcome);
+      } catch (err) {
+        this.logger?.error("Diagnostic provider failed to update diagnostics", err);
+      }
+    }
+
+    for (const listener of Array.from(this.analysisResultListeners)) {
+      try {
+        listener(outcome);
+      } catch (err) {
+        this.logger?.error("Analysis result listener failed", err);
+      }
+    }
+
+    return outcome;
   }
 
   /**
@@ -569,6 +637,15 @@ export class AnalysisCoordinator {
       this.lastKnownSnapshots.set(workspaceId, snapshot);
       this.lastKnownHistories.set(workspaceId, history);
       this.setInitialGeneration(workspaceId, snapshot.generation);
+
+      if (this.diagnosticProvider) {
+        try {
+          this.diagnosticProvider.publishSnapshot(workspaceId, snapshot);
+        } catch (err) {
+          this.logger?.warn("Failed to publish restored snapshot diagnostics", err);
+        }
+      }
+
       this.logger?.info(
         `Restored session for workspace ${workspaceId}: generation ${snapshot.generation}, ${snapshot.findings.length} findings, ${history.length} historical events.`
       );
@@ -584,6 +661,15 @@ export class AnalysisCoordinator {
       this.lastKnownSnapshots.delete(workspaceId);
       this.lastKnownHistories.set(workspaceId, history);
       this.setInitialGeneration(workspaceId, 0);
+
+      if (this.diagnosticProvider) {
+        try {
+          this.diagnosticProvider.clearForWorkspace(workspaceId);
+        } catch (err) {
+          this.logger?.warn("Failed to clear workspace diagnostics on clean baseline", err);
+        }
+      }
+
       this.logger?.info(
         `No prior snapshot found for workspace ${workspaceId}. Established clean baseline with 0 findings and ${history.length} historical events.`
       );
@@ -601,6 +687,16 @@ export class AnalysisCoordinator {
    * Executes a full workspace scan and invokes the analysis engine and reconciler.
    */
   public async runWorkspaceScan(
+    cancellationToken?: CancellationTokenLike
+  ): Promise<CoordinatorAnalysisResult> {
+    const outcome = await this.executeWorkspaceScan(cancellationToken);
+    return this.emitAnalysisOutcome(outcome);
+  }
+
+  /**
+   * Internal execution of full workspace scan and reconciliation.
+   */
+  private async executeWorkspaceScan(
     cancellationToken?: CancellationTokenLike
   ): Promise<CoordinatorAnalysisResult> {
     if (this.disposed) {
@@ -1161,5 +1257,7 @@ export class AnalysisCoordinator {
     this.restorationPromises.clear();
     this.lastKnownSnapshots.clear();
     this.lastKnownHistories.clear();
+    this.analysisResultListeners.clear();
+    this.diagnosticProvider = undefined;
   }
 }

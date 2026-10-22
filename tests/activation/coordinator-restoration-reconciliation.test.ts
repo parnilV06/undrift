@@ -59,6 +59,16 @@ const vscodeMock = vi.hoisted(() => ({
       dispose: vi.fn(),
       show: vi.fn()
     }))
+  },
+  languages: {
+    createDiagnosticCollection: vi.fn((_name?: string) => ({
+      name: _name ?? "undrift",
+      set: vi.fn(),
+      delete: vi.fn(),
+      clear: vi.fn(),
+      dispose: vi.fn(),
+      get: vi.fn()
+    }))
   }
 }));
 
