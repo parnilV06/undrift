@@ -11,6 +11,24 @@ import { AnalysisCoordinator } from "./activation";
 import { OutputChannelLogger } from "./logging";
 import { WorkspaceManager } from "./workspace";
 
+/**
+ * Formats the user-facing warning message for an incomplete analysis scan.
+ * When files failed acquisition, explicitly reports the acquisition failure count.
+ * When source acquisition succeeded but analysis was marked incomplete due to
+ * parsing, analysis, or coverage limitations, avoids falsely reporting zero unacquired files.
+ */
+export function formatIncompleteScanMessage(
+  filesCount: number,
+  findingsCount: number,
+  failuresCount: number
+): string {
+  const failureDetail =
+    failuresCount > 0
+      ? ` (${failuresCount} file${failuresCount === 1 ? "" : "s"} could not be acquired)`
+      : "";
+  return `UNDRIFT: Analysis incomplete${failureDetail}. Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} finding${findingsCount === 1 ? "" : "s"}.`;
+}
+
 let logger: OutputChannelLogger | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 let parser: TreeSitterParserAdapter | undefined;
@@ -87,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
           const findingsCount = outcome.result?.findings.length ?? 0;
           const failuresCount = outcome.failures?.length ?? 0;
           void vscode.window.showWarningMessage(
-            `UNDRIFT: Analysis incomplete (${failuresCount} file${failuresCount === 1 ? "" : "s"} could not be acquired). Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} finding${findingsCount === 1 ? "" : "s"}.`
+            formatIncompleteScanMessage(filesCount, findingsCount, failuresCount)
           );
           break;
         }
