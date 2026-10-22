@@ -5,12 +5,13 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { JsTsAnalyzer } from "@undrift/analyzer-js-ts";
-import { AnalysisEngine, StateReconciler } from "@undrift/core";
+import { AnalysisEngine, type SourceSpan, StateReconciler } from "@undrift/core";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
 import { DriftDiagnosticProvider } from "./diagnostics";
 import { OutputChannelLogger } from "./logging";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
+import { FindingsTreeDataProvider, openFindingLocation } from "./views";
 import { WorkspaceManager } from "./workspace";
 
 /**
@@ -39,6 +40,7 @@ let engine: AnalysisEngine | undefined;
 let persistence: WorkspaceStatePersistenceAdapter | undefined;
 let reconciler: StateReconciler | undefined;
 let diagnosticProvider: DriftDiagnosticProvider | undefined;
+let treeProvider: FindingsTreeDataProvider | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 
 /**
@@ -105,16 +107,33 @@ export function activate(context: vscode.ExtensionContext): void {
     logger
   });
 
-  // 10. Restore persisted session state for current workspace if available
-  void coordinator.restoreSession().catch((err) => {
-    logger?.warn("Session restoration encountered an error during activation", err);
+  // 11. Instantiate and register findings tree view provider
+  treeProvider = new FindingsTreeDataProvider({
+    coordinator,
+    logger
   });
+  if (typeof vscode.window.registerTreeDataProvider === "function") {
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider("undrift.findingsView", treeProvider)
+    );
+  }
+  context.subscriptions.push(treeProvider);
 
-  // 11. Register workspace change events with the analysis scheduler
+  // 12. Restore persisted session state for current workspace if available
+  void coordinator
+    .restoreSession()
+    .then((restored) => {
+      treeProvider?.handleSessionRestored(restored);
+    })
+    .catch((err) => {
+      logger?.warn("Session restoration encountered an error during activation", err);
+    });
+
+  // 13. Register workspace change events with the analysis scheduler
   const eventDisposables = coordinator.getScheduler().registerWorkspaceEvents();
   context.subscriptions.push(eventDisposables);
 
-  // 12. Register undrift.scanWorkspace command
+  // 14. Register undrift.scanWorkspace command
   const scanCommand = vscode.commands.registerCommand("undrift.scanWorkspace", async () => {
     if (!coordinator) {
       void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
@@ -185,6 +204,26 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(scanCommand);
 
+  // 15. Register undrift.refresh command
+  const refreshCommand = vscode.commands.registerCommand("undrift.refresh", async () => {
+    if (!coordinator) {
+      void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
+      return;
+    }
+    treeProvider?.refresh();
+    await coordinator.getScheduler().runImmediateScan();
+  });
+  context.subscriptions.push(refreshCommand);
+
+  // 16. Register undrift.openFindingLocation command
+  const openLocationCommand = vscode.commands.registerCommand(
+    "undrift.openFindingLocation",
+    async (span?: SourceSpan) => {
+      await openFindingLocation(span);
+    }
+  );
+  context.subscriptions.push(openLocationCommand);
+
   logger.info("UNDRIFT extension activated successfully.");
 }
 
@@ -192,6 +231,15 @@ export function activate(context: vscode.ExtensionContext): void {
  * Deactivates the UNDRIFT VS Code extension and safely cleans up all resources.
  */
 export async function deactivate(): Promise<void> {
+  if (treeProvider) {
+    try {
+      treeProvider.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    treeProvider = undefined;
+  }
+
   if (coordinator) {
     try {
       await coordinator.dispose();
