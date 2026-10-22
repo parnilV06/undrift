@@ -6,5 +6,8 @@ export {
   type AnalysisCoordinatorOptions,
   type CoordinatorAnalysisResult,
   type CoordinatorOutcomeStatus,
-  type CancellationTokenLike
+  type CancellationTokenLike,
+  type SessionRestorationStatus,
+  type RestoredSessionState,
+  type PersistenceOutcomeStatus
 } from "./coordinator";

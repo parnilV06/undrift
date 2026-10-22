@@ -5,10 +5,11 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { JsTsAnalyzer } from "@undrift/analyzer-js-ts";
-import { AnalysisEngine } from "@undrift/core";
+import { AnalysisEngine, StateReconciler } from "@undrift/core";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
 import { OutputChannelLogger } from "./logging";
+import { WorkspaceStatePersistenceAdapter } from "./storage";
 import { WorkspaceManager } from "./workspace";
 
 /**
@@ -34,6 +35,8 @@ let workspaceManager: WorkspaceManager | undefined;
 let parser: TreeSitterParserAdapter | undefined;
 let analyzer: JsTsAnalyzer | undefined;
 let engine: AnalysisEngine | undefined;
+let persistence: WorkspaceStatePersistenceAdapter | undefined;
+let reconciler: StateReconciler | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 
 /**
@@ -72,15 +75,35 @@ export function activate(context: vscode.ExtensionContext): void {
     analyzers: [analyzer]
   });
 
-  // 7. Instantiate AnalysisCoordinator
+  // 7. Instantiate workspace state persistence adapter
+  persistence = new WorkspaceStatePersistenceAdapter({
+    storageUri: () => context.storageUri,
+    logger: {
+      info: (msg) => logger?.info(`[Storage] ${msg}`),
+      warn: (msg, err) => logger?.warn(`[Storage] ${msg}`, err),
+      error: (msg, err) => logger?.error(`[Storage] ${msg}`, err)
+    }
+  });
+
+  // 8. Instantiate state reconciler
+  reconciler = new StateReconciler();
+
+  // 9. Instantiate AnalysisCoordinator
   coordinator = new AnalysisCoordinator({
     workspaceManager,
     engine,
     ownsEngine: true,
+    persistence,
+    reconciler,
     logger
   });
 
-  // 8. Register undrift.scanWorkspace command
+  // 10. Restore persisted session state for current workspace if available
+  void coordinator.restoreSession().catch((err) => {
+    logger?.warn("Session restoration encountered an error during activation", err);
+  });
+
+  // 11. Register undrift.scanWorkspace command
   const scanCommand = vscode.commands.registerCommand("undrift.scanWorkspace", async () => {
     if (!coordinator) {
       void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
@@ -94,9 +117,17 @@ export function activate(context: vscode.ExtensionContext): void {
         case "success": {
           const filesCount = outcome.result?.statistics.filesParsed ?? outcome.totalAcquired ?? 0;
           const findingsCount = outcome.result?.findings.length ?? 0;
-          void vscode.window.showInformationMessage(
-            `UNDRIFT: Analysis complete. Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} contract drift finding${findingsCount === 1 ? "" : "s"}.`
-          );
+          if (outcome.persistenceStatus === "failed") {
+            const reason = outcome.persistenceError ? `: ${outcome.persistenceError}` : "";
+            logger?.error(`State persistence failed${reason}`);
+            void vscode.window.showWarningMessage(
+              `UNDRIFT: Analysis complete (${findingsCount} finding${findingsCount === 1 ? "" : "s"}), but failed to save analysis state${reason}.`
+            );
+          } else {
+            void vscode.window.showInformationMessage(
+              `UNDRIFT: Analysis complete. Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} contract drift finding${findingsCount === 1 ? "" : "s"}.`
+            );
+          }
           break;
         }
 
@@ -149,6 +180,8 @@ export async function deactivate(): Promise<void> {
     coordinator = undefined;
   }
 
+  persistence = undefined;
+  reconciler = undefined;
   engine = undefined;
   parser = undefined;
   analyzer = undefined;
