@@ -964,4 +964,640 @@ describe("Phase 4, Chunk 4.3: Session Restoration & Snapshot Reconciliation", ()
     // Second deactivate is safe no-op
     await deactivate();
   });
+
+  // 16. Race condition elimination: scan awaits pending restoration
+  it("16. eliminates restoration/scan race by awaiting pending restoration before allocating generation and reconciling", async () => {
+    const persistence = createPersistenceAdapter();
+
+    // Seed prior snapshot with generation 15 and finding f_old
+    const priorSnapshot = createSampleSnapshot(testWorkspaceId, 15, [
+      {
+        id: "finding:f_old",
+        ruleId: "UND200",
+        category: "shape",
+        severity: "error",
+        state: "active",
+        title: "Old drift",
+        summary: "Old summary",
+        evidenceStrength: "exact",
+        sourceLocations: [],
+        limitations: [],
+        firstObservedAt: 1700000000000,
+        lastConfirmedAt: 1700000015000
+      }
+    ]);
+    await persistence.saveSnapshot(testWorkspaceId, priorSnapshot);
+
+    // Controlled deferred promise on loadLatestSnapshot to artificially delay restoration
+    let resolveSnapshotLoad: (snap: AnalysisSnapshot | undefined) => void = () => {};
+    const deferredLoad = new Promise<AnalysisSnapshot | undefined>((resolve) => {
+      resolveSnapshotLoad = resolve;
+    });
+
+    const realLoadLatestSnapshot = persistence.loadLatestSnapshot.bind(persistence);
+    let loadCallCount = 0;
+    persistence.loadLatestSnapshot = async (wsId: WorkspaceId) => {
+      loadCallCount++;
+      await deferredLoad;
+      return realLoadLatestSnapshot(wsId);
+    };
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const engine = createMockEngine();
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    // Start restoration asynchronously without awaiting it
+    const restorationPromise = coordinator.restoreSession();
+
+    // Immediately trigger workspace scan concurrently
+    let scanFinished = false;
+    const scanPromise = coordinator.runWorkspaceScan().then((res) => {
+      scanFinished = true;
+      return res;
+    });
+
+    // Verify that the scan has NOT finished yet (it must await restoration!)
+    await new Promise((r) => setTimeout(r, 10));
+    expect(scanFinished).toBe(false);
+
+    // Now release the deferred load
+    resolveSnapshotLoad(priorSnapshot);
+
+    // Both should now resolve
+    const [restored, outcome] = await Promise.all([restorationPromise, scanPromise]);
+
+    expect(restored.status).toBe("restored");
+    expect(restored.seededGeneration).toBe(15);
+
+    // Scan waited, used the restored snapshot, and allocated generation 16 (strictly > 15)
+    expect(outcome.status).toBe("success");
+    expect(outcome.generation).toBe(16);
+    expect(engine.requests[0].generation).toBe(16);
+
+    // Finding f_old from restored snapshot was evaluated: since empty workspace has 0 findings, f_old was resolved!
+    expect(outcome.reconciliation?.previousSnapshot?.generation).toBe(15);
+    expect(
+      outcome.reconciliation?.eventsEmitted.some(
+        (e) => e.findingId === "finding:f_old" && e.transitionKind === "resolved"
+      )
+    ).toBe(true);
+  });
+
+  // 17. Deduplicates concurrent restoreSession calls for the same workspace
+  it("17. deduplicates concurrent restoreSession calls for the same workspace", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      persistence,
+      logger
+    });
+
+    const p1 = coordinator.restoreSession(testWorkspaceId);
+    const p2 = coordinator.restoreSession(testWorkspaceId);
+
+    expect(p1).toBe(p2); // Exact same promise returned!
+
+    const [res1, res2] = await Promise.all([p1, p2]);
+    expect(res1).toEqual(res2);
+  });
+
+  // 18. Storage I/O failure during restoration aborts scan safely
+  it("18. aborts workspace scan and does not overwrite state if storage I/O error occurs during restoration", async () => {
+    const failingPersistence = {
+      id: "failing-io",
+      loadLatestSnapshot: async () => {
+        throw new StorageIOError("Disk unreadable due to hardware fault");
+      },
+      saveSnapshot: async () => {},
+      loadLifecycleHistory: async () => [],
+      appendLifecycleEvents: async () => {},
+      pruneLifecycleHistory: async () => 0,
+      clearCache: async () => {},
+      resetHistory: async () => {}
+    };
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const engine = createMockEngine();
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence: failingPersistence,
+      logger
+    });
+
+    // Trigger scan without explicit restoreSession
+    const outcome = await coordinator.runWorkspaceScan();
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.errorMessage).toContain("storage I/O failure during state restoration");
+    expect(engine.requests).toHaveLength(0); // Engine was NEVER invoked!
+  });
+
+  // 19. Preserves persisted snapshot and history on snapshot write failure
+  it("19. preserves persisted snapshot and history on snapshot write failure", async () => {
+    const persistence = createPersistenceAdapter();
+    const initialSnapshot = createSampleSnapshot(testWorkspaceId, 5, [
+      {
+        id: "finding:f1",
+        ruleId: "UND200",
+        category: "shape",
+        severity: "error",
+        state: "active",
+        title: "f1",
+        summary: "s",
+        evidenceStrength: "exact",
+        sourceLocations: [],
+        limitations: [],
+        firstObservedAt: 1700000000000,
+        lastConfirmedAt: 1700000005000
+      }
+    ]);
+    await persistence.saveSnapshot(testWorkspaceId, initialSnapshot);
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1"), createSampleFinding("f2")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    // Inject failure on saveSnapshot
+    const realSaveSnapshot = persistence.saveSnapshot.bind(persistence);
+    persistence.saveSnapshot = async (ws, snap) => {
+      if (snap.generation > 5) {
+        throw new StorageIOError("Simulated snapshot write failure on disk");
+      }
+      return realSaveSnapshot(ws, snap);
+    };
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    await coordinator.restoreSession();
+
+    const outcome = await coordinator.runWorkspaceScan();
+
+    expect(outcome.status).toBe("success"); // Engine analysis completed
+    expect(outcome.persistenceStatus).toBe("failed");
+    expect(outcome.persistenceError).toContain("Simulated snapshot write failure");
+
+    // Inspect disk state directly
+    persistence.saveSnapshot = realSaveSnapshot;
+    const diskSnapshot = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(diskSnapshot?.generation).toBe(5); // Preserved at 5!
+
+    const diskHistory = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(diskHistory).toHaveLength(0); // No events leaked!
+
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(5);
+  });
+
+  // 20. Rolls back candidate snapshot on lifecycle-event append failure and preserves previous valid state
+  it("20. rolls back candidate snapshot on lifecycle-event append failure and preserves previous valid state on disk", async () => {
+    const persistence = createPersistenceAdapter();
+    const initialSnapshot = createSampleSnapshot(testWorkspaceId, 5, [
+      {
+        id: "finding:f1",
+        ruleId: "UND200",
+        category: "shape",
+        severity: "error",
+        state: "active",
+        title: "f1",
+        summary: "s",
+        evidenceStrength: "exact",
+        sourceLocations: [],
+        limitations: [],
+        firstObservedAt: 1700000000000,
+        lastConfirmedAt: 1700000005000
+      }
+    ]);
+    await persistence.saveSnapshot(testWorkspaceId, initialSnapshot);
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    // Detects new finding f2
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1"), createSampleFinding("f2")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    // Inject failure on appendLifecycleEvents
+    const realAppend = persistence.appendLifecycleEvents.bind(persistence);
+    persistence.appendLifecycleEvents = async () => {
+      throw new StorageIOError("Disk write failure while appending lifecycle events");
+    };
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    await coordinator.restoreSession();
+
+    const outcome = await coordinator.runWorkspaceScan();
+
+    expect(outcome.status).toBe("success");
+    expect(outcome.persistenceStatus).toBe("failed");
+    expect(outcome.persistenceError).toContain("appending lifecycle events");
+
+    // Inspect disk state directly: snapshot MUST HAVE BEEN ROLLED BACK to 5!
+    persistence.appendLifecycleEvents = realAppend;
+    const diskSnapshot = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(diskSnapshot?.generation).toBe(5);
+    expect(diskSnapshot?.findings).toHaveLength(1);
+    expect(diskSnapshot?.findings[0].id).toBe("finding:f1");
+
+    const diskHistory = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(diskHistory).toHaveLength(0);
+
+    // In-memory state remains at previous valid snapshot
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(5);
+  });
+
+  // 21. Recovers cleanly on scan retry after lifecycle-event append failure
+  it("21. recovers cleanly on scan retry after lifecycle-event append failure without losing or duplicating transitions", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    let failAppend = true;
+    const realAppend = persistence.appendLifecycleEvents.bind(persistence);
+    persistence.appendLifecycleEvents = async (ws, evts) => {
+      if (failAppend) {
+        throw new StorageIOError("Transient disk error on events file");
+      }
+      return realAppend(ws, evts);
+    };
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      logger
+    });
+
+    await coordinator.restoreSession();
+
+    // Scan 1: appendLifecycleEvents fails
+    const outcome1 = await coordinator.runWorkspaceScan();
+    expect(outcome1.persistenceStatus).toBe("failed");
+
+    // Disk snapshot was rolled back (deleted since no prior snapshot existed)
+    failAppend = false;
+    const snapshotAfterFail = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(snapshotAfterFail).toBeUndefined();
+
+    // Scan 2 (retry): appendLifecycleEvents now succeeds
+    const outcome2 = await coordinator.runWorkspaceScan();
+    expect(outcome2.status).toBe("success");
+    expect(outcome2.persistenceStatus).toBe("saved");
+
+    // Inspect disk state directly
+    const snapshotAfterRetry = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(snapshotAfterRetry).toBeDefined();
+    expect(snapshotAfterRetry?.findings).toHaveLength(1);
+
+    const historyAfterRetry = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(historyAfterRetry).toHaveLength(1);
+    expect(historyAfterRetry[0].findingId).toBe("finding:f1");
+    expect(historyAfterRetry[0].transitionKind).toBe("detected");
+  });
+
+  // 22. Preserves valid complete snapshot when retention pruning fails and reports failure truthfully
+  it("22. preserves valid complete snapshot when retention pruning fails and reports failure truthfully", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wm = createMockWorkspaceManager({
+      status: "success",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 1,
+      totalAcquired: 1
+    });
+
+    const engine = createMockEngine(async (req) => ({
+      workspaceId: req.workspaceId,
+      generation: req.generation,
+      generatedAt: Date.now(),
+      complete: true,
+      observations: [],
+      relationships: [],
+      findings: [createSampleFinding("f1")],
+      warnings: [],
+      statistics: createSampleStatistics()
+    }));
+
+    // Inject failure on pruneLifecycleHistory
+    const realPrune = persistence.pruneLifecycleHistory.bind(persistence);
+    persistence.pruneLifecycleHistory = async () => {
+      throw new StorageIOError("Retention pruning failed due to disk lock");
+    };
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      engine,
+      persistence,
+      retentionPolicy: { maxEventsPerWorkspace: 2 },
+      logger
+    });
+
+    await coordinator.restoreSession();
+
+    const outcome = await coordinator.runWorkspaceScan();
+
+    expect(outcome.status).toBe("success");
+    expect(outcome.persistenceStatus).toBe("failed");
+    expect(outcome.persistenceError).toContain("Retention pruning failed");
+
+    // Snapshot was preserved on disk and in memory
+    persistence.pruneLifecycleHistory = realPrune;
+    const diskSnapshot = await persistence.loadLatestSnapshot(testWorkspaceId);
+    expect(diskSnapshot).toBeDefined();
+    expect(diskSnapshot?.generation).toBe(1);
+
+    const diskHistory = await persistence.loadLifecycleHistory(testWorkspaceId);
+    expect(diskHistory).toHaveLength(1);
+
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(1);
+  });
+
+  // 23. Quarantines corrupt snapshot while preserving valid lifecycle history
+  it("23. quarantines corrupt snapshot while preserving valid lifecycle history", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wsDir = joinStorageUri(
+      storageRoot,
+      "workspaces",
+      getWorkspaceStorageKey(testWorkspaceId)
+    );
+    await inMemoryFs.createDirectory(wsDir);
+
+    // Corrupt snapshot
+    const snapshotUri = joinStorageUri(wsDir, "snapshot.json");
+    await inMemoryFs.writeFile(snapshotUri, new TextEncoder().encode("bad json content"));
+
+    // Valid history with 2 events
+    const validEvents: FindingLifecycleEvent[] = [
+      {
+        eventId: "evt:1:1",
+        workspaceId: testWorkspaceId,
+        findingId: "finding:f1",
+        transitionKind: "detected",
+        observedAt: 1700000000000,
+        triggerGeneration: 1,
+        newState: "active"
+      },
+      {
+        eventId: "evt:2:2",
+        workspaceId: testWorkspaceId,
+        findingId: "finding:f1",
+        transitionKind: "resolved",
+        observedAt: 1700000005000,
+        triggerGeneration: 2,
+        newState: "resolved"
+      }
+    ];
+    const historyUri = joinStorageUri(wsDir, "history.json");
+    await inMemoryFs.writeFile(
+      historyUri,
+      new TextEncoder().encode(
+        JSON.stringify({
+          schemaVersion: LIFECYCLE_HISTORY_SCHEMA_VERSION,
+          workspaceId: testWorkspaceId,
+          events: validEvents
+        })
+      )
+    );
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      persistence,
+      logger
+    });
+
+    const restored = await coordinator.restoreSession();
+
+    expect(restored.status).toBe("corrupted-quarantined");
+    expect(restored.snapshot).toBeUndefined();
+    // Valid history is preserved!
+    expect(restored.history).toHaveLength(2);
+    expect(restored.seededGeneration).toBe(0);
+
+    expect(coordinator.getLastKnownSnapshot()).toBeUndefined();
+    expect(coordinator.getLastKnownHistory()).toHaveLength(2);
+  });
+
+  // 24. Quarantines corrupt history while preserving valid snapshot
+  it("24. quarantines corrupt history while preserving valid snapshot", async () => {
+    const persistence = createPersistenceAdapter();
+
+    const wsDir = joinStorageUri(
+      storageRoot,
+      "workspaces",
+      getWorkspaceStorageKey(testWorkspaceId)
+    );
+    await inMemoryFs.createDirectory(wsDir);
+
+    // Valid snapshot at generation 8
+    const validSnapshot = createSampleSnapshot(testWorkspaceId, 8, [
+      {
+        id: "finding:f8",
+        ruleId: "UND200",
+        category: "shape",
+        severity: "error",
+        state: "active",
+        title: "f8",
+        summary: "s",
+        evidenceStrength: "exact",
+        sourceLocations: [],
+        limitations: [],
+        firstObservedAt: 1700000000000,
+        lastConfirmedAt: 1700000008000
+      }
+    ]);
+    const snapshotUri = joinStorageUri(wsDir, "snapshot.json");
+    await inMemoryFs.writeFile(
+      snapshotUri,
+      new TextEncoder().encode(JSON.stringify(validSnapshot))
+    );
+
+    // Corrupt history
+    const historyUri = joinStorageUri(wsDir, "history.json");
+    await inMemoryFs.writeFile(historyUri, new TextEncoder().encode("bad json history"));
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const coordinator = new AnalysisCoordinator({
+      workspaceManager: wm,
+      persistence,
+      logger
+    });
+
+    const restored = await coordinator.restoreSession();
+
+    expect(restored.status).toBe("corrupted-quarantined");
+    // Valid snapshot is preserved!
+    expect(restored.snapshot).toBeDefined();
+    expect(restored.snapshot?.generation).toBe(8);
+    expect(restored.seededGeneration).toBe(8);
+    expect(restored.history).toHaveLength(0);
+
+    expect(coordinator.getLastKnownSnapshot()?.generation).toBe(8);
+    expect(coordinator.getLastKnownHistory()).toEqual([]);
+  });
+
+  // 25. Rethrows real StorageIOError during snapshot or history restoration
+  it("25. rethrows real StorageIOError during snapshot or history restoration", async () => {
+    const failingSnapshotPersistence = {
+      id: "failing-snapshot",
+      loadLatestSnapshot: async () => {
+        throw new StorageIOError("Disk unreadable on snapshot read");
+      },
+      saveSnapshot: async () => {},
+      loadLifecycleHistory: async () => [],
+      appendLifecycleEvents: async () => {},
+      pruneLifecycleHistory: async () => 0,
+      clearCache: async () => {},
+      resetHistory: async () => {}
+    };
+
+    const wm = createMockWorkspaceManager({
+      status: "empty",
+      workspaceRootUris: [testWorkspaceId],
+      documents: [],
+      failures: [],
+      totalDiscovered: 0,
+      totalAcquired: 0
+    });
+
+    const coordinator1 = new AnalysisCoordinator({
+      workspaceManager: wm,
+      persistence: failingSnapshotPersistence,
+      logger
+    });
+
+    await expect(coordinator1.restoreSession()).rejects.toThrow(StorageIOError);
+
+    const failingHistoryPersistence = {
+      id: "failing-history",
+      loadLatestSnapshot: async () => undefined,
+      saveSnapshot: async () => {},
+      loadLifecycleHistory: async () => {
+        throw new StorageIOError("Disk unreadable on history read");
+      },
+      appendLifecycleEvents: async () => {},
+      pruneLifecycleHistory: async () => 0,
+      clearCache: async () => {},
+      resetHistory: async () => {}
+    };
+
+    const coordinator2 = new AnalysisCoordinator({
+      workspaceManager: wm,
+      persistence: failingHistoryPersistence,
+      logger
+    });
+
+    await expect(coordinator2.restoreSession()).rejects.toThrow(StorageIOError);
+  });
 });

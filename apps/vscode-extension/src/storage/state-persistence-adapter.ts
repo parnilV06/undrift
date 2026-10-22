@@ -629,4 +629,30 @@ export class WorkspaceStatePersistenceAdapter implements StatePersistencePort {
       }
     });
   }
+
+  /**
+   * Deletes the snapshot record for a workspace (e.g. during failed initial commit rollback).
+   */
+  async deleteSnapshot(workspaceId: WorkspaceId): Promise<void> {
+    const storageRoot = this.resolveStorageUri();
+
+    await this.withLock(workspaceId, async () => {
+      const snapshotUri = this.getSnapshotUri(storageRoot, workspaceId);
+      try {
+        await this.fs.delete(snapshotUri, { recursive: false });
+      } catch (err) {
+        if (!isFileNotFound(err)) {
+          throw new StorageIOError(
+            `Failed deleting snapshot for workspace ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+            err
+          );
+        }
+      }
+
+      const entry = this.memoryCache.get(workspaceId);
+      if (entry) {
+        entry.snapshot = undefined;
+      }
+    });
+  }
 }

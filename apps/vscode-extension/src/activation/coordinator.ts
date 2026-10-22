@@ -203,6 +203,9 @@ export class AnalysisCoordinator {
   /** Historical sequence of lifecycle events per workspace. */
   private readonly lastKnownHistories = new Map<WorkspaceId, readonly FindingLifecycleEvent[]>();
 
+  /** In-flight or completed restoration promises per workspace to prevent concurrent races. */
+  private readonly restorationPromises = new Map<WorkspaceId, Promise<RestoredSessionState>>();
+
   /** Active workspace identifier currently focused. */
   private activeWorkspaceId?: WorkspaceId;
 
@@ -287,12 +290,24 @@ export class AnalysisCoordinator {
   }
 
   /**
+   * Ensures that persisted session state (snapshot and history) has been restored
+   * for the specified workspace. Reuses any in-flight or completed restoration promise.
+   */
+  public ensureRestored(workspaceId: WorkspaceId): Promise<RestoredSessionState> {
+    const existing = this.restorationPromises.get(workspaceId);
+    if (existing) {
+      return existing;
+    }
+    return this.restoreSession(workspaceId);
+  }
+
+  /**
    * Restores persisted session state (latest complete snapshot and lifecycle history) for a workspace.
    * Seeds the generation counter from the restored snapshot so future scans continue monotonically.
    */
-  public async restoreSession(targetWorkspaceId?: WorkspaceId): Promise<RestoredSessionState> {
+  public restoreSession(targetWorkspaceId?: WorkspaceId): Promise<RestoredSessionState> {
     if (this.disposed) {
-      throw new Error("Cannot restore session: AnalysisCoordinator is disposed.");
+      return Promise.reject(new Error("Cannot restore session: AnalysisCoordinator is disposed."));
     }
 
     let workspaceId = targetWorkspaceId;
@@ -300,16 +315,40 @@ export class AnalysisCoordinator {
       const roots = this.workspaceManager.getWorkspaceRoots();
       if (roots.length === 0) {
         this.logger?.info("Session restoration skipped: no workspace folder open.");
-        return {
+        return Promise.resolve({
           status: "no-workspace",
           seededGeneration: 0
-        };
+        });
       }
       workspaceId = deriveWorkspaceId(roots);
     }
 
     this.activeWorkspaceId = workspaceId;
 
+    // Deduplicate concurrent restoration calls for the same workspace
+    const existingPromise = this.restorationPromises.get(workspaceId);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const restorationPromise = (async () => {
+      try {
+        return await this.executeSessionRestoration(workspaceId);
+      } catch (err) {
+        // Delete failed promise so retry is possible
+        this.restorationPromises.delete(workspaceId);
+        throw err;
+      }
+    })();
+
+    this.restorationPromises.set(workspaceId, restorationPromise);
+    return restorationPromise;
+  }
+
+  /**
+   * Internal session restoration execution loading snapshot and history.
+   */
+  private async executeSessionRestoration(workspaceId: WorkspaceId): Promise<RestoredSessionState> {
     if (!this.persistence) {
       this.logger?.info(
         `No persistence adapter configured for workspace "${workspaceId}". Clean baseline established.`
@@ -466,41 +505,11 @@ export class AnalysisCoordinator {
         };
       }
 
-      case "empty": {
-        // Legitimate empty workspace: workspace folder exists but contains 0 supported source files.
-        const workspaceId = deriveWorkspaceId(snapshot.workspaceRootUris);
-        this.activeWorkspaceId = workspaceId;
-        const generation = this.getNextGeneration(workspaceId);
-
-        const request: AnalysisRequest = {
-          workspaceId,
-          workspaceRootUris: snapshot.workspaceRootUris,
-          generation,
-          documents: [],
-          config: this.config,
-          mode: "workspace"
-        };
-
-        try {
-          const result = await this.engine.analyze(request);
-          return await this.processAnalysisResult(result, snapshot);
-        } catch (err) {
-          const msg = `Analysis engine failed on empty workspace: ${err instanceof Error ? err.message : String(err)}`;
-          this.logger?.error(msg, err);
-          return {
-            status: "failed",
-            workspaceId,
-            generation,
-            errorMessage: msg,
-            totalDiscovered: 0,
-            totalAcquired: 0
-          };
-        }
-      }
-
-      case "partial": {
+      case "empty":
+      case "partial":
+      case "success": {
         // If all files failed acquisition, no usable documents exist
-        if (snapshot.documents.length === 0) {
+        if (snapshot.status === "partial" && snapshot.documents.length === 0) {
           const failureReason =
             snapshot.failures.length > 0
               ? snapshot.failures.map((f) => `${f.uri}: ${f.error}`).join("; ")
@@ -517,6 +526,22 @@ export class AnalysisCoordinator {
 
         const workspaceId = deriveWorkspaceId(snapshot.workspaceRootUris);
         this.activeWorkspaceId = workspaceId;
+
+        // Ensure session restoration has completed for this workspace before proceeding
+        try {
+          await this.ensureRestored(workspaceId);
+        } catch (err) {
+          const msg = `Workspace scan aborted: storage I/O failure during state restoration: ${err instanceof Error ? err.message : String(err)}`;
+          this.logger?.error(msg, err);
+          return {
+            status: "failed",
+            workspaceId,
+            errorMessage: msg,
+            totalDiscovered: snapshot.totalDiscovered,
+            totalAcquired: snapshot.totalAcquired
+          };
+        }
+
         const generation = this.getNextGeneration(workspaceId);
 
         const request: AnalysisRequest = {
@@ -530,41 +555,19 @@ export class AnalysisCoordinator {
 
         try {
           const rawResult = await this.engine.analyze(request);
-          const adjustedResult = this.applyPartialScopeGating(rawResult, snapshot);
-          return await this.processAnalysisResult(adjustedResult, snapshot);
+          const resultToProcess =
+            snapshot.status === "partial"
+              ? this.applyPartialScopeGating(rawResult, snapshot)
+              : rawResult;
+          return await this.processAnalysisResult(resultToProcess, snapshot);
         } catch (err) {
-          const msg = `Analysis engine failed during partial workspace scan: ${err instanceof Error ? err.message : String(err)}`;
-          this.logger?.error(msg, err);
-          return {
-            status: "failed",
-            workspaceId,
-            generation,
-            errorMessage: msg,
-            totalDiscovered: snapshot.totalDiscovered,
-            totalAcquired: snapshot.totalAcquired
-          };
-        }
-      }
-
-      case "success": {
-        const workspaceId = deriveWorkspaceId(snapshot.workspaceRootUris);
-        this.activeWorkspaceId = workspaceId;
-        const generation = this.getNextGeneration(workspaceId);
-
-        const request: AnalysisRequest = {
-          workspaceId,
-          workspaceRootUris: snapshot.workspaceRootUris,
-          generation,
-          documents: snapshot.documents,
-          config: this.config,
-          mode: "workspace"
-        };
-
-        try {
-          const result = await this.engine.analyze(request);
-          return await this.processAnalysisResult(result, snapshot);
-        } catch (err) {
-          const msg = `Analysis engine failed during workspace scan: ${err instanceof Error ? err.message : String(err)}`;
+          const scanKind =
+            snapshot.status === "empty"
+              ? "empty workspace"
+              : snapshot.status === "partial"
+                ? "partial workspace scan"
+                : "workspace scan";
+          const msg = `Analysis engine failed during ${scanKind}: ${err instanceof Error ? err.message : String(err)}`;
           this.logger?.error(msg, err);
           return {
             status: "failed",
@@ -641,30 +644,27 @@ export class AnalysisCoordinator {
 
     if (reconciliation.coverageSufficient && reconciliation.currentSnapshot) {
       if (this.persistence) {
+        let snapshotSaved = false;
+        let eventsAppended = false;
         try {
           // 1. Atomically save candidate complete snapshot
           await this.persistence.saveSnapshot(workspaceId, reconciliation.currentSnapshot);
+          snapshotSaved = true;
 
           // 2. Append newly emitted lifecycle events (if any)
           if (reconciliation.eventsEmitted.length > 0) {
             await this.persistence.appendLifecycleEvents(workspaceId, reconciliation.eventsEmitted);
           }
+          eventsAppended = true;
 
           // 3. Prune historical lifecycle events if policy configured
           if (this.retentionPolicy) {
-            try {
-              await this.persistence.pruneLifecycleHistory(workspaceId, this.retentionPolicy);
-            } catch (pruneErr) {
-              this.logger?.warn(
-                "Failed to prune lifecycle history according to retention policy",
-                pruneErr
-              );
-            }
+            await this.persistence.pruneLifecycleHistory(workspaceId, this.retentionPolicy);
           }
 
           persistenceStatus = "saved";
 
-          // On persistence success, update coordinator in-memory state
+          // On complete persistence success, update coordinator in-memory state
           this.lastKnownSnapshots.set(workspaceId, reconciliation.currentSnapshot);
           this.lastKnownHistories.set(workspaceId, [
             ...historicalEvents,
@@ -677,6 +677,39 @@ export class AnalysisCoordinator {
             `Failed to persist reconciled state for workspace ${workspaceId}: ${persistenceError}`,
             storageErr
           );
+
+          // Partial-write rollback:
+          // If snapshot was saved but subsequent appendLifecycleEvents failed,
+          // do NOT leave durable snapshot silently advanced without its events!
+          // Rollback snapshot to previousSnapshot (or delete if no prior snapshot).
+          if (snapshotSaved && !eventsAppended) {
+            try {
+              if (previousSnapshot) {
+                await this.persistence.saveSnapshot(workspaceId, previousSnapshot);
+                this.logger?.info(
+                  `Rolled back snapshot for workspace ${workspaceId} to generation ${previousSnapshot.generation} after lifecycle event write failure.`
+                );
+              } else if (this.persistence.deleteSnapshot) {
+                await this.persistence.deleteSnapshot(workspaceId);
+                this.logger?.info(
+                  `Deleted candidate snapshot for workspace ${workspaceId} after initial lifecycle event write failure.`
+                );
+              }
+            } catch (rollbackErr) {
+              this.logger?.error(
+                `Failed to rollback snapshot for workspace ${workspaceId}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+                rollbackErr
+              );
+            }
+          } else if (snapshotSaved && eventsAppended) {
+            // Retention pruning failed after both snapshot and events were safely persisted.
+            // Preserve the valid complete snapshot in memory while truthfully reporting failure.
+            this.lastKnownSnapshots.set(workspaceId, reconciliation.currentSnapshot);
+            this.lastKnownHistories.set(workspaceId, [
+              ...historicalEvents,
+              ...reconciliation.eventsEmitted
+            ]);
+          }
         }
       } else {
         persistenceStatus = "skipped-storage-unavailable";
@@ -788,6 +821,7 @@ export class AnalysisCoordinator {
       this.logger?.warn("Error clearing persistence cache during coordinator disposal", err);
     }
 
+    this.restorationPromises.clear();
     this.lastKnownSnapshots.clear();
     this.lastKnownHistories.clear();
   }

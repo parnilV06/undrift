@@ -69,6 +69,8 @@ export interface StatePersistencePort {
   clearCache(): Promise<void>;
   /** Resets snapshot and history storage for a workspace session. */
   resetHistory(workspaceId: WorkspaceId): Promise<void>;
+  /** Deletes the persisted analysis snapshot for a workspace (e.g. for rollback). */
+  deleteSnapshot?(workspaceId: WorkspaceId): Promise<void>;
 }
 
 /**
