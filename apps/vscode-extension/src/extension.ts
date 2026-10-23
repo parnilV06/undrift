@@ -11,7 +11,7 @@ import { AnalysisCoordinator } from "./activation";
 import { DriftDiagnosticProvider } from "./diagnostics";
 import { OutputChannelLogger } from "./logging";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
-import { FindingsTreeDataProvider, openFindingLocation } from "./views";
+import { FindingsTreeDataProvider, openFindingLocation, ReportPanelManager } from "./views";
 import { WorkspaceManager } from "./workspace";
 
 /**
@@ -41,6 +41,7 @@ let persistence: WorkspaceStatePersistenceAdapter | undefined;
 let reconciler: StateReconciler | undefined;
 let diagnosticProvider: DriftDiagnosticProvider | undefined;
 let treeProvider: FindingsTreeDataProvider | undefined;
+let reportPanelManager: ReportPanelManager | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 
 /**
@@ -119,11 +120,19 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   context.subscriptions.push(treeProvider);
 
-  // 12. Restore persisted session state for current workspace if available
+  // 12. Instantiate and register report panel manager
+  reportPanelManager = new ReportPanelManager({
+    coordinator,
+    logger
+  });
+  context.subscriptions.push(reportPanelManager);
+
+  // 13. Restore persisted session state for current workspace if available
   void coordinator
     .restoreSession()
     .then((restored) => {
       treeProvider?.handleSessionRestored(restored);
+      reportPanelManager?.handleSessionRestored(restored);
     })
     .catch((err) => {
       logger?.warn("Session restoration encountered an error during activation", err);
@@ -224,6 +233,19 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(openLocationCommand);
 
+  // 17. Register undrift.showReport command
+  const showReportCommand = vscode.commands.registerCommand(
+    "undrift.showReport",
+    async (targetFindingId?: string) => {
+      if (!reportPanelManager) {
+        void vscode.window.showErrorMessage("UNDRIFT: Report panel manager is not initialized.");
+        return;
+      }
+      await reportPanelManager.show(targetFindingId);
+    }
+  );
+  context.subscriptions.push(showReportCommand);
+
   logger.info("UNDRIFT extension activated successfully.");
 }
 
@@ -231,6 +253,15 @@ export function activate(context: vscode.ExtensionContext): void {
  * Deactivates the UNDRIFT VS Code extension and safely cleans up all resources.
  */
 export async function deactivate(): Promise<void> {
+  if (reportPanelManager) {
+    try {
+      reportPanelManager.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    reportPanelManager = undefined;
+  }
+
   if (treeProvider) {
     try {
       treeProvider.dispose();

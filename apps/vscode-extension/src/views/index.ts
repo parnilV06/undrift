@@ -14,3 +14,17 @@ export {
   type FindingsTreeDataProviderOptions,
   type TreeItemKind
 } from "./findings-tree";
+
+export {
+  ReportPanelManager,
+  renderReportHtml,
+  escapeHtml,
+  formatContractValue,
+  formatTimestamp,
+  extractBaseName,
+  type ReportViewModel,
+  type ReportPanelManagerOptions,
+  type ReportWebviewMessage,
+  type OpenLocationMessage,
+  type TriggerScanMessage
+} from "./report-panel";
