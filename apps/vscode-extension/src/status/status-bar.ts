@@ -1,4 +1,3 @@
-
 // Native VS Code Status Bar Item for UNDRIFT
 // strictly adhering to LLD.md Section 14.8 and Chunk 4.8 specification.
 
