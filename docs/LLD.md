@@ -1812,8 +1812,8 @@ Initial commands should include equivalents of:
 - Refresh Findings;
 - Ignore/Suppress Finding when project configuration supports it;
 - Re-check affected relationship after manual correction;
-- Reset Drift History (clears persisted lifecycle history independently of disposable caches);
-- Clear Analysis Cache (clears temporary AST/observation caches without deleting finding history).
+- Reset Drift History (clears persisted lifecycle history independently of in-memory state caches);
+- Clear In-Memory State Cache (clears in-memory cached copies of persisted workspace state without deleting saved snapshots or lifecycle history; parser/analysis caches are not present in V0 as ASTs are parsed on demand per scan).
 
 A status bar item may report analyzing/clean/findings/incomplete states. Notifications should be selective and should not repeatedly show unchanged results.
 
@@ -1920,7 +1920,7 @@ To ensure reliable finding tracking across sessions without violating the primac
 
 The architecture strictly separates disposable performance caches from user-meaningful finding history:
 
-- **Cache Clearing:** Discards Tier 3 data (e.g., cached ASTs, extractor outputs). Clearing caches forces a clean re-scan and parse of the workspace from source code, but leaves Tier 4 (latest snapshot) and Tier 5 (finding lifecycle history) intact.
+- **Cache Clearing (`undrift.clearCache`):** Discards in-memory cached copies of persisted workspace state (the Tier-3 read cache in the persistence adapter) and triggers an immediate workspace rescan from source. Note that separate parser/AST or extractor caches are not currently maintained across scans. Clearing the cache leaves Tier 4 (latest complete snapshot) and Tier 5 (finding lifecycle history) intact on disk.
 - **History Reset:** An independent user operation that clears Tier 5 lifecycle events and/or resets the Tier 4 snapshot to a clean baseline. History reset never alters project source code or workspace configuration.
 - **Retention Pruning:** Background pruning removes expired Tier 5 lifecycle events based on configured retention policies. Pruning operates strictly on historical event records and **must never delete or degrade the Tier 4 latest complete snapshot**, ensuring the current last-known state remains available regardless of event age.
 

@@ -20,17 +20,93 @@
     "commands": [
       {
         "command": "undrift.scanWorkspace",
-        "title": "UNDRIFT: Scan Workspace"
+        "title": "UNDRIFT: Scan Workspace",
+        "category": "UNDRIFT",
+        "icon": "$(play)"
       },
       {
         "command": "undrift.showReport",
-        "title": "UNDRIFT: Show Integration Report"
+        "title": "UNDRIFT: Show Integration Report",
+        "category": "UNDRIFT",
+        "icon": "$(book)"
       },
       {
         "command": "undrift.refresh",
-        "title": "UNDRIFT: Refresh Analysis"
+        "title": "UNDRIFT: Refresh Analysis",
+        "category": "UNDRIFT",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "undrift.explainFinding",
+        "title": "UNDRIFT: Explain Finding",
+        "category": "UNDRIFT",
+        "icon": "$(info)"
+      },
+      {
+        "command": "undrift.resetHistory",
+        "title": "UNDRIFT: Reset Drift History",
+        "category": "UNDRIFT",
+        "icon": "$(history)"
+      },
+      {
+        "command": "undrift.clearCache",
+        "title": "UNDRIFT: Clear In-Memory Workspace State Cache",
+        "category": "UNDRIFT",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "undrift.openFindingLocation",
+        "title": "UNDRIFT: Open Finding Location",
+        "category": "UNDRIFT"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "undrift.openFindingLocation",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "undrift.scanWorkspace",
+          "when": "view == undrift.findingsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "undrift.refresh",
+          "when": "view == undrift.findingsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "undrift.showReport",
+          "when": "view == undrift.findingsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "undrift.clearCache",
+          "when": "view == undrift.findingsView",
+          "group": "2_maintenance@1"
+        },
+        {
+          "command": "undrift.resetHistory",
+          "when": "view == undrift.findingsView",
+          "group": "2_maintenance@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "undrift.explainFinding",
+          "when": "view == undrift.findingsView && viewItem =~ /^undrift\\.finding/",
+          "group": "inline"
+        },
+        {
+          "command": "undrift.showReport",
+          "when": "view == undrift.findingsView && viewItem =~ /^undrift\\.finding/",
+          "group": "1_actions"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {

@@ -510,6 +510,32 @@ export class AnalysisCoordinator {
   }
 
   /**
+   * Resets persisted lifecycle event history for a workspace without altering the latest complete snapshot or source code.
+   */
+  public async resetHistory(workspaceId?: WorkspaceId): Promise<void> {
+    if (this.disposed) return;
+    const wsId = workspaceId ?? this.activeWorkspaceId;
+    if (!wsId) return;
+
+    if (this.persistence) {
+      await this.persistence.resetHistory(wsId);
+    }
+    this.lastKnownHistories.set(wsId, []);
+    this.logger?.info(`Reset lifecycle history for workspace ${wsId}.`);
+  }
+
+  /**
+   * Clears in-memory cached copies of persisted workspace state without deleting saved snapshots or lifecycle history.
+   */
+  public async clearCache(): Promise<void> {
+    if (this.disposed) return;
+    if (this.persistence) {
+      await this.persistence.clearCache();
+    }
+    this.logger?.info("Cleared in-memory workspace state cache.");
+  }
+
+  /**
    * Ensures that persisted session state (snapshot and history) has been restored
    * for the specified workspace. Reuses any in-flight or completed restoration promise.
    */
