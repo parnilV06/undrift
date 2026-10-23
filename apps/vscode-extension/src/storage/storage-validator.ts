@@ -27,9 +27,27 @@ const VALID_LIFECYCLE_STATES: ReadonlySet<FindingLifecycleState> = new Set([
   "suppressed"
 ]);
 
-const VALID_FINDING_CATEGORIES = new Set(["protocol", "shape", "limitation"]);
+const VALID_FINDING_CATEGORIES = new Set([
+  "existence",
+  "route",
+  "request-shape",
+  "response-shape",
+  "type",
+  "analysis-limit",
+  "protocol",
+  "shape",
+  "limitation"
+]);
 const VALID_FINDING_SEVERITIES = new Set(["error", "warning", "info"]);
-const VALID_EVIDENCE_STRENGTHS = new Set(["exact", "inferred", "heuristic", "unresolved"]);
+const VALID_EVIDENCE_STRENGTHS = new Set([
+  "direct",
+  "resolved",
+  "inferred",
+  "unknown",
+  "exact",
+  "heuristic",
+  "unresolved"
+]);
 
 function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);

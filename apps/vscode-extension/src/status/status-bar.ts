@@ -1,3 +1,4 @@
+
 // Native VS Code Status Bar Item for UNDRIFT
 // strictly adhering to LLD.md Section 14.8 and Chunk 4.8 specification.
 
@@ -169,6 +170,14 @@ export class DriftStatusBar implements vscode.Disposable {
   public handleAnalysisOutcome(outcome: CoordinatorAnalysisResult): void {
     if (this.disposed) return;
 
+    // Workspace change protection: do not clobber status bar if outcome is for an inactive workspace
+    if (outcome.workspaceId && this.coordinator) {
+      const activeWs = this.coordinator.getActiveWorkspaceId();
+      if (activeWs && outcome.workspaceId !== activeWs) {
+        return;
+      }
+    }
+
     switch (outcome.status) {
       case "superseded":
         // Stale result: do not clobber status bar
@@ -197,9 +206,37 @@ export class DriftStatusBar implements vscode.Disposable {
         this.setFailed();
         return;
 
-      case "cancelled":
-        // Cancelled scan does not overwrite status bar with obsolete findings
+      case "cancelled": {
+        // Cancelled scan does not overwrite status bar with obsolete findings.
+        // If the status bar was actively analyzing, revert back to last-known or idle
+        // state so it doesn't get stuck on "Analyzing..." when no replacement scan is active.
+        if (this.currentState !== "analyzing") {
+          return;
+        }
+
+        const wsId = outcome.workspaceId ?? this.activeWorkspaceId;
+        const activeScan =
+          wsId && typeof this.coordinator?.getActiveScan === "function"
+            ? this.coordinator.getActiveScan(wsId)
+            : undefined;
+
+        if (!activeScan || activeScan.isObsolete) {
+          if (wsId && typeof this.coordinator?.getLastKnownSnapshot === "function") {
+            const snap = this.coordinator.getLastKnownSnapshot(wsId);
+            if (snap) {
+              const count = snap.findings.filter((f) => f.state !== "resolved").length;
+              this.setLastKnown(count);
+            } else {
+              this.setNoAnalysis();
+            }
+          } else if (!wsId) {
+            this.setNoWorkspace();
+          } else {
+            this.setNoAnalysis();
+          }
+        }
         return;
+      }
     }
   }
 
