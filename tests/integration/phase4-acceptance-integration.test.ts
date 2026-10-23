@@ -1109,10 +1109,10 @@ describe("Phase 4, Chunk 4.9: End-to-End Integration Tests & Acceptance Verifica
   });
 
   // ==========================================================================
-  // Regression Case C: Clear Analysis Cache & Fresh Re-scan Path
+  // Regression Case C: Clear In-Memory State Cache & Fresh Re-scan Path
   // ==========================================================================
-  describe("Regression Case C: Clear Analysis Cache & Fresh Re-scan Path", () => {
-    it("clears temporary Tier-3 caches without deleting snapshots or history, then triggers fresh workspace scan", async () => {
+  describe("Regression Case C: Clear In-Memory State Cache & Fresh Re-scan Path", () => {
+    it("clears in-memory Tier-3 state cache without deleting snapshots or history, then triggers fresh workspace scan", async () => {
       const persistence = new WorkspaceStatePersistenceAdapter({
         storageUri: () => storageUri,
         fileSystem: inMemoryFs
@@ -1196,7 +1196,7 @@ describe("Phase 4, Chunk 4.9: End-to-End Integration Tests & Acceptance Verifica
 
       await coordinator.restoreSession();
 
-      // Execute Clear Analysis Cache
+      // Execute Clear In-Memory Workspace State Cache
       await mockVsCodeModule.commands.executeCommand("undrift.clearCache");
 
       // Confirms snapshots and lifecycle history were NOT deleted

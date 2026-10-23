@@ -525,14 +525,14 @@ export class AnalysisCoordinator {
   }
 
   /**
-   * Clears disposable in-memory and persistence caches without deleting findings or lifecycle history.
+   * Clears in-memory cached copies of persisted workspace state without deleting saved snapshots or lifecycle history.
    */
   public async clearCache(): Promise<void> {
     if (this.disposed) return;
     if (this.persistence) {
       await this.persistence.clearCache();
     }
-    this.logger?.info("Cleared disposable analysis and persistence cache.");
+    this.logger?.info("Cleared in-memory workspace state cache.");
   }
 
   /**

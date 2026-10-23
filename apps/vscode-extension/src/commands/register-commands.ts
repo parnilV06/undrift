@@ -235,16 +235,18 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
 
       try {
         await deps.coordinator.clearCache();
-        deps.logger?.info("Analysis cache cleared; re-scanning workspace...");
+        deps.logger?.info("In-memory workspace state cache cleared; re-scanning workspace...");
         void vs.window.showInformationMessage(
-          "UNDRIFT: Analysis cache cleared. Re-scanning workspace..."
+          "UNDRIFT: In-memory workspace state cache cleared (saved snapshots and lifecycle history are preserved). Re-scanning workspace..."
         );
         deps.statusBar?.setAnalyzing();
         await deps.coordinator.getScheduler().runImmediateScan();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        deps.logger?.error("Failed to clear analysis cache", err);
-        void vs.window.showErrorMessage(`UNDRIFT: Failed to clear analysis cache: ${msg}`);
+        deps.logger?.error("Failed to clear in-memory workspace state cache", err);
+        void vs.window.showErrorMessage(
+          `UNDRIFT: Failed to clear in-memory workspace state cache: ${msg}`
+        );
       }
     })
   );

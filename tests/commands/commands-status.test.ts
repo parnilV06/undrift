@@ -830,7 +830,7 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
       expect(mockCoordinator.clearCache).not.toHaveBeenCalled();
     });
 
-    it("clears temporary tier-3 cache and triggers clean immediate workspace re-scan", async () => {
+    it("clears temporary tier-3 in-memory cache and triggers clean immediate workspace re-scan", async () => {
       const statusBar = new DriftStatusBar({
         coordinator: mockCoordinator as unknown as AnalysisCoordinator,
         vscodeModule: mockVsCode as unknown as typeof vscode
@@ -847,7 +847,7 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
 
       expect(mockCoordinator.clearCache).toHaveBeenCalledTimes(1);
       expect(mockVsCode.window.showInformationMessage).toHaveBeenCalledWith(
-        "UNDRIFT: Analysis cache cleared. Re-scanning workspace..."
+        "UNDRIFT: In-memory workspace state cache cleared (saved snapshots and lifecycle history are preserved). Re-scanning workspace..."
       );
       expect(statusBar.getState()).toBe("analyzing");
       expect(mockScheduler.runImmediateScan).toHaveBeenCalledTimes(1);
@@ -866,11 +866,11 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
       await mockVsCode.commands.executeCommand("undrift.clearCache");
 
       expect(mockLogger.error).toHaveBeenCalledWith(
-        "Failed to clear analysis cache",
+        "Failed to clear in-memory workspace state cache",
         expect.any(Error)
       );
       expect(mockVsCode.window.showErrorMessage).toHaveBeenCalledWith(
-        "UNDRIFT: Failed to clear analysis cache: Storage unavailable"
+        "UNDRIFT: Failed to clear in-memory workspace state cache: Storage unavailable"
       );
     });
   });

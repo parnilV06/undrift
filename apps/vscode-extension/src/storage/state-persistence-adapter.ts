@@ -598,7 +598,7 @@ export class WorkspaceStatePersistenceAdapter implements StatePersistencePort {
   }
 
   /**
-   * Clears disposable in-memory caches without discarding snapshots or history.
+   * Clears in-memory cached copies of persisted workspace snapshots and history without deleting files on disk.
    */
   async clearCache(): Promise<void> {
     this.memoryCache.clear();

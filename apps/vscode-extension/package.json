@@ -50,7 +50,7 @@
       },
       {
         "command": "undrift.clearCache",
-        "title": "UNDRIFT: Clear Analysis Cache",
+        "title": "UNDRIFT: Clear In-Memory Workspace State Cache",
         "category": "UNDRIFT",
         "icon": "$(trash)"
       },
