@@ -1329,6 +1329,21 @@ export class ReportPanelManager implements vscode.Disposable {
   }
 
   /**
+   * Handles history reset notification for a workspace.
+   */
+  public handleHistoryReset(workspaceId: WorkspaceId): void {
+    if (this.disposed) return;
+    const prior = this.workspaceStates.get(workspaceId);
+    if (prior) {
+      this.setWorkspaceState({
+        ...prior,
+        history: []
+      });
+      this.updateWebviewContent();
+    }
+  }
+
+  /**
    * Retrieves report state for workspace.
    */
   public getWorkspaceState(workspaceId?: WorkspaceId): WorkspaceReportState | undefined {

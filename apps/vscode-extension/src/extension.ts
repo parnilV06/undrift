@@ -8,29 +8,15 @@ import { JsTsAnalyzer } from "@undrift/analyzer-js-ts";
 import { AnalysisEngine, type SourceSpan, StateReconciler } from "@undrift/core";
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
+import { registerCommands, formatIncompleteScanMessage } from "./commands";
 import { DriftDiagnosticProvider } from "./diagnostics";
 import { OutputChannelLogger } from "./logging";
+import { DriftStatusBar } from "./status";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
 import { FindingsTreeDataProvider, openFindingLocation, ReportPanelManager } from "./views";
 import { WorkspaceManager } from "./workspace";
 
-/**
- * Formats the user-facing warning message for an incomplete analysis scan.
- * When files failed acquisition, explicitly reports the acquisition failure count.
- * When source acquisition succeeded but analysis was marked incomplete due to
- * parsing, analysis, or coverage limitations, avoids falsely reporting zero unacquired files.
- */
-export function formatIncompleteScanMessage(
-  filesCount: number,
-  findingsCount: number,
-  failuresCount: number
-): string {
-  const failureDetail =
-    failuresCount > 0
-      ? ` (${failuresCount} file${failuresCount === 1 ? "" : "s"} could not be acquired)`
-      : "";
-  return `UNDRIFT: Analysis incomplete${failureDetail}. Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} finding${findingsCount === 1 ? "" : "s"}.`;
-}
+export { formatIncompleteScanMessage };
 
 let logger: OutputChannelLogger | undefined;
 let workspaceManager: WorkspaceManager | undefined;
@@ -42,6 +28,7 @@ let reconciler: StateReconciler | undefined;
 let diagnosticProvider: DriftDiagnosticProvider | undefined;
 let treeProvider: FindingsTreeDataProvider | undefined;
 let reportPanelManager: ReportPanelManager | undefined;
+let statusBar: DriftStatusBar | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 
 /**
@@ -127,124 +114,40 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(reportPanelManager);
 
-  // 13. Restore persisted session state for current workspace if available
+  // 13. Instantiate status bar item
+  statusBar = new DriftStatusBar({
+    coordinator,
+    logger
+  });
+  context.subscriptions.push(statusBar);
+
+  // 14. Restore persisted session state for current workspace if available
   void coordinator
     .restoreSession()
     .then((restored) => {
       treeProvider?.handleSessionRestored(restored);
       reportPanelManager?.handleSessionRestored(restored);
+      statusBar?.handleSessionRestored(restored);
     })
     .catch((err) => {
       logger?.warn("Session restoration encountered an error during activation", err);
     });
 
-  // 13. Register workspace change events with the analysis scheduler
+  // 15. Register workspace change events with the analysis scheduler
   const eventDisposables = coordinator.getScheduler().registerWorkspaceEvents();
   context.subscriptions.push(eventDisposables);
 
-  // 14. Register undrift.scanWorkspace command
-  const scanCommand = vscode.commands.registerCommand("undrift.scanWorkspace", async () => {
-    if (!coordinator) {
-      void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
-      return;
-    }
-
-    try {
-      const outcome = await coordinator.getScheduler().runImmediateScan();
-
-      switch (outcome.status) {
-        case "success": {
-          const filesCount = outcome.result?.statistics.filesParsed ?? outcome.totalAcquired ?? 0;
-          const findingsCount = outcome.result?.findings.length ?? 0;
-          if (outcome.persistenceStatus === "failed") {
-            const reason = outcome.persistenceError ? `: ${outcome.persistenceError}` : "";
-            logger?.error(`State persistence failed${reason}`);
-            void vscode.window.showWarningMessage(
-              `UNDRIFT: Analysis complete (${findingsCount} finding${findingsCount === 1 ? "" : "s"}), but failed to save analysis state${reason}.`
-            );
-          } else {
-            void vscode.window.showInformationMessage(
-              `UNDRIFT: Analysis complete. Analyzed ${filesCount} file${filesCount === 1 ? "" : "s"}, found ${findingsCount} contract drift finding${findingsCount === 1 ? "" : "s"}.`
-            );
-          }
-          break;
-        }
-
-        case "incomplete": {
-          const filesCount = outcome.result?.statistics.filesParsed ?? outcome.totalAcquired ?? 0;
-          const findingsCount = outcome.result?.findings.length ?? 0;
-          const failuresCount = outcome.failures?.length ?? 0;
-          void vscode.window.showWarningMessage(
-            formatIncompleteScanMessage(filesCount, findingsCount, failuresCount)
-          );
-          break;
-        }
-
-        case "cancelled": {
-          logger?.info("UNDRIFT: Workspace analysis was cancelled.");
-          break;
-        }
-
-        case "superseded": {
-          logger?.info("UNDRIFT: Workspace analysis was superseded by a newer scan.");
-          break;
-        }
-
-        case "no-workspace": {
-          void vscode.window.showInformationMessage(
-            "UNDRIFT: No workspace folder is currently open in VS Code."
-          );
-          break;
-        }
-
-        case "failed": {
-          const msg = outcome.errorMessage ?? "Workspace analysis failed.";
-          logger?.error(`Analysis failed: ${msg}`);
-          void vscode.window.showErrorMessage(`UNDRIFT: Analysis failed — ${msg}`);
-          break;
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger?.error("Unexpected error executing workspace scan", err);
-      void vscode.window.showErrorMessage(`UNDRIFT: Scan encountered an error: ${msg}`);
-    }
+  // 16. Register all extension commands
+  const commandDisposables = registerCommands({
+    coordinator,
+    reportPanelManager,
+    treeProvider,
+    statusBar,
+    logger
   });
-
-  context.subscriptions.push(scanCommand);
-
-  // 15. Register undrift.refresh command
-  const refreshCommand = vscode.commands.registerCommand("undrift.refresh", async () => {
-    if (!coordinator) {
-      void vscode.window.showErrorMessage("UNDRIFT: Analysis coordinator is not initialized.");
-      return;
-    }
-    treeProvider?.refresh();
-    await coordinator.getScheduler().runImmediateScan();
-  });
-  context.subscriptions.push(refreshCommand);
-
-  // 16. Register undrift.openFindingLocation command
-  const openLocationCommand = vscode.commands.registerCommand(
-    "undrift.openFindingLocation",
-    async (span?: SourceSpan) => {
-      await openFindingLocation(span);
-    }
-  );
-  context.subscriptions.push(openLocationCommand);
-
-  // 17. Register undrift.showReport command
-  const showReportCommand = vscode.commands.registerCommand(
-    "undrift.showReport",
-    async (targetFindingId?: string) => {
-      if (!reportPanelManager) {
-        void vscode.window.showErrorMessage("UNDRIFT: Report panel manager is not initialized.");
-        return;
-      }
-      await reportPanelManager.show(targetFindingId);
-    }
-  );
-  context.subscriptions.push(showReportCommand);
+  for (const disposable of commandDisposables) {
+    context.subscriptions.push(disposable);
+  }
 
   logger.info("UNDRIFT extension activated successfully.");
 }
@@ -253,6 +156,15 @@ export function activate(context: vscode.ExtensionContext): void {
  * Deactivates the UNDRIFT VS Code extension and safely cleans up all resources.
  */
 export async function deactivate(): Promise<void> {
+  if (statusBar) {
+    try {
+      statusBar.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    statusBar = undefined;
+  }
+
   if (reportPanelManager) {
     try {
       reportPanelManager.dispose();
