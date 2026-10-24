@@ -10,6 +10,7 @@ import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
 import { registerCommands, formatIncompleteScanMessage } from "./commands";
 import { DriftDiagnosticProvider } from "./diagnostics";
+import { DriftCodeActionProvider, FixProposalService, FixVerificationCoordinator } from "./fixes";
 import { OutputChannelLogger } from "./logging";
 import { DriftStatusBar } from "./status";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
@@ -30,6 +31,9 @@ let treeProvider: FindingsTreeDataProvider | undefined;
 let reportPanelManager: ReportPanelManager | undefined;
 let statusBar: DriftStatusBar | undefined;
 let coordinator: AnalysisCoordinator | undefined;
+let fixService: FixProposalService | undefined;
+let verificationCoordinator: FixVerificationCoordinator | undefined;
+let codeActionProvider: DriftCodeActionProvider | undefined;
 
 /**
  * Activates the UNDRIFT VS Code extension.
@@ -95,6 +99,25 @@ export function activate(context: vscode.ExtensionContext): void {
     logger
   });
 
+  // 10b. Instantiate FixProposalService
+  fixService = new FixProposalService(coordinator);
+
+  // 10c. Register CodeActionProvider for supported languages
+  codeActionProvider = new DriftCodeActionProvider(fixService);
+  const languageFilters: vscode.DocumentFilter[] = [
+    { language: "javascript" },
+    { language: "typescript" },
+    { language: "javascriptreact" },
+    { language: "typescriptreact" }
+  ];
+  if (typeof vscode.languages?.registerCodeActionsProvider === "function") {
+    context.subscriptions.push(
+      vscode.languages.registerCodeActionsProvider(languageFilters, codeActionProvider, {
+        providedCodeActionKinds: DriftCodeActionProvider.providedCodeActionKinds
+      })
+    );
+  }
+
   // 11. Instantiate and register findings tree view provider
   treeProvider = new FindingsTreeDataProvider({
     coordinator,
@@ -110,9 +133,20 @@ export function activate(context: vscode.ExtensionContext): void {
   // 12. Instantiate and register report panel manager
   reportPanelManager = new ReportPanelManager({
     coordinator,
+    fixService,
     logger
   });
   context.subscriptions.push(reportPanelManager);
+
+  // 12b. Instantiate fix verification coordinator
+  verificationCoordinator = new FixVerificationCoordinator({
+    coordinator,
+    fixService,
+    reportPanelManager,
+    logger
+  });
+  fixService.setVerificationCoordinator(verificationCoordinator);
+  context.subscriptions.push(verificationCoordinator);
 
   // 13. Instantiate status bar item
   statusBar = new DriftStatusBar({
@@ -143,6 +177,8 @@ export function activate(context: vscode.ExtensionContext): void {
     reportPanelManager,
     treeProvider,
     statusBar,
+    fixService,
+    verificationCoordinator,
     logger
   });
   for (const disposable of commandDisposables) {
@@ -201,12 +237,23 @@ export async function deactivate(): Promise<void> {
     diagnosticProvider = undefined;
   }
 
+  if (verificationCoordinator) {
+    try {
+      verificationCoordinator.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    verificationCoordinator = undefined;
+  }
+
   persistence = undefined;
   reconciler = undefined;
   engine = undefined;
   parser = undefined;
   analyzer = undefined;
   workspaceManager = undefined;
+  codeActionProvider = undefined;
+  fixService = undefined;
 
   if (logger) {
     logger.dispose();

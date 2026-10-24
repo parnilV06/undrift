@@ -58,12 +58,22 @@
         "command": "undrift.openFindingLocation",
         "title": "UNDRIFT: Open Finding Location",
         "category": "UNDRIFT"
+      },
+      {
+        "command": "undrift.applyFix",
+        "title": "UNDRIFT: Apply Repair Proposal",
+        "category": "UNDRIFT",
+        "icon": "$(tools)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "undrift.openFindingLocation",
+          "when": "false"
+        },
+        {
+          "command": "undrift.applyFix",
           "when": "false"
         }
       ],

@@ -339,7 +339,7 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
         vscodeModule: mockVsCode as unknown as typeof vscode
       });
 
-      expect(disposables).toHaveLength(7);
+      expect(disposables).toHaveLength(8);
 
       const registered = mockVsCode.commands.getRegisteredCommands();
       expect(registered.has("undrift.scanWorkspace")).toBe(true);
@@ -349,6 +349,7 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
       expect(registered.has("undrift.resetHistory")).toBe(true);
       expect(registered.has("undrift.clearCache")).toBe(true);
       expect(registered.has("undrift.openFindingLocation")).toBe(true);
+      expect(registered.has("undrift.applyFix")).toBe(true);
 
       // Clean disposal
       for (const d of disposables) {
@@ -357,7 +358,7 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
       expect(mockVsCode.commands.getRegisteredCommands().size).toBe(0);
     });
 
-    it("verifies package.json contributes all 7 commands and appropriate view title/item menus", () => {
+    it("verifies package.json contributes all 8 commands and appropriate view title/item menus", () => {
       const packageJsonPath = path.resolve(__dirname, "../../apps/vscode-extension/package.json");
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
 
@@ -371,13 +372,20 @@ describe("Phase 4, Chunk 4.8: Commands, Status & Lifecycle Actions", () => {
       expect(commandIds).toContain("undrift.resetHistory");
       expect(commandIds).toContain("undrift.clearCache");
       expect(commandIds).toContain("undrift.openFindingLocation");
+      expect(commandIds).toContain("undrift.applyFix");
 
-      // Verify command palette hides navigation helper
+      // Verify command palette hides navigation and repair helpers
       const hiddenCommands = packageJson.contributes.menus.commandPalette;
       expect(
         hiddenCommands.some(
           (m: { command: string; when: string }) =>
             m.command === "undrift.openFindingLocation" && m.when === "false"
+        )
+      ).toBe(true);
+      expect(
+        hiddenCommands.some(
+          (m: { command: string; when: string }) =>
+            m.command === "undrift.applyFix" && m.when === "false"
         )
       ).toBe(true);
 

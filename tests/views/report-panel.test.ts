@@ -15,6 +15,8 @@ import type {
   FindingLifecycleEvent,
   FindingLifecycleTransition,
   FindingSeverity,
+  FixProposal,
+  FixProposalId,
   PersistedFindingRecord,
   ReconciliationResult,
   RuleId,
@@ -729,42 +731,42 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
     });
   });
 
-  describe("B. ReportPanelManager Coordinator Integration & Acceptance Boundaries", () => {
-    interface TestCoordinator extends AnalysisCoordinator {
-      _emitOutcome(outcome: CoordinatorAnalysisResult): void;
-    }
+  interface TestCoordinator extends AnalysisCoordinator {
+    _emitOutcome(outcome: CoordinatorAnalysisResult): void;
+  }
 
-    function createMockCoordinator(overrides?: Partial<AnalysisCoordinator>): TestCoordinator {
-      const listeners: ((res: CoordinatorAnalysisResult) => void)[] = [];
-      const mockScheduler = {
-        runImmediateScan: vi.fn().mockResolvedValue({ status: "success" }),
-        scheduleScan: vi.fn()
-      };
+  function createMockCoordinator(overrides?: Partial<AnalysisCoordinator>): TestCoordinator {
+    const listeners: ((res: CoordinatorAnalysisResult) => void)[] = [];
+    const mockScheduler = {
+      runImmediateScan: vi.fn().mockResolvedValue({ status: "success" }),
+      scheduleScan: vi.fn()
+    };
 
-      return {
-        getActiveWorkspaceId: vi.fn().mockReturnValue("/workspace/app" as WorkspaceId),
-        getLastKnownSnapshot: vi.fn().mockReturnValue(undefined),
-        getLastKnownHistory: vi.fn().mockReturnValue([]),
-        onAnalysisCompleted: vi.fn((listener) => {
-          listeners.push(listener);
-          return {
-            dispose: () => {
-              const idx = listeners.indexOf(listener);
-              if (idx !== -1) listeners.splice(idx, 1);
-            }
-          };
-        }),
-        getScheduler: vi.fn().mockReturnValue(mockScheduler),
-        // Helper for test to emit outcomes
-        _emitOutcome: (outcome: CoordinatorAnalysisResult) => {
-          for (const l of [...listeners]) {
-            l(outcome);
+    return {
+      getActiveWorkspaceId: vi.fn().mockReturnValue("/workspace/app" as WorkspaceId),
+      getLastKnownSnapshot: vi.fn().mockReturnValue(undefined),
+      getLastKnownHistory: vi.fn().mockReturnValue([]),
+      onAnalysisCompleted: vi.fn((listener) => {
+        listeners.push(listener);
+        return {
+          dispose: () => {
+            const idx = listeners.indexOf(listener);
+            if (idx !== -1) listeners.splice(idx, 1);
           }
-        },
-        ...overrides
-      } as unknown as TestCoordinator;
-    }
+        };
+      }),
+      getScheduler: vi.fn().mockReturnValue(mockScheduler),
+      // Helper for test to emit outcomes
+      _emitOutcome: (outcome: CoordinatorAnalysisResult) => {
+        for (const l of [...listeners]) {
+          l(outcome);
+        }
+      },
+      ...overrides
+    } as unknown as TestCoordinator;
+  }
 
+  describe("B. ReportPanelManager Coordinator Integration & Acceptance Boundaries", () => {
     it("initializes without crash when coordinator has no snapshot (no-analysis state)", () => {
       const coordinator = createMockCoordinator();
       const manager = new ReportPanelManager(coordinator);
@@ -1192,6 +1194,212 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       // Subsequent show() does nothing when disposed
       await manager.show();
       expect(mockVsCodeModule.window.createWebviewPanel).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("C. Proposal Review & Application Experience (Chunk 5.3)", () => {
+    function createSampleProposal(
+      targetRole: "consumer" | "provider",
+      overrides?: Partial<FixProposal>
+    ): FixProposal {
+      return {
+        id: `prop:${targetRole}:1` as FixProposalId,
+        findingId: "finding:und120:users" as FindingId,
+        workspaceId: "/test/workspace" as WorkspaceId,
+        generation: 1,
+        targetRole,
+        title:
+          targetRole === "consumer"
+            ? "Change frontend request method to POST"
+            : "Change backend endpoint method to GET",
+        rationale:
+          targetRole === "consumer"
+            ? "Aligns frontend request method with backend endpoint POST."
+            : "Aligns backend endpoint method with frontend request GET.",
+        assumptions: {
+          authoritativeSide: targetRole === "consumer" ? "provider" : "consumer",
+          breakingChange: targetRole === "provider"
+        },
+        riskLevel: "low",
+        verificationExpectation: "Re-analysis will confirm method alignment.",
+        edits: [
+          {
+            id: `edit:${targetRole}:1`,
+            proposalId: `prop:${targetRole}:1` as FixProposalId,
+            targetUri: targetRole === "consumer" ? "/test/consumer.ts" : "/test/provider.ts",
+            span: {
+              uri: targetRole === "consumer" ? "/test/consumer.ts" : "/test/provider.ts",
+              start: { line: 5, character: 10 },
+              end: { line: 5, character: 15 }
+            },
+            currentText: targetRole === "consumer" ? '"GET"' : "post",
+            replacementText: targetRole === "consumer" ? '"POST"' : "get",
+            expectedContentHash: "hash123",
+            expectedDocumentVersion: 1
+          }
+        ],
+        createdAt: 1000,
+        ...overrides
+      };
+    }
+
+    it("renders candidate repair proposals with distinct roles, diffs, rationale, and assumptions", () => {
+      const finding = createSampleFinding("und120:users", { ruleId: "UND120" });
+      const consumerProp = createSampleProposal("consumer");
+      const providerProp = createSampleProposal("provider");
+
+      const proposalsByFinding = new Map([[finding.id, [consumerProp, providerProp]]]);
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [finding],
+        history: [],
+        warnings: [],
+        proposalsByFinding
+      });
+
+      expect(html).toContain("Candidate Repair Proposals (2 available)");
+      expect(html).toContain(
+        "Proposals represent alternative repairs, not authoritative recommendations."
+      );
+      expect(html).toContain("Consumer Repair (Frontend)");
+      expect(html).toContain("Provider Repair (Backend)");
+      expect(html).toContain("Change frontend request method to POST");
+      expect(html).toContain("Change backend endpoint method to GET");
+      expect(html).toContain("Provider (Backend)");
+      expect(html).toContain("Consumer (Frontend)");
+      expect(html).toContain("Aligns frontend request method with backend endpoint POST.");
+      expect(html).toContain("&quot;GET&quot;");
+      expect(html).toContain("&quot;POST&quot;");
+      expect(html).toContain('data-action="apply-fix"');
+      expect(html).toContain('data-proposal-id="prop:consumer:1"');
+      expect(html).toContain('data-proposal-id="prop:provider:1"');
+    });
+
+    it("highlights target proposal card when targetProposalId is provided", () => {
+      const finding = createSampleFinding("und120:users", { ruleId: "UND120" });
+      const consumerProp = createSampleProposal("consumer");
+      const providerProp = createSampleProposal("provider");
+
+      const proposalsByFinding = new Map([[finding.id, [consumerProp, providerProp]]]);
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [finding],
+        history: [],
+        warnings: [],
+        proposalsByFinding,
+        targetProposalId: "prop:consumer:1"
+      });
+
+      expect(html).toContain('id="proposal-prop:consumer:1"');
+      expect(html).toContain("proposal-target-highlight");
+    });
+
+    it("renders manual resolution notes when no safe proposals are available", () => {
+      const und120Finding = createSampleFinding("und120:no-fix", { ruleId: "UND120" });
+      const und200Finding = createSampleFinding("und200:no-fix", { ruleId: "UND200" });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [und120Finding, und200Finding],
+        history: [],
+        warnings: [],
+        proposalsByFinding: new Map([
+          [und120Finding.id, []],
+          [und200Finding.id, []]
+        ])
+      });
+
+      expect(html).toContain(
+        "No automated safe repair proposals are available for this finding. Method evidence could not be determined conservatively without ambiguity. Manual inspection and repair is required."
+      );
+      expect(html).toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>. Manual resolution is required."
+      );
+    });
+
+    it("escapes proposal fields to prevent XSS", () => {
+      const finding = createSampleFinding("xss:prop", { ruleId: "UND120" });
+      const maliciousProp = createSampleProposal("consumer", {
+        title: "<script>alert('title-xss')</script>",
+        rationale: "<img src=x onerror=alert('rationale-xss')>",
+        edits: [
+          {
+            id: "edit:xss",
+            proposalId: "prop:consumer:1" as FixProposalId,
+            targetUri: "/test/consumer.ts",
+            span: {
+              uri: "/test/consumer.ts",
+              start: { line: 1, character: 1 },
+              end: { line: 1, character: 5 }
+            },
+            currentText: "<tag>old</tag>",
+            replacementText: "<script>pwned()</script>",
+            expectedContentHash: "hash",
+            expectedDocumentVersion: 1
+          }
+        ]
+      });
+
+      const proposalsByFinding = new Map([[finding.id, [maliciousProp]]]);
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [finding],
+        history: [],
+        warnings: [],
+        proposalsByFinding
+      });
+
+      expect(html).not.toContain("<script>alert('title-xss')</script>");
+      expect(html).toContain("&lt;script&gt;alert(&#39;title-xss&#39;)&lt;/script&gt;");
+
+      expect(html).not.toContain("<img src=x onerror=alert('rationale-xss')>");
+      expect(html).toContain("&lt;img src=x onerror=alert(&#39;rationale-xss&#39;)&gt;");
+
+      expect(html).not.toContain("<script>pwned()</script>");
+      expect(html).toContain("&lt;script&gt;pwned()&lt;/script&gt;");
+    });
+
+    it("dispatches undrift.applyFix command when valid applyFix message is received", async () => {
+      const coordinator = createMockCoordinator();
+      const manager = new ReportPanelManager(coordinator);
+
+      mockVsCodeModule.commands.executeCommand.mockClear();
+
+      await manager.handleWebviewMessage({
+        command: "applyFix",
+        proposalId: "prop:consumer:1"
+      });
+
+      expect(mockVsCodeModule.commands.executeCommand).toHaveBeenCalledWith(
+        "undrift.applyFix",
+        "prop:consumer:1"
+      );
+
+      manager.dispose();
+    });
+
+    it("ignores malformed, empty, or oversized applyFix messages", async () => {
+      const coordinator = createMockCoordinator();
+      const manager = new ReportPanelManager(coordinator);
+
+      mockVsCodeModule.commands.executeCommand.mockClear();
+
+      await manager.handleWebviewMessage({ command: "applyFix", proposalId: "" });
+      await manager.handleWebviewMessage({ command: "applyFix", proposalId: "   " });
+      await manager.handleWebviewMessage({ command: "applyFix", proposalId: 12345 });
+      await manager.handleWebviewMessage({ command: "applyFix", proposalId: "x".repeat(300) });
+      await manager.handleWebviewMessage({ command: "applyFix" });
+
+      expect(mockVsCodeModule.commands.executeCommand).not.toHaveBeenCalled();
+
+      manager.dispose();
     });
   });
 });

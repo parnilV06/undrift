@@ -1,9 +1,13 @@
-// VS Code extension command registrations for UNDRIFT.
-// strictly adhering to LLD.md Sections 14.8, 16.2, and Chunk 4.8 specification.
-
 import type * as vscode from "vscode";
-import type { SourceSpan } from "@undrift/core";
+import type { DocumentUri, FixProposalId, SourceSpan } from "@undrift/core";
 import type { AnalysisCoordinator } from "../activation/coordinator";
+import {
+  FixStalenessValidator,
+  FixVerificationCoordinator,
+  computeExpectedPostEditHashes,
+  prepareFixWorkspaceEdit,
+  type FixProposalService
+} from "../fixes";
 import type { ExtensionLogger } from "../logging/output-channel";
 import type { DriftStatusBar } from "../status";
 import {
@@ -11,6 +15,7 @@ import {
   type FindingsTreeDataProvider,
   type ReportPanelManager
 } from "../views";
+import { computeContentHash } from "../workspace";
 
 /**
  * Formats user-facing warning message for an incomplete analysis scan.
@@ -30,6 +35,9 @@ export function formatIncompleteScanMessage(
 export interface CommandDependencies {
   coordinator: AnalysisCoordinator;
   reportPanelManager: ReportPanelManager;
+  fixService?: FixProposalService;
+  fixValidator?: FixStalenessValidator;
+  verificationCoordinator?: FixVerificationCoordinator;
   treeProvider?: FindingsTreeDataProvider;
   statusBar?: DriftStatusBar;
   logger?: ExtensionLogger;
@@ -122,9 +130,16 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
 
   // 3. undrift.showReport
   disposables.push(
-    vs.commands.registerCommand("undrift.showReport", async (targetFindingId?: string) => {
-      await deps.reportPanelManager.show(targetFindingId);
-    })
+    vs.commands.registerCommand(
+      "undrift.showReport",
+      async (targetFindingId?: string, targetProposalId?: string) => {
+        if (targetProposalId !== undefined) {
+          await deps.reportPanelManager.show(targetFindingId, targetProposalId);
+        } else {
+          await deps.reportPanelManager.show(targetFindingId);
+        }
+      }
+    )
   );
 
   // 4. undrift.explainFinding
@@ -255,6 +270,228 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
   disposables.push(
     vs.commands.registerCommand("undrift.openFindingLocation", async (span?: SourceSpan) => {
       await openFindingLocation(span, vs);
+    })
+  );
+
+  // 8. undrift.applyFix
+  disposables.push(
+    vs.commands.registerCommand("undrift.applyFix", async (proposalIdArg?: unknown) => {
+      let proposalId: string | undefined;
+      if (typeof proposalIdArg === "string" && proposalIdArg.trim() !== "") {
+        proposalId = proposalIdArg.trim();
+      } else if (
+        proposalIdArg &&
+        typeof proposalIdArg === "object" &&
+        "proposalId" in proposalIdArg &&
+        typeof (proposalIdArg as { proposalId: unknown }).proposalId === "string"
+      ) {
+        proposalId = (proposalIdArg as { proposalId: string }).proposalId.trim();
+      }
+
+      const wsId = deps.coordinator.getActiveWorkspaceId();
+      if (!wsId) {
+        void vs.window.showInformationMessage(
+          "UNDRIFT: No workspace folder is currently open in VS Code."
+        );
+        return;
+      }
+
+      if (!deps.fixService) {
+        void vs.window.showErrorMessage("UNDRIFT: Fix proposal service is not available.");
+        return;
+      }
+
+      if (!proposalId) {
+        const allProposals = deps.fixService.getAllProposals(wsId);
+        const items: Array<{
+          label: string;
+          description: string;
+          detail: string;
+          proposalId: string;
+        }> = [];
+        for (const [findingId, proposals] of allProposals.entries()) {
+          for (const prop of proposals) {
+            items.push({
+              label: prop.title,
+              description: `[${prop.targetRole}] finding: ${findingId}`,
+              detail: prop.rationale,
+              proposalId: prop.id
+            });
+          }
+        }
+
+        if (items.length === 0) {
+          void vs.window.showInformationMessage(
+            "UNDRIFT: No actionable repair proposals available in the current workspace."
+          );
+          return;
+        }
+
+        const picked = await vs.window.showQuickPick(items, {
+          placeHolder: "Select a candidate repair proposal to review and apply"
+        });
+        if (!picked) {
+          return;
+        }
+        proposalId = picked.proposalId;
+      }
+
+      const resolved = deps.fixService.getProposalById(proposalId as FixProposalId, wsId);
+      if (!resolved) {
+        void vs.window.showWarningMessage(
+          `UNDRIFT: Repair proposal '${proposalId}' is no longer valid or could not be found. Please re-analyze the workspace for fresh proposals.`
+        );
+        return;
+      }
+
+      const { proposal, finding } = resolved;
+
+      if (!proposal.workspaceId || proposal.workspaceId !== wsId) {
+        void vs.window.showErrorMessage(
+          `UNDRIFT: Cannot apply proposal '${proposal.id}': workspace identity mismatch (originates from '${proposal.workspaceId ?? "unknown"}', active workspace is '${wsId}').`
+        );
+        return;
+      }
+
+      const targetSide =
+        proposal.targetRole === "consumer" ? "frontend consumer" : "backend provider";
+      const choice = await vs.window.showInformationMessage(
+        `Apply ${targetSide} repair: "${proposal.title}"?\n\nThis will edit ${proposal.edits.length} file(s). Post-edit re-analysis will verify contract alignment.`,
+        { modal: true },
+        "Apply Repair"
+      );
+
+      if (choice !== "Apply Repair") {
+        return;
+      }
+
+      const validator =
+        deps.fixValidator ??
+        new FixStalenessValidator({
+          documentAccessor: {
+            getOpenDocuments: () => {
+              if (!vs?.workspace?.textDocuments) return [];
+              return vs.workspace.textDocuments.map((doc: vscode.TextDocument) => ({
+                uri: doc.uri ? doc.uri.toString() : String(doc),
+                text: typeof doc.getText === "function" ? doc.getText() : "",
+                version: doc.version
+              }));
+            },
+            readDocumentText: async (uriStr) => {
+              if (!vs?.workspace) return undefined;
+              const openDoc = vs.workspace.textDocuments?.find(
+                (d: vscode.TextDocument) => d.uri?.toString() === uriStr
+              );
+              if (openDoc) {
+                return {
+                  uri: uriStr,
+                  text: typeof openDoc.getText === "function" ? openDoc.getText() : "",
+                  version: openDoc.version
+                };
+              }
+              if (vs.workspace.fs?.readFile) {
+                try {
+                  const uri = vs.Uri.parse(uriStr);
+                  const bytes = await vs.workspace.fs.readFile(uri);
+                  const text = Buffer.from(bytes).toString("utf8");
+                  return { uri: uriStr, text, version: undefined };
+                } catch {
+                  return undefined;
+                }
+              }
+              return undefined;
+            },
+            documentExists: async (uriStr) => {
+              if (!vs?.workspace) return false;
+              const isOpen = vs.workspace.textDocuments?.some(
+                (d: vscode.TextDocument) => d.uri?.toString() === uriStr
+              );
+              if (isOpen) return true;
+              if (vs.workspace.fs?.stat) {
+                try {
+                  const uri = vs.Uri.parse(uriStr);
+                  await vs.workspace.fs.stat(uri);
+                  return true;
+                } catch {
+                  return false;
+                }
+              }
+              return false;
+            }
+          }
+        });
+
+      const validationResult = await validator.validateProposal(proposal, {
+        targetWorkspaceId: wsId,
+        coordinator: deps.coordinator
+      });
+
+      if (!validationResult.valid) {
+        deps.logger?.warn(`Fix proposal validation failed: ${validationResult.message}`);
+        void vs.window.showWarningMessage(
+          `UNDRIFT: Cannot apply repair: ${validationResult.message} Please re-scan the workspace.`
+        );
+        return;
+      }
+
+      let prepared;
+      try {
+        prepared = prepareFixWorkspaceEdit(validationResult, {
+          expectedTargetRole: proposal.targetRole,
+          workspaceEditFactory: () => new vs.WorkspaceEdit(),
+          uriParser: (u) => vs.Uri.parse(u)
+        });
+      } catch (prepErr) {
+        const msg = prepErr instanceof Error ? prepErr.message : String(prepErr);
+        deps.logger?.error("Failed to prepare WorkspaceEdit", prepErr);
+        void vs.window.showErrorMessage(`UNDRIFT: Failed to prepare repair edit: ${msg}`);
+        return;
+      }
+
+      // 3.A: Register or establish observation path early enough that a fast subsequent analysis cannot be missed
+      const verifier =
+        deps.verificationCoordinator ??
+        new FixVerificationCoordinator({
+          coordinator: deps.coordinator,
+          fixService: deps.fixService,
+          reportPanelManager: deps.reportPanelManager,
+          logger: deps.logger,
+          vscodeModule: vs
+        });
+
+      const expectedHashes = computeExpectedPostEditHashes(
+        proposal,
+        validationResult.documentSnapshots
+      );
+
+      const session = verifier.beginVerification(proposal, finding, expectedHashes);
+
+      try {
+        const success = await vs.workspace.applyEdit(prepared.workspaceEdit);
+        if (!success) {
+          session.cancel();
+          deps.logger?.error("vscode.workspace.applyEdit returned false.");
+          void vs.window.showErrorMessage(
+            "UNDRIFT: VS Code could not apply the repair edit. Please check if the target document is locked or has unsaved conflicting changes."
+          );
+          return;
+        }
+
+        deps.logger?.info(
+          `Successfully applied repair proposal '${proposal.id}' for finding '${finding.id}'.`
+        );
+        void vs.window.showInformationMessage(
+          `UNDRIFT: Repair edit applied successfully for "${proposal.title}". Verifying contract drift resolution...`
+        );
+
+        // 3.B: Record proposal as applied and trigger immediate post-edit workspace analysis
+        await session.markAppliedAndScan();
+      } catch (applyErr) {
+        session.cancel();
+        const msg = applyErr instanceof Error ? applyErr.message : String(applyErr);
+        deps.logger?.error("Exception applying WorkspaceEdit", applyErr);
+        void vs.window.showErrorMessage(`UNDRIFT: Error applying repair edit: ${msg}`);
+      }
     })
   );
 

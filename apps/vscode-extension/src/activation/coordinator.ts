@@ -18,6 +18,7 @@ import type {
   ReconciliationResult,
   ResolvedUndriftConfig,
   RetentionPolicy,
+  SourceDocument,
   StatePersistencePort,
   StateReconciliationPort,
   WorkspaceId
@@ -283,6 +284,15 @@ export class AnalysisCoordinator {
   /** Latest accepted and persisted generation per workspace for stale-result rejection. */
   private readonly latestAcceptedGenerations = new Map<WorkspaceId, number>();
 
+  /** Latest accepted analysis result per workspace for proposal generation. */
+  private readonly latestAcceptedAnalysisResults = new Map<WorkspaceId, AnalysisResult>();
+
+  /** Latest accepted source documents snapshot map per workspace for proposal generation. */
+  private readonly latestAcceptedSourceDocuments = new Map<
+    WorkspaceId,
+    ReadonlyMap<DocumentUri, SourceDocument>
+  >();
+
   /** Debounced analysis scheduler. */
   private readonly scheduler: AnalysisScheduler;
 
@@ -451,6 +461,24 @@ export class AnalysisCoordinator {
   public getLatestAcceptedGeneration(workspaceId?: WorkspaceId): number | undefined {
     const id = workspaceId ?? this.activeWorkspaceId;
     return id ? this.latestAcceptedGenerations.get(id) : undefined;
+  }
+
+  /**
+   * Returns the latest accepted AnalysisResult for a workspace.
+   */
+  public getLastAcceptedAnalysisResult(workspaceId?: WorkspaceId): AnalysisResult | undefined {
+    const id = workspaceId ?? this.activeWorkspaceId;
+    return id ? this.latestAcceptedAnalysisResults.get(id) : undefined;
+  }
+
+  /**
+   * Returns the latest accepted source documents map for a workspace.
+   */
+  public getLastAcceptedSourceDocuments(
+    workspaceId?: WorkspaceId
+  ): ReadonlyMap<DocumentUri, SourceDocument> | undefined {
+    const id = workspaceId ?? this.activeWorkspaceId;
+    return id ? this.latestAcceptedSourceDocuments.get(id) : undefined;
   }
 
   /**
@@ -965,13 +993,18 @@ export class AnalysisCoordinator {
               };
             }
 
-            // Mark this generation as accepted before proceeding to reconciliation
-            this.latestAcceptedGenerations.set(workspaceId, generation);
-
             const resultToProcess =
               snapshot.status === "partial"
                 ? this.applyPartialScopeGating(rawResult, snapshot)
                 : rawResult;
+
+            // Mark this generation as accepted before proceeding to reconciliation
+            this.latestAcceptedGenerations.set(workspaceId, generation);
+            this.latestAcceptedAnalysisResults.set(workspaceId, resultToProcess);
+            const docMap = new Map<DocumentUri, SourceDocument>(
+              snapshot.documents.map((d) => [d.uri, d])
+            );
+            this.latestAcceptedSourceDocuments.set(workspaceId, docMap);
 
             return await this.processAnalysisResult(resultToProcess, snapshot);
           } catch (err) {
@@ -1283,6 +1316,8 @@ export class AnalysisCoordinator {
     this.restorationPromises.clear();
     this.lastKnownSnapshots.clear();
     this.lastKnownHistories.clear();
+    this.latestAcceptedAnalysisResults.clear();
+    this.latestAcceptedSourceDocuments.clear();
     this.analysisResultListeners.clear();
     this.diagnosticProvider = undefined;
   }

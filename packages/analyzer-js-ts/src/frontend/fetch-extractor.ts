@@ -422,11 +422,16 @@ function extractOptions(
         const rawMethod = valNode.text().slice(1, -1).toUpperCase();
 
         if (VALID_HTTP_METHODS.has(rawMethod)) {
+          const valSpan = mapper.toSourceSpanFromUtf16(
+            valNode.range.start,
+            valNode.range.end,
+            documentUri
+          );
           const evidence: EvidenceRef = {
             id: `ev-method-${child.range.start}`,
             kind: "literal-syntax",
             strength: "direct",
-            source: propSpan,
+            source: valSpan,
             description: `Explicit HTTP method '${rawMethod}' in fetch options`
           };
 

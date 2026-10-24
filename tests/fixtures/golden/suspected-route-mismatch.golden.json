@@ -148,20 +148,20 @@
               "source": {
                 "uri": "src/server.ts",
                 "range": {
-                  "start": 56,
-                  "end": 133
+                  "start": 60,
+                  "end": 63
                 },
                 "start": {
                   "line": 4,
-                  "character": 0
+                  "character": 4
                 },
                 "end": {
-                  "line": 6,
-                  "character": 2
+                  "line": 4,
+                  "character": 7
                 },
                 "byteRange": {
-                  "start": 56,
-                  "end": 133
+                  "start": 60,
+                  "end": 63
                 }
               },
               "description": "HTTP method 'GET' from app.get() route declaration"
@@ -471,20 +471,20 @@
           "source": {
             "uri": "src/server.ts",
             "range": {
-              "start": 56,
-              "end": 133
+              "start": 60,
+              "end": 63
             },
             "start": {
               "line": 4,
-              "character": 0
+              "character": 4
             },
             "end": {
-              "line": 6,
-              "character": 2
+              "line": 4,
+              "character": 7
             },
             "byteRange": {
-              "start": 56,
-              "end": 133
+              "start": 60,
+              "end": 63
             }
           },
           "description": "HTTP method 'GET' from app.get() route declaration"

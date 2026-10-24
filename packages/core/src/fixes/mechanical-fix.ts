@@ -1,5 +1,3 @@
-// TODO(implementation): Implement mechanical fix generators for safe route renames,
-// parameter updates, and method alignment.
-// No mechanical fixes have been implemented yet.
+// Mechanical fix generators as specified in LLD.md Section 13.1 and PRD.md Section 13.1.
 
-export {};
+export { MethodMismatchFixGenerator } from "./method-mismatch-generator";
