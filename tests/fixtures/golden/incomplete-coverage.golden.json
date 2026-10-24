@@ -187,7 +187,9 @@
           "description": "Static URL literal '/api/reports' in Axios call"
         }
       ],
-      "reasons": ["No compatible provider found in analyzed scope"],
+      "reasons": [
+        "No compatible provider found in analyzed scope"
+      ],
       "limitations": [],
       "findingIds": []
     }

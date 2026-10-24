@@ -149,6 +149,24 @@ describe("Frontend Fetch Call Extractor (Chunk 2.4)", () => {
       }
     });
 
+    it("anchors explicit method evidence to the exact method literal span", async () => {
+      const code = 'fetch("/api/users", { method: "GET" });';
+      const output = await analyzeCode(code);
+
+      expect(output.observations).toHaveLength(1);
+      const obs = output.observations[0];
+      expect(obs.endpoint.method.state).toBe("known");
+      if (obs.endpoint.method.state === "known") {
+        const ev = obs.endpoint.method.evidence[0];
+        expect(ev.kind).toBe("literal-syntax");
+        const literalText = code.slice(ev.source.range.start, ev.source.range.end);
+        expect(literalText).toBe('"GET"');
+        expect(ev.source.start.line).toBe(0);
+        expect(ev.source.start.character).toBe(30);
+        expect(ev.source.end.character).toBe(35);
+      }
+    });
+
     it("identifies trailing slash and query parameters correctly", async () => {
       const code = 'fetch("/api/users/?sort=desc&limit=10");';
       const output = await analyzeCode(code);

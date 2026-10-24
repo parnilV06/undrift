@@ -225,3 +225,20 @@ export {
   StateReconciler,
   extractCoverageSummary
 } from "./reconciliation/state-reconciler";
+
+export type {
+  FixRiskLevel,
+  FixProposalStatus,
+  FixTargetRole,
+  ProposedEdit,
+  FixProposal,
+  FixProposalIdentityInput
+} from "./domain/fix";
+
+export { createFixProposalId, createProposedEditId } from "./domain/fix";
+
+export type { FixGenerationContext, FixGeneratorPort } from "./ports/fix-generator";
+
+export { FixGeneratorRegistry, createDefaultFixGeneratorRegistry } from "./fixes/fix-registry";
+
+export { MethodMismatchFixGenerator } from "./fixes/method-mismatch-generator";

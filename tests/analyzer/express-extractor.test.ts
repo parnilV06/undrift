@@ -171,6 +171,24 @@ describe("Backend Express Route Extractor (Chunk 2.6)", () => {
       }
     });
 
+    it("anchors route method evidence to the exact method identifier token span", async () => {
+      const code = 'app.post("/api/users", handler);';
+      const output = await analyzeCode(code);
+
+      expect(output.observations).toHaveLength(1);
+      const obs = output.observations[0];
+      expect(obs.endpoint.method.state).toBe("known");
+      if (obs.endpoint.method.state === "known") {
+        const ev = obs.endpoint.method.evidence[0];
+        expect(ev.kind).toBe("literal-syntax");
+        const tokenText = code.slice(ev.source.range.start, ev.source.range.end);
+        expect(tokenText).toBe("post");
+        expect(ev.source.start.line).toBe(0);
+        expect(ev.source.start.character).toBe(4);
+        expect(ev.source.end.character).toBe(8);
+      }
+    });
+
     it("extracts route path parameters and populates request.pathParams", async () => {
       const code = 'app.get("/api/users/:userId/roles/:roleId", handler);';
       const output = await analyzeCode(code);

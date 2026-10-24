@@ -41,6 +41,7 @@ interface ExpressCallMatch {
   httpMethod?: HttpMethod;
   isDynamicMethod?: boolean;
   strength: EvidenceStrength;
+  methodNode?: SyntaxNode;
 }
 
 /**
@@ -114,7 +115,8 @@ function checkExpressRouteCall(node: SyntaxNode): ExpressCallMatch {
       receiver: receiverName,
       methodName: propText,
       httpMethod,
-      strength: "direct"
+      strength: "direct",
+      methodNode: propNode
     };
   }
 
@@ -763,11 +765,19 @@ export function extractExpressObservations(
         ]
       };
     } else {
+      const methodSpan = match.methodNode
+        ? mapper.toSourceSpanFromUtf16(
+            match.methodNode.range.start,
+            match.methodNode.range.end,
+            document.uri
+          )
+        : callSpan;
+
       const methodEvidence: EvidenceRef = {
         id: `ev-method-${node.range.start}`,
         kind: "literal-syntax",
         strength: match.strength,
-        source: callSpan,
+        source: methodSpan,
         description: `HTTP method '${match.httpMethod}' from ${match.receiver}.${match.methodName}() route declaration`
       };
 

@@ -148,20 +148,20 @@
               "source": {
                 "uri": "src/server.ts",
                 "range": {
-                  "start": 56,
-                  "end": 133
+                  "start": 60,
+                  "end": 63
                 },
                 "start": {
                   "line": 4,
-                  "character": 0
+                  "character": 4
                 },
                 "end": {
-                  "line": 6,
-                  "character": 2
+                  "line": 4,
+                  "character": 7
                 },
                 "byteRange": {
-                  "start": 56,
-                  "end": 133
+                  "start": 60,
+                  "end": 63
                 }
               },
               "description": "HTTP method 'GET' from app.get() route declaration"
@@ -471,20 +471,20 @@
           "source": {
             "uri": "src/server.ts",
             "range": {
-              "start": 56,
-              "end": 133
+              "start": 60,
+              "end": 63
             },
             "start": {
               "line": 4,
-              "character": 0
+              "character": 4
             },
             "end": {
-              "line": 6,
-              "character": 2
+              "line": 4,
+              "character": 7
             },
             "byteRange": {
-              "start": 56,
-              "end": 133
+              "start": 60,
+              "end": 63
             }
           },
           "description": "HTTP method 'GET' from app.get() route declaration"
@@ -534,7 +534,10 @@
       "explanation": "**Suspected route mismatch**: Consumer calls '/api/users' with GET, but the closest unique provider route is '/api/user'.\n\n- Expected: /api/users\n\n- Observed: /api/user\n\nReason: Exactly one static path segment differs between the unique consumer and provider candidates with matching HTTP method.\n\nImpact: Requests from this consumer may receive a 404 Not Found error at runtime.\n\nSuggested next steps:\n  * Verify whether the consumer route has a typo or should be updated to match the provider.\n  * Or add the missing route to the backend provider.",
       "evidenceStrength": "inferred",
       "relationshipId": "rel:suspected-route-conflict:obs:src/client.ts:74-97:obs:src/server.ts:56-133",
-      "observationIds": ["obs:src/client.ts:74-97", "obs:src/server.ts:56-133"],
+      "observationIds": [
+        "obs:src/client.ts:74-97",
+        "obs:src/server.ts:56-133"
+      ],
       "sourceLocations": [
         {
           "uri": "src/client.ts",
