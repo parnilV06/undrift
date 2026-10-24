@@ -3,7 +3,7 @@
 
 import * as crypto from "crypto";
 import type { Position, TextRange } from "./evidence";
-import type { DocumentUri, FindingId, FixProposalId } from "./types";
+import type { DocumentUri, FindingId, FixProposalId, WorkspaceId } from "./types";
 
 /**
  * Risk classification of a fix proposal as specified in PRD.md Section 13.1.
@@ -67,6 +67,8 @@ export interface FixProposal {
   readonly id: FixProposalId;
   /** Drift finding addressed by this proposal. */
   readonly findingId: FindingId;
+  /** Originating workspace identifier to bind proposal validity. */
+  readonly workspaceId?: WorkspaceId;
   /** Analysis generation during which this proposal was generated. */
   readonly generation?: number;
   /** Concise human-readable title of the proposed repair. */

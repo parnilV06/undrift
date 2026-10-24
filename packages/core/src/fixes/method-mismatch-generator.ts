@@ -213,6 +213,7 @@ export class MethodMismatchFixGenerator implements FixGeneratorPort {
     return {
       id: proposalId,
       findingId: finding.id,
+      workspaceId: context.workspaceId,
       generation: context.generation,
       title: `Change frontend request method to ${pMethod}`,
       rationale: `The backend endpoint at '${formattedRoute}' expects HTTP method ${pMethod}, but the frontend call specifies ${cMethod}.`,
@@ -298,6 +299,7 @@ export class MethodMismatchFixGenerator implements FixGeneratorPort {
     return {
       id: proposalId,
       findingId: finding.id,
+      workspaceId: context.workspaceId,
       generation: context.generation,
       title: `Change backend endpoint method to ${cMethod}`,
       rationale: `The frontend consumer at '${formattedRoute}' sends HTTP method ${cMethod}, but the backend route handler expects ${pMethod}.`,

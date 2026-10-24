@@ -665,5 +665,19 @@ describe("Phase 5, Chunk 5.1: Core Fix Proposal Model & Method Mismatch Generato
       expect(generators).toHaveLength(1);
       expect(generators[0].id).toBe("und120-method-conflict-generator");
     });
+
+    it("forwards workspaceId from FixGenerationContext to generated proposals", () => {
+      const generator = new MethodMismatchFixGenerator();
+      const { finding, context } = setupMethodConflictScenario();
+      const contextWithWs = {
+        ...context,
+        workspaceId: "ws:test-workspace" as const
+      };
+
+      const proposals = generator.generateProposals(finding, contextWithWs);
+      expect(proposals).toHaveLength(2);
+      expect(proposals[0].workspaceId).toBe("ws:test-workspace");
+      expect(proposals[1].workspaceId).toBe("ws:test-workspace");
+    });
   });
 });

@@ -9,7 +9,8 @@ import type {
   ObservationId,
   RelationshipId,
   RuleId,
-  SourceDocument
+  SourceDocument,
+  WorkspaceId
 } from "../domain/types";
 
 /**
@@ -28,6 +29,8 @@ export interface FixGenerationContext {
   readonly generation?: number;
   /** Optional target role filter if caller requests proposals for a specific side. */
   readonly targetRole?: FixTargetRole;
+  /** Optional originating workspace identifier. */
+  readonly workspaceId?: WorkspaceId;
 }
 
 /**
