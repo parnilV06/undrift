@@ -69,7 +69,15 @@ export function prepareFixWorkspaceEdit(
 
   const proposal = validation.proposal;
 
-  // 2. Validate target role against caller expectation
+  // 2. Reject missing or empty workspace identity
+  if (!proposal.workspaceId || proposal.workspaceId.trim() === "") {
+    throw new FixPreparationError(
+      "WORKSPACE_MISMATCH",
+      `Fix proposal '${proposal.id}' is missing required originating workspace identity.`
+    );
+  }
+
+  // 3. Validate target role against caller expectation
   if (options?.expectedTargetRole && options.expectedTargetRole !== proposal.targetRole) {
     throw new FixPreparationError(
       "TARGET_ROLE_MISMATCH",

@@ -263,6 +263,17 @@ describe("Safe WorkspaceEdit Translation (Chunk 5.2)", () => {
     } catch (err) {
       expect((err as FixPreparationError).reasonCode).toBe("MALFORMED_PROPOSAL");
     }
+
+    // 3d. Missing workspace identity
+    const missingWsValidation = createValidationSuccess({
+      proposalOverrides: { workspaceId: undefined }
+    });
+    expect(() => prepareFixWorkspaceEdit(missingWsValidation)).toThrow(FixPreparationError);
+    try {
+      prepareFixWorkspaceEdit(missingWsValidation);
+    } catch (err) {
+      expect((err as FixPreparationError).reasonCode).toBe("WORKSPACE_MISMATCH");
+    }
   });
 
   it("4. performs all-or-nothing translation for multi-edit proposals", () => {

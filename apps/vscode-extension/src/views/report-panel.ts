@@ -11,6 +11,7 @@ import type {
   FindingLifecycleEvent,
   FindingLifecycleTransition,
   FindingSeverity,
+  FixProposal,
   SourceSpan,
   WorkspaceId
 } from "@undrift/core";
@@ -20,6 +21,7 @@ import type {
   RestoredSessionState
 } from "../activation/coordinator";
 import type { DiagnosticFindingSource } from "../diagnostics";
+import type { FixProposalService } from "../fixes/fix-service";
 import type { ExtensionLogger } from "../logging/output-channel";
 import { openFindingLocation, type VerificationState } from "./findings-tree";
 
@@ -37,6 +39,8 @@ export interface ReportViewModel {
   readonly warnings: readonly AnalysisWarning[];
   readonly coverage?: AnalysisCoverageSummary;
   readonly targetFindingId?: string;
+  readonly targetProposalId?: string;
+  readonly proposalsByFinding?: ReadonlyMap<string, readonly FixProposal[]>;
 }
 
 /**
@@ -51,13 +55,22 @@ export interface TriggerScanMessage {
   readonly command: "scanWorkspace" | "refresh";
 }
 
-export type ReportWebviewMessage = OpenLocationMessage | TriggerScanMessage;
+export interface ApplyFixMessage {
+  readonly command: "applyFix";
+  readonly proposalId: string;
+}
+
+export type ReportWebviewMessage =
+  | OpenLocationMessage
+  | TriggerScanMessage
+  | ApplyFixMessage;
 
 /**
  * Options for configuring ReportPanelManager.
  */
 export interface ReportPanelManagerOptions {
   coordinator?: AnalysisCoordinator;
+  fixService?: FixProposalService;
   vscodeModule?: typeof vscode;
   logger?: ExtensionLogger;
 }
@@ -571,6 +584,186 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       background: rgba(127, 127, 127, 0.1);
       font-weight: 600;
     }
+    .proposals-section {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-color);
+    }
+    .proposals-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--vscode-editor-foreground, #ffffff);
+      margin-bottom: 4px;
+    }
+    .proposals-disclaimer {
+      font-size: 11.5px;
+      font-style: italic;
+      color: var(--vscode-descriptionForeground, #888888);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .proposals-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .proposal-card {
+      background: rgba(127, 127, 127, 0.04);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 14px 16px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .proposal-card.proposal-target-highlight {
+      border-color: var(--vscode-focusBorder, #007fd4);
+      box-shadow: 0 0 8px rgba(0, 127, 212, 0.4);
+    }
+    .proposal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .proposal-header h4 {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .badge-consumer {
+      background: rgba(55, 148, 255, 0.15);
+      color: #58a6ff;
+      border: 1px solid rgba(55, 148, 255, 0.35);
+    }
+    .badge-provider {
+      background: rgba(137, 209, 133, 0.15);
+      color: #89d185;
+      border: 1px solid rgba(137, 209, 133, 0.35);
+    }
+    .badge-risk-low {
+      background: rgba(137, 209, 133, 0.15);
+      color: #89d185;
+      border: 1px solid rgba(137, 209, 133, 0.3);
+    }
+    .badge-risk-medium {
+      background: rgba(204, 167, 0, 0.15);
+      color: #cca700;
+      border: 1px solid rgba(204, 167, 0, 0.3);
+    }
+    .badge-risk-high {
+      background: rgba(241, 76, 76, 0.15);
+      color: #f14c4c;
+      border: 1px solid rgba(241, 76, 76, 0.3);
+    }
+    .proposal-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px;
+      margin: 10px 0;
+      font-size: 11.5px;
+      padding: 8px 10px;
+      background: rgba(127, 127, 127, 0.05);
+      border-radius: 4px;
+    }
+    .proposal-meta-item {
+      color: var(--vscode-descriptionForeground, #999999);
+    }
+    .proposal-meta-item strong {
+      color: var(--vscode-editor-foreground, #cccccc);
+    }
+    .proposal-rationale {
+      font-size: 12px;
+      margin: 8px 0;
+      color: var(--vscode-editor-foreground, #cccccc);
+      line-height: 1.45;
+    }
+    .proposal-diff {
+      margin: 10px 0;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .diff-header {
+      font-size: 11px;
+      padding: 4px 10px;
+      background: rgba(127, 127, 127, 0.1);
+      border-bottom: 1px solid var(--border-color);
+      color: var(--vscode-descriptionForeground, #888888);
+    }
+    .diff-body {
+      padding: 6px 10px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .diff-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 6px;
+      border-radius: 2px;
+    }
+    .diff-old {
+      background: rgba(241, 76, 76, 0.15);
+      color: #f88;
+    }
+    .diff-new {
+      background: rgba(137, 209, 133, 0.15);
+      color: #8fd;
+    }
+    .diff-sign {
+      font-weight: bold;
+      user-select: none;
+      width: 12px;
+      display: inline-block;
+      text-align: center;
+    }
+    .proposal-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border-color);
+    }
+    .btn-apply-fix {
+      background: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #ffffff);
+      border: none;
+      border-radius: 3px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-apply-fix:hover {
+      background: var(--vscode-button-hoverBackground, #1177bb);
+    }
+    .proposal-apply-disclaimer {
+      font-size: 11px;
+      font-style: italic;
+      color: var(--vscode-descriptionForeground, #777777);
+      flex: 1;
+      min-width: 200px;
+    }
+    .manual-resolution-note {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, #888888);
+      font-style: italic;
+      padding: 8px 12px;
+      background: rgba(127, 127, 127, 0.04);
+      border: 1px dashed var(--border-color);
+      border-radius: 4px;
+      margin-top: 10px;
+    }
     footer {
       margin-top: 40px;
       padding-top: 16px;
@@ -674,7 +867,9 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         renderFindingCard(
           finding,
           historyByFinding.get(finding.id) ?? [],
-          model.targetFindingId === finding.id
+          model.targetFindingId === finding.id,
+          model.proposalsByFinding?.get(finding.id) ?? [],
+          model.targetProposalId
         )
       )
       .join("")}
@@ -717,13 +912,23 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
           if (vscode) {
             vscode.postMessage({ command: 'refresh' });
           }
+        } else if (action === 'apply-fix') {
+          const proposalId = btn.getAttribute('data-proposal-id');
+          if (proposalId && vscode) {
+            vscode.postMessage({ command: 'applyFix', proposalId: proposalId });
+          }
         }
       });
 
-      // Target finding scrolling
-      const targetCard = document.querySelector('.finding-card.target-highlight');
-      if (targetCard) {
-        targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Target scrolling
+      const targetProposal = document.querySelector('.proposal-card.proposal-target-highlight');
+      if (targetProposal) {
+        targetProposal.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        const targetCard = document.querySelector('.finding-card.target-highlight');
+        if (targetCard) {
+          targetCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
       }
     })();
   </script>
@@ -822,7 +1027,9 @@ function renderStatusBanner(model: ReportViewModel): string {
 function renderFindingCard(
   finding: DiagnosticFindingSource,
   history: readonly FindingLifecycleEvent[],
-  isTarget: boolean
+  isTarget: boolean,
+  proposals: readonly FixProposal[] = [],
+  targetProposalId?: string
 ): string {
   const severityClass =
     finding.severity === "error"
@@ -916,6 +1123,8 @@ function renderFindingCard(
         : ""
     }
 
+    ${renderProposalsSection(proposals, finding, targetProposalId)}
+
     ${
       history.length > 0
         ? `
@@ -930,6 +1139,185 @@ function renderFindingCard(
     </div>`
         : ""
     }
+  </div>`;
+}
+
+function renderProposalsSection(
+  proposals: readonly FixProposal[],
+  finding: DiagnosticFindingSource,
+  targetProposalId?: string
+): string {
+  if (proposals.length === 0) {
+    if (finding.ruleId === "UND120") {
+      return `
+    <div class="proposals-section">
+      <div class="proposals-title">Candidate Repair Proposals</div>
+      <div class="manual-resolution-note">
+        No automated safe repair proposals are available for this finding. Method evidence could not be determined conservatively without ambiguity. Manual inspection and repair is required.
+      </div>
+    </div>`;
+    }
+    return `
+    <div class="proposals-section">
+      <div class="proposals-title">Candidate Repair Proposals</div>
+      <div class="manual-resolution-note">
+        Automated repair proposals are not supported for rule <code>${escapeHtml(finding.ruleId)}</code>. Manual resolution is required.
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="proposals-section">
+    <div class="proposals-title">Candidate Repair Proposals (${proposals.length} available)</div>
+    <div class="proposals-disclaimer">
+      Proposals represent alternative repairs, not authoritative recommendations. Review the assumptions and diff before applying. Neither consumer nor provider is assumed to be inherently correct.
+    </div>
+    <div class="proposals-list">
+      ${proposals.map((p) => renderProposalCard(p, p.id === targetProposalId)).join("")}
+    </div>
+  </div>`;
+}
+
+function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
+  const roleBadgeClass =
+    proposal.targetRole === "consumer"
+      ? "badge-consumer"
+      : proposal.targetRole === "provider"
+        ? "badge-provider"
+        : "badge-category";
+  const roleLabel =
+    proposal.targetRole === "consumer"
+      ? "Consumer Repair (Frontend)"
+      : proposal.targetRole === "provider"
+        ? "Provider Repair (Backend)"
+        : "Neutral Repair";
+
+  const proposalRecord = proposal as unknown as Record<string, unknown>;
+  const rawRisk: string =
+    (proposal.risk as string) ||
+    (typeof proposalRecord.riskLevel === "string" ? proposalRecord.riskLevel : "") ||
+    "mechanical";
+  const riskBadgeClass =
+    rawRisk === "mechanical" || rawRisk === "low"
+      ? "badge-risk-low"
+      : rawRisk === "review-required" || rawRisk === "medium"
+        ? "badge-risk-medium"
+        : "badge-risk-high";
+  const riskDisplay =
+    rawRisk === "mechanical"
+      ? "mechanical"
+      : rawRisk === "review-required"
+        ? "review-required"
+        : String(rawRisk);
+
+  let authoritativeSideLabel = "Neutral / Unspecified";
+  const rawAssumptions = proposalRecord.assumptions;
+  if (rawAssumptions && typeof rawAssumptions === "object" && !Array.isArray(rawAssumptions)) {
+    const assumptionsObj = rawAssumptions as Record<string, unknown>;
+    authoritativeSideLabel =
+      assumptionsObj.authoritativeSide === "provider"
+        ? "Provider (Backend)"
+        : assumptionsObj.authoritativeSide === "consumer"
+          ? "Consumer (Frontend)"
+          : "Neutral / Unspecified";
+  } else if (Array.isArray(rawAssumptions)) {
+    const joined = rawAssumptions.join(" ");
+    if (joined.includes("backend provider") || joined.includes("provider's HTTP method")) {
+      authoritativeSideLabel = "Provider (Backend)";
+    } else if (joined.includes("frontend consumer") || joined.includes("frontend request")) {
+      authoritativeSideLabel = "Consumer (Frontend)";
+    } else {
+      authoritativeSideLabel = proposal.targetRole === "consumer" ? "Provider (Backend)" : "Consumer (Frontend)";
+    }
+  }
+
+  const isBreaking =
+    (typeof rawAssumptions === "object" &&
+      rawAssumptions !== null &&
+      Boolean((rawAssumptions as Record<string, unknown>).breakingChange)) ||
+    (Array.isArray(rawAssumptions) && rawAssumptions.some((a) => typeof a === "string" && /break/i.test(a)));
+
+  const verificationText =
+    proposal.verificationDescription ||
+    (typeof proposalRecord.verificationExpectation === "string"
+      ? proposalRecord.verificationExpectation
+      : "") ||
+    "Re-analysis required";
+
+  return `
+  <div class="proposal-card ${isTarget ? "proposal-target-highlight" : ""}" id="proposal-${escapeHtml(proposal.id)}">
+    <div class="proposal-header">
+      <h4>${escapeHtml(proposal.title)}</h4>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <span class="badge ${roleBadgeClass}">${escapeHtml(roleLabel)}</span>
+        <span class="badge ${riskBadgeClass}">Risk: ${escapeHtml(riskDisplay)}</span>
+      </div>
+    </div>
+
+    <div class="proposal-meta-grid">
+      <div class="proposal-meta-item">
+        <span>Target Role:</span> <strong>${escapeHtml(proposal.targetRole)}</strong>
+      </div>
+      <div class="proposal-meta-item">
+        <span>Authoritative Assumption:</span> <strong>${escapeHtml(authoritativeSideLabel)}</strong>
+      </div>
+      <div class="proposal-meta-item">
+        <span>Breaking Change:</span> <strong>${isBreaking ? "Yes" : "No"}</strong>
+      </div>
+      <div class="proposal-meta-item">
+        <span>Post-Edit Verification:</span> <strong>${escapeHtml(verificationText)}</strong>
+      </div>
+    </div>
+
+    <div class="proposal-rationale">
+      <strong>Rationale:</strong> ${escapeHtml(proposal.rationale)}
+    </div>
+
+    ${proposal.edits
+      .map((edit) => {
+        const editRecord = edit as unknown as Record<string, unknown>;
+        const docUri =
+          (typeof editRecord.targetUri === "string" ? editRecord.targetUri : undefined) ||
+          edit.documentUri;
+        const base = extractBaseName(docUri);
+        const spanStart = (
+          editRecord.span as { start?: { line?: number; character?: number } } | undefined
+        )?.start;
+        const startPos = spanStart || edit.start;
+        const line = (startPos?.line ?? 0) + 1;
+        const char = (startPos?.character ?? 0) + 1;
+        const oldText =
+          typeof editRecord.currentText === "string" ? editRecord.currentText : undefined;
+        const replacementText =
+          (typeof editRecord.replacementText === "string"
+            ? editRecord.replacementText
+            : undefined) || edit.newText;
+
+        return `
+    <div class="proposal-diff">
+      <div class="diff-header">Target: <code>${escapeHtml(base)}:${line}:${char}</code></div>
+      <div class="diff-body">
+        ${
+          oldText !== undefined
+            ? `<div class="diff-row diff-old">
+          <span class="diff-sign">-</span>
+          <code>${escapeHtml(oldText)}</code>
+        </div>`
+            : ""
+        }
+        <div class="diff-row diff-new">
+          <span class="diff-sign">+</span>
+          <code>${escapeHtml(replacementText)}</code>
+        </div>
+      </div>
+    </div>`;
+      })
+      .join("")}
+
+    <div class="proposal-actions">
+      <button type="button" class="btn-apply-fix" data-action="apply-fix" data-proposal-id="${escapeHtml(proposal.id)}">Apply Repair</button>
+      <span class="proposal-apply-disclaimer">Application requires confirmation and re-validates source freshness immediately before applying. Post-edit re-analysis required to verify resolution.</span>
+    </div>
   </div>`;
 }
 
@@ -994,6 +1382,7 @@ function renderTimelineEvent(evt: FindingLifecycleEvent): string {
 export class ReportPanelManager implements vscode.Disposable {
   private currentPanel?: vscode.WebviewPanel;
   private coordinator?: AnalysisCoordinator;
+  private fixService?: FixProposalService;
   private coordinatorSubscription?: { dispose(): void };
   private activeWorkspaceId?: WorkspaceId;
   private readonly workspaceStates = new Map<WorkspaceId, WorkspaceReportState>();
@@ -1011,11 +1400,19 @@ export class ReportPanelManager implements vscode.Disposable {
       const options = optionsOrCoordinator as ReportPanelManagerOptions;
       this.vscodeModule = options.vscodeModule;
       this.logger = options.logger;
+      this.fixService = options.fixService;
 
       if (options.coordinator) {
         this.setCoordinator(options.coordinator);
       }
     }
+  }
+
+  /**
+   * Sets or updates the FixProposalService.
+   */
+  public setFixService(fixService: FixProposalService): void {
+    this.fixService = fixService;
   }
 
   /**
@@ -1081,7 +1478,7 @@ export class ReportPanelManager implements vscode.Disposable {
   /**
    * Opens or reveals the Integration Report webview panel.
    */
-  public async show(targetFindingId?: string): Promise<void> {
+  public async show(targetFindingId?: string, targetProposalId?: string): Promise<void> {
     if (this.disposed) return;
 
     const vs = this.getVsCode();
@@ -1092,7 +1489,7 @@ export class ReportPanelManager implements vscode.Disposable {
 
     if (this.currentPanel) {
       this.currentPanel.reveal(vs.ViewColumn?.One ?? 1);
-      this.updateWebviewContent(targetFindingId);
+      this.updateWebviewContent(targetFindingId, targetProposalId);
       return;
     }
 
@@ -1124,7 +1521,7 @@ export class ReportPanelManager implements vscode.Disposable {
       []
     );
 
-    this.updateWebviewContent(targetFindingId);
+    this.updateWebviewContent(targetFindingId, targetProposalId);
   }
 
   /**
@@ -1132,7 +1529,7 @@ export class ReportPanelManager implements vscode.Disposable {
    */
   public async handleWebviewMessage(message: unknown): Promise<void> {
     if (!message || typeof message !== "object") return;
-    const msg = message as { command?: string; span?: SourceSpan };
+    const msg = message as { command?: string; span?: SourceSpan; proposalId?: unknown };
 
     switch (msg.command) {
       case "openLocation": {
@@ -1149,6 +1546,25 @@ export class ReportPanelManager implements vscode.Disposable {
           } catch (err) {
             this.logger?.error("Failed to execute scan from report webview", err);
           }
+        }
+        break;
+      }
+      case "applyFix": {
+        if (
+          typeof msg.proposalId === "string" &&
+          msg.proposalId.trim().length > 0 &&
+          msg.proposalId.length < 256
+        ) {
+          const vs = this.getVsCode();
+          if (vs?.commands?.executeCommand) {
+            try {
+              await vs.commands.executeCommand("undrift.applyFix", msg.proposalId.trim());
+            } catch (err) {
+              this.logger?.error("Failed to execute undrift.applyFix command from report webview", err);
+            }
+          }
+        } else {
+          this.logger?.warn("Invalid applyFix message received from webview; malformed proposalId");
         }
         break;
       }
@@ -1354,10 +1770,21 @@ export class ReportPanelManager implements vscode.Disposable {
   /**
    * Updates webview panel HTML if currently visible.
    */
-  public updateWebviewContent(targetFindingId?: string): void {
+  public updateWebviewContent(targetFindingId?: string, targetProposalId?: string): void {
     if (!this.currentPanel) return;
 
     const state = this.getCurrentState();
+
+    const proposalsByFinding = new Map<string, readonly FixProposal[]>();
+    if (this.fixService && state?.findings) {
+      for (const f of state.findings) {
+        const proposals = this.fixService.getProposalsForFinding(f.id, state.workspaceId);
+        if (proposals.length > 0) {
+          proposalsByFinding.set(f.id, proposals);
+        }
+      }
+    }
+
     const model: ReportViewModel = {
       workspaceId: state?.workspaceId,
       workspaceLabel: state?.workspaceId ? String(state.workspaceId) : "UNDRIFT Workspace",
@@ -1368,7 +1795,9 @@ export class ReportPanelManager implements vscode.Disposable {
       history: state?.history ?? [],
       warnings: state?.warnings ?? [],
       coverage: state?.coverage,
-      targetFindingId
+      targetFindingId,
+      targetProposalId,
+      proposalsByFinding
     };
 
     this.currentPanel.webview.html = renderReportHtml(model);

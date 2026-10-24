@@ -23,3 +23,6 @@ export {
   type PreparedFixEdit,
   type PrepareFixEditOptions
 } from "./fix-applier";
+
+export { FixProposalService } from "./fix-service";
+export { DriftCodeActionProvider } from "./code-action-provider";

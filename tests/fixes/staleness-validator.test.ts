@@ -358,6 +358,26 @@ describe("FixStalenessValidator (Chunk 5.2)", () => {
     }
   });
 
+  it("7b. rejects proposal when workspaceId is missing or empty without falling back", async () => {
+    const { proposal, sourceText } = createValidProposal({
+      proposalOverrides: { workspaceId: undefined }
+    });
+    const accessor = createMockAccessor({
+      [docUri]: { text: sourceText, version: 1 }
+    });
+
+    const result = await validateFixProposal(proposal, {
+      workspaceRoots: [workspaceRoot],
+      documentAccessor: accessor
+    });
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.reasonCode).toBe("WORKSPACE_MISMATCH");
+      expect(result.message).toContain("missing required originating workspace identity");
+    }
+  });
+
   it("8. rejects proposal generation superseded by newer accepted analysis in same workspace", async () => {
     const { proposal, sourceText } = createValidProposal({
       proposalOverrides: { generation: 2 }

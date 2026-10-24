@@ -312,39 +312,40 @@ export class FixStalenessValidator {
       };
     }
 
-    // 2. Workspace roots resolution
-    const workspaceRoots = resolveWorkspaceRoots(mergedOptions);
-
-    // 3. Workspace identity resolution
-    let targetWorkspaceId = mergedOptions.targetWorkspaceId ?? proposal.workspaceId;
-    if (!targetWorkspaceId && workspaceRoots.length > 0) {
-      try {
-        targetWorkspaceId = deriveWorkspaceId(workspaceRoots);
-      } catch {
-        // Leave undefined if derivation fails
-      }
+    // 2. Mandatory workspace identity check
+    if (!proposal.workspaceId || proposal.workspaceId.trim() === "") {
+      return {
+        valid: false,
+        proposal,
+        reasonCode: "WORKSPACE_MISMATCH",
+        message: `Proposal '${proposal.id}' is missing required originating workspace identity and cannot be safely validated or applied.`
+      };
     }
 
-    // If both proposal.workspaceId and targetWorkspaceId are defined, they must match
+    const originatingWorkspaceId = proposal.workspaceId;
+
+    // 3. Workspace roots resolution
+    const workspaceRoots = resolveWorkspaceRoots(mergedOptions);
+
+    // Target workspace identity must match originating workspace if specified
     if (
-      proposal.workspaceId &&
       mergedOptions.targetWorkspaceId &&
-      proposal.workspaceId !== mergedOptions.targetWorkspaceId
+      originatingWorkspaceId !== mergedOptions.targetWorkspaceId
     ) {
       return {
         valid: false,
         proposal,
         reasonCode: "WORKSPACE_MISMATCH",
-        message: `Proposal originates from workspace '${proposal.workspaceId}', which does not match target workspace '${mergedOptions.targetWorkspaceId}'.`,
+        message: `Proposal originates from workspace '${originatingWorkspaceId}', which does not match target workspace '${mergedOptions.targetWorkspaceId}'.`,
         details: {
           expected: mergedOptions.targetWorkspaceId,
-          actual: proposal.workspaceId
+          actual: originatingWorkspaceId
         }
       };
     }
 
     // 4. Accepted generation check
-    const effectiveWorkspaceId = targetWorkspaceId ?? proposal.workspaceId;
+    const effectiveWorkspaceId = originatingWorkspaceId;
     const latestAcceptedGeneration =
       mergedOptions.acceptedGenerationOverride !== undefined
         ? mergedOptions.acceptedGenerationOverride
