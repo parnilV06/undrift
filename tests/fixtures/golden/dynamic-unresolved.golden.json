@@ -441,9 +441,7 @@
           "description": "Static route path '/api/constant' in Express route declaration"
         }
       ],
-      "reasons": [
-        "Provider has no known consumer in analyzed scope"
-      ],
+      "reasons": ["Provider has no known consumer in analyzed scope"],
       "limitations": [],
       "findingIds": []
     },
@@ -503,9 +501,7 @@
           "description": "Dynamic URL expression in Axios call"
         }
       ],
-      "reasons": [
-        "No compatible provider found in analyzed scope"
-      ],
+      "reasons": ["No compatible provider found in analyzed scope"],
       "limitations": [
         {
           "code": "DYNAMIC_ROUTE",

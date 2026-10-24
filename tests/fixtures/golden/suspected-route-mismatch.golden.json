@@ -534,10 +534,7 @@
       "explanation": "**Suspected route mismatch**: Consumer calls '/api/users' with GET, but the closest unique provider route is '/api/user'.\n\n- Expected: /api/users\n\n- Observed: /api/user\n\nReason: Exactly one static path segment differs between the unique consumer and provider candidates with matching HTTP method.\n\nImpact: Requests from this consumer may receive a 404 Not Found error at runtime.\n\nSuggested next steps:\n  * Verify whether the consumer route has a typo or should be updated to match the provider.\n  * Or add the missing route to the backend provider.",
       "evidenceStrength": "inferred",
       "relationshipId": "rel:suspected-route-conflict:obs:src/client.ts:74-97:obs:src/server.ts:56-133",
-      "observationIds": [
-        "obs:src/client.ts:74-97",
-        "obs:src/server.ts:56-133"
-      ],
+      "observationIds": ["obs:src/client.ts:74-97", "obs:src/server.ts:56-133"],
       "sourceLocations": [
         {
           "uri": "src/client.ts",

@@ -1248,9 +1248,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       const consumerProp = createSampleProposal("consumer");
       const providerProp = createSampleProposal("provider");
 
-      const proposalsByFinding = new Map([
-        [finding.id, [consumerProp, providerProp]]
-      ]);
+      const proposalsByFinding = new Map([[finding.id, [consumerProp, providerProp]]]);
 
       const html = renderReportHtml({
         workspaceId: "/test/workspace",
@@ -1262,7 +1260,9 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       });
 
       expect(html).toContain("Candidate Repair Proposals (2 available)");
-      expect(html).toContain("Proposals represent alternative repairs, not authoritative recommendations.");
+      expect(html).toContain(
+        "Proposals represent alternative repairs, not authoritative recommendations."
+      );
       expect(html).toContain("Consumer Repair (Frontend)");
       expect(html).toContain("Provider Repair (Backend)");
       expect(html).toContain("Change frontend request method to POST");
@@ -1282,9 +1282,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       const consumerProp = createSampleProposal("consumer");
       const providerProp = createSampleProposal("provider");
 
-      const proposalsByFinding = new Map([
-        [finding.id, [consumerProp, providerProp]]
-      ]);
+      const proposalsByFinding = new Map([[finding.id, [consumerProp, providerProp]]]);
 
       const html = renderReportHtml({
         workspaceId: "/test/workspace",

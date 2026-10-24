@@ -515,9 +515,7 @@
           "description": "Static route path '/api/users' in Express route declaration"
         }
       ],
-      "reasons": [
-        "Exact match on normalized HTTP method and route pattern shape"
-      ],
+      "reasons": ["Exact match on normalized HTTP method and route pattern shape"],
       "limitations": [],
       "findingIds": []
     }

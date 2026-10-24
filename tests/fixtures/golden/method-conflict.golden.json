@@ -515,9 +515,7 @@
           "description": "Static route path '/api/orders' in Express route declaration"
         }
       ],
-      "reasons": [
-        "Method conflict on route shape: consumer calls GET, provider accepts POST"
-      ],
+      "reasons": ["Method conflict on route shape: consumer calls GET, provider accepts POST"],
       "limitations": [],
       "findingIds": []
     }
@@ -534,10 +532,7 @@
       "explanation": "**HTTP method conflict on endpoint**: Consumer calls GET on '/api/orders', but provider accepts POST.\n\n- Expected: GET\n\n- Observed: POST\n\nReason: The endpoint route shape matches, but the HTTP methods conflict.\n\nImpact: Requests from this consumer will fail at runtime with a 404 or 405 Method Not Allowed error.\n\nSuggested next steps:\n  * Update the consumer call to use the HTTP method accepted by the provider.\n  * Or add a route handler for the requested HTTP method on the provider.",
       "evidenceStrength": "direct",
       "relationshipId": "rel:method-conflict:obs:src/client.ts:75-99:obs:src/server.ts:56-155",
-      "observationIds": [
-        "obs:src/client.ts:75-99",
-        "obs:src/server.ts:56-155"
-      ],
+      "observationIds": ["obs:src/client.ts:75-99", "obs:src/server.ts:56-155"],
       "sourceLocations": [
         {
           "uri": "src/client.ts",
