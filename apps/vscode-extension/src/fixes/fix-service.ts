@@ -18,16 +18,26 @@ import type {
 import { createDefaultFixGeneratorRegistry, FixGeneratorRegistry } from "@undrift/core";
 import type { AnalysisCoordinator } from "../activation/coordinator";
 
+import type { FixVerificationCoordinator } from "./fix-verifier";
+
 /**
  * Service generating and resolving candidate fix proposals from trusted accepted analysis state.
  */
 export class FixProposalService {
   private readonly registry: FixGeneratorRegistry;
   private readonly coordinator: AnalysisCoordinator;
+  private verificationCoordinator?: FixVerificationCoordinator;
 
   constructor(coordinator: AnalysisCoordinator, registry?: FixGeneratorRegistry) {
     this.coordinator = coordinator;
     this.registry = registry ?? createDefaultFixGeneratorRegistry();
+  }
+
+  /**
+   * Attaches the verification coordinator to synchronize proposal lifecycle status.
+   */
+  public setVerificationCoordinator(verifier: FixVerificationCoordinator): void {
+    this.verificationCoordinator = verifier;
   }
 
   /**
@@ -38,21 +48,53 @@ export class FixProposalService {
     if (!wsId) return [];
 
     const acceptedResult = this.coordinator.getLastAcceptedAnalysisResult(wsId);
-    if (!acceptedResult) return [];
+    if (!acceptedResult) {
+      // Check if verification records exist for this finding
+      if (this.verificationCoordinator) {
+        return this.verificationCoordinator
+          .getRecords(wsId)
+          .filter((r) => r.findingId === findingId)
+          .map((r) => ({ ...r.proposal, status: r.status }));
+      }
+      return [];
+    }
 
     const sourceDocs = this.coordinator.getLastAcceptedSourceDocuments(wsId);
-    if (!sourceDocs || sourceDocs.size === 0) return [];
+    if (!sourceDocs || sourceDocs.size === 0) {
+      if (this.verificationCoordinator) {
+        return this.verificationCoordinator
+          .getRecords(wsId)
+          .filter((r) => r.findingId === findingId)
+          .map((r) => ({ ...r.proposal, status: r.status }));
+      }
+      return [];
+    }
 
     const finding = acceptedResult.findings.find((f) => f.id === findingId);
-    if (!finding || finding.state !== "active") return [];
+    if (!finding || finding.state !== "active") {
+      // Finding may have been resolved in the accepted result: check verification records
+      if (this.verificationCoordinator) {
+        return this.verificationCoordinator
+          .getRecords(wsId)
+          .filter((r) => r.findingId === findingId)
+          .map((r) => ({ ...r.proposal, status: r.status }));
+      }
+      return [];
+    }
 
     const context = this.createGenerationContext(acceptedResult, wsId);
     const proposals = this.registry.generateProposals(finding, context);
 
     // Only return proposals strictly associated with this workspace and generation
-    return proposals.filter(
+    const validProposals = proposals.filter(
       (p) => p.workspaceId === wsId && p.generation === acceptedResult.generation
     );
+
+    // Overlay verification status if known
+    return validProposals.map((p) => {
+      const rec = this.verificationCoordinator?.getRecord(p.id);
+      return rec ? { ...p, status: rec.status } : p;
+    });
   }
 
   /**
@@ -64,6 +106,17 @@ export class FixProposalService {
   ): { proposal: FixProposal; finding: Finding } | undefined {
     const wsId = workspaceId ?? this.coordinator.getActiveWorkspaceId();
     if (!wsId) return undefined;
+
+    // Check verification records first
+    if (this.verificationCoordinator) {
+      const rec = this.verificationCoordinator.getRecord(proposalId);
+      if (rec && rec.workspaceId === wsId) {
+        return {
+          proposal: { ...rec.proposal, status: rec.status },
+          finding: rec.finding
+        };
+      }
+    }
 
     const acceptedResult = this.coordinator.getLastAcceptedAnalysisResult(wsId);
     if (!acceptedResult) return undefined;
@@ -83,7 +136,9 @@ export class FixProposalService {
           p.generation === acceptedResult.generation
       );
       if (matched) {
-        return { proposal: matched, finding };
+        const rec = this.verificationCoordinator?.getRecord(matched.id);
+        const effectiveProposal = rec ? { ...matched, status: rec.status } : matched;
+        return { proposal: effectiveProposal, finding };
       }
     }
 
@@ -91,7 +146,8 @@ export class FixProposalService {
   }
 
   /**
-   * Returns all active proposals grouped by FindingId for the accepted analysis.
+   * Returns all active proposals grouped by FindingId for the accepted analysis,
+   * including any tracked verified/applied proposals.
    */
   getAllProposals(workspaceId?: WorkspaceId): Map<FindingId, FixProposal[]> {
     const map = new Map<FindingId, FixProposal[]>();
@@ -99,21 +155,35 @@ export class FixProposalService {
     if (!wsId) return map;
 
     const acceptedResult = this.coordinator.getLastAcceptedAnalysisResult(wsId);
-    if (!acceptedResult) return map;
-
     const sourceDocs = this.coordinator.getLastAcceptedSourceDocuments(wsId);
-    if (!sourceDocs || sourceDocs.size === 0) return map;
 
-    const context = this.createGenerationContext(acceptedResult, wsId);
+    if (acceptedResult && sourceDocs && sourceDocs.size > 0) {
+      const context = this.createGenerationContext(acceptedResult, wsId);
 
-    for (const finding of acceptedResult.findings) {
-      if (finding.state !== "active") continue;
-      const proposals = this.registry.generateProposals(finding, context);
-      const validProposals = proposals.filter(
-        (p) => p.workspaceId === wsId && p.generation === acceptedResult.generation
-      );
-      if (validProposals.length > 0) {
-        map.set(finding.id, validProposals);
+      for (const finding of acceptedResult.findings) {
+        if (finding.state !== "active") continue;
+        const proposals = this.registry.generateProposals(finding, context);
+        const validProposals = proposals
+          .filter((p) => p.workspaceId === wsId && p.generation === acceptedResult.generation)
+          .map((p) => {
+            const rec = this.verificationCoordinator?.getRecord(p.id);
+            return rec ? { ...p, status: rec.status } : p;
+          });
+
+        if (validProposals.length > 0) {
+          map.set(finding.id, validProposals);
+        }
+      }
+    }
+
+    // Include tracked verified or applied proposals for findings
+    if (this.verificationCoordinator) {
+      const records = this.verificationCoordinator.getRecords(wsId);
+      for (const rec of records) {
+        const existing = map.get(rec.findingId) ?? [];
+        if (!existing.some((p) => p.id === rec.proposalId)) {
+          map.set(rec.findingId, [...existing, { ...rec.proposal, status: rec.status }]);
+        }
       }
     }
 
@@ -168,7 +238,9 @@ export class FixProposalService {
           }
         }
 
-        results.push({ proposal, finding });
+        const rec = this.verificationCoordinator?.getRecord(proposal.id);
+        const effectiveProposal = rec ? { ...proposal, status: rec.status } : proposal;
+        results.push({ proposal: effectiveProposal, finding });
       }
     }
 

@@ -26,3 +26,10 @@ export {
 
 export { FixProposalService } from "./fix-service";
 export { DriftCodeActionProvider } from "./code-action-provider";
+export {
+  FixVerificationCoordinator,
+  computeExpectedPostEditHashes,
+  type FixVerificationOptions,
+  type VerificationRecord,
+  type VerificationSession
+} from "./fix-verifier";

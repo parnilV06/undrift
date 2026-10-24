@@ -10,7 +10,7 @@ import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
 import { registerCommands, formatIncompleteScanMessage } from "./commands";
 import { DriftDiagnosticProvider } from "./diagnostics";
-import { DriftCodeActionProvider, FixProposalService } from "./fixes";
+import { DriftCodeActionProvider, FixProposalService, FixVerificationCoordinator } from "./fixes";
 import { OutputChannelLogger } from "./logging";
 import { DriftStatusBar } from "./status";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
@@ -32,6 +32,7 @@ let reportPanelManager: ReportPanelManager | undefined;
 let statusBar: DriftStatusBar | undefined;
 let coordinator: AnalysisCoordinator | undefined;
 let fixService: FixProposalService | undefined;
+let verificationCoordinator: FixVerificationCoordinator | undefined;
 let codeActionProvider: DriftCodeActionProvider | undefined;
 
 /**
@@ -137,6 +138,16 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(reportPanelManager);
 
+  // 12b. Instantiate fix verification coordinator
+  verificationCoordinator = new FixVerificationCoordinator({
+    coordinator,
+    fixService,
+    reportPanelManager,
+    logger
+  });
+  fixService.setVerificationCoordinator(verificationCoordinator);
+  context.subscriptions.push(verificationCoordinator);
+
   // 13. Instantiate status bar item
   statusBar = new DriftStatusBar({
     coordinator,
@@ -167,6 +178,7 @@ export function activate(context: vscode.ExtensionContext): void {
     treeProvider,
     statusBar,
     fixService,
+    verificationCoordinator,
     logger
   });
   for (const disposable of commandDisposables) {
@@ -223,6 +235,15 @@ export async function deactivate(): Promise<void> {
       // Ignore cleanup error on deactivation
     }
     diagnosticProvider = undefined;
+  }
+
+  if (verificationCoordinator) {
+    try {
+      verificationCoordinator.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    verificationCoordinator = undefined;
   }
 
   persistence = undefined;

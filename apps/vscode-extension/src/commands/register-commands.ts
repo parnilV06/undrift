@@ -1,8 +1,10 @@
 import type * as vscode from "vscode";
-import type { FixProposalId, SourceSpan } from "@undrift/core";
+import type { DocumentUri, FixProposalId, SourceSpan } from "@undrift/core";
 import type { AnalysisCoordinator } from "../activation/coordinator";
 import {
   FixStalenessValidator,
+  FixVerificationCoordinator,
+  computeExpectedPostEditHashes,
   prepareFixWorkspaceEdit,
   type FixProposalService
 } from "../fixes";
@@ -13,6 +15,7 @@ import {
   type FindingsTreeDataProvider,
   type ReportPanelManager
 } from "../views";
+import { computeContentHash } from "../workspace";
 
 /**
  * Formats user-facing warning message for an incomplete analysis scan.
@@ -34,6 +37,7 @@ export interface CommandDependencies {
   reportPanelManager: ReportPanelManager;
   fixService?: FixProposalService;
   fixValidator?: FixStalenessValidator;
+  verificationCoordinator?: FixVerificationCoordinator;
   treeProvider?: FindingsTreeDataProvider;
   statusBar?: DriftStatusBar;
   logger?: ExtensionLogger;
@@ -444,9 +448,28 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
         return;
       }
 
+      // 3.A: Register or establish observation path early enough that a fast subsequent analysis cannot be missed
+      const verifier =
+        deps.verificationCoordinator ??
+        new FixVerificationCoordinator({
+          coordinator: deps.coordinator,
+          fixService: deps.fixService,
+          reportPanelManager: deps.reportPanelManager,
+          logger: deps.logger,
+          vscodeModule: vs
+        });
+
+      const expectedHashes = computeExpectedPostEditHashes(
+        proposal,
+        validationResult.documentSnapshots
+      );
+
+      const session = verifier.beginVerification(proposal, finding, expectedHashes);
+
       try {
         const success = await vs.workspace.applyEdit(prepared.workspaceEdit);
         if (!success) {
+          session.cancel();
           deps.logger?.error("vscode.workspace.applyEdit returned false.");
           void vs.window.showErrorMessage(
             "UNDRIFT: VS Code could not apply the repair edit. Please check if the target document is locked or has unsaved conflicting changes."
@@ -458,9 +481,13 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
           `Successfully applied repair proposal '${proposal.id}' for finding '${finding.id}'.`
         );
         void vs.window.showInformationMessage(
-          `UNDRIFT: Repair edit applied successfully for "${proposal.title}". Re-analyze the workspace to verify contract drift resolution.`
+          `UNDRIFT: Repair edit applied successfully for "${proposal.title}". Verifying contract drift resolution...`
         );
+
+        // 3.B: Record proposal as applied and trigger immediate post-edit workspace analysis
+        await session.markAppliedAndScan();
       } catch (applyErr) {
+        session.cancel();
         const msg = applyErr instanceof Error ? applyErr.message : String(applyErr);
         deps.logger?.error("Exception applying WorkspaceEdit", applyErr);
         void vs.window.showErrorMessage(`UNDRIFT: Error applying repair edit: ${msg}`);

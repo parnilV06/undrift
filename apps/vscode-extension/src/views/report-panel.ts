@@ -60,10 +60,7 @@ export interface ApplyFixMessage {
   readonly proposalId: string;
 }
 
-export type ReportWebviewMessage =
-  | OpenLocationMessage
-  | TriggerScanMessage
-  | ApplyFixMessage;
+export type ReportWebviewMessage = OpenLocationMessage | TriggerScanMessage | ApplyFixMessage;
 
 /**
  * Options for configuring ReportPanelManager.
@@ -205,6 +202,22 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
   }
   for (const list of historyByFinding.values()) {
     list.sort((a, b) => b.observedAt - a.observedAt || a.eventId.localeCompare(b.eventId));
+  }
+
+  // Collect any proposals that are applied, verified, still_active, or unresolved
+  // that belong to findings not currently shown in activeFindings (e.g. resolved findings)
+  const activeFindingIds = new Set(activeFindings.map((f) => f.id));
+  const standaloneProposals: FixProposal[] = [];
+  if (model.proposalsByFinding) {
+    for (const [findingId, proposals] of model.proposalsByFinding.entries()) {
+      if (!activeFindingIds.has(findingId)) {
+        for (const p of proposals) {
+          if (p.status !== "proposed") {
+            standaloneProposals.push(p);
+          }
+        }
+      }
+    }
   }
 
   return `<!DOCTYPE html>
@@ -656,6 +669,69 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       color: #f14c4c;
       border: 1px solid rgba(241, 76, 76, 0.3);
     }
+    .badge-verification {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .badge-pending {
+      background: rgba(204, 167, 0, 0.15);
+      color: #cca700;
+      border: 1px solid rgba(204, 167, 0, 0.35);
+    }
+    .badge-verified {
+      background: rgba(137, 209, 133, 0.15);
+      color: #89d185;
+      border: 1px solid rgba(137, 209, 133, 0.35);
+    }
+    .badge-active {
+      background: rgba(241, 76, 76, 0.15);
+      color: #f14c4c;
+      border: 1px solid rgba(241, 76, 76, 0.35);
+    }
+    .badge-unresolved {
+      background: rgba(204, 167, 0, 0.15);
+      color: #cca700;
+      border: 1px solid rgba(204, 167, 0, 0.35);
+    }
+    .badge-stale {
+      background: rgba(127, 127, 127, 0.15);
+      color: #999999;
+      border: 1px solid rgba(127, 127, 127, 0.35);
+    }
+    .verification-status-banner {
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin: 10px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .verification-status-pending {
+      background: rgba(204, 167, 0, 0.08);
+      border: 1px solid rgba(204, 167, 0, 0.3);
+      color: #cca700;
+    }
+    .verification-status-verified {
+      background: rgba(137, 209, 133, 0.08);
+      border: 1px solid rgba(137, 209, 133, 0.3);
+      color: #89d185;
+    }
+    .verification-status-active {
+      background: rgba(241, 76, 76, 0.08);
+      border: 1px solid rgba(241, 76, 76, 0.3);
+      color: #f14c4c;
+    }
+    .verification-status-unresolved {
+      background: rgba(204, 167, 0, 0.08);
+      border: 1px solid rgba(204, 167, 0, 0.3);
+      color: #cca700;
+    }
     .proposal-meta-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -873,6 +949,18 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         )
       )
       .join("")}
+  </div>`
+      : ""
+  }
+
+  ${
+    standaloneProposals.length > 0
+      ? `
+  <div class="section-title">
+    <span>Recent Repairs &amp; Post-Edit Verifications (${standaloneProposals.length})</span>
+  </div>
+  <div class="proposals-list" style="margin-bottom: 24px;">
+    ${standaloneProposals.map((p) => renderProposalCard(p, p.id === model.targetProposalId)).join("")}
   </div>`
       : ""
   }
@@ -1227,7 +1315,8 @@ function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
     } else if (joined.includes("frontend consumer") || joined.includes("frontend request")) {
       authoritativeSideLabel = "Consumer (Frontend)";
     } else {
-      authoritativeSideLabel = proposal.targetRole === "consumer" ? "Provider (Backend)" : "Consumer (Frontend)";
+      authoritativeSideLabel =
+        proposal.targetRole === "consumer" ? "Provider (Backend)" : "Consumer (Frontend)";
     }
   }
 
@@ -1235,7 +1324,8 @@ function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
     (typeof rawAssumptions === "object" &&
       rawAssumptions !== null &&
       Boolean((rawAssumptions as Record<string, unknown>).breakingChange)) ||
-    (Array.isArray(rawAssumptions) && rawAssumptions.some((a) => typeof a === "string" && /break/i.test(a)));
+    (Array.isArray(rawAssumptions) &&
+      rawAssumptions.some((a) => typeof a === "string" && /break/i.test(a)));
 
   const verificationText =
     proposal.verificationDescription ||
@@ -1244,11 +1334,60 @@ function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
       : "") ||
     "Re-analysis required";
 
+  const status = proposal.status ?? "proposed";
+  const verifiedGen =
+    typeof proposalRecord.verifiedGeneration === "number"
+      ? proposalRecord.verifiedGeneration
+      : undefined;
+  const verificationExplanation =
+    typeof proposalRecord.verificationExplanation === "string"
+      ? proposalRecord.verificationExplanation
+      : undefined;
+
+  let verificationBadgeHtml = "";
+  let verificationBannerHtml = "";
+
+  if (status === "applied") {
+    verificationBadgeHtml = `<span class="badge badge-verification badge-pending">&#9203; Applied — verification pending</span>`;
+    verificationBannerHtml = `
+    <div class="verification-status-banner verification-status-pending">
+      <strong>Applied — verification pending</strong>
+      <span>Edit was applied to source code. Re-analyzing workspace to verify whether contract drift was resolved...</span>
+    </div>`;
+  } else if (status === "verified") {
+    const genText = verifiedGen !== undefined ? ` (generation ${verifiedGen})` : "";
+    verificationBadgeHtml = `<span class="badge badge-verification badge-verified">&#10004; Verified — original finding resolved</span>`;
+    verificationBannerHtml = `
+    <div class="verification-status-banner verification-status-verified">
+      <strong>Verified — original finding resolved${escapeHtml(genText)}</strong>
+      <span>${escapeHtml(verificationExplanation ?? "Fresh post-edit analysis confirmed that the original contract drift incompatibility was resolved.")}</span>
+    </div>`;
+  } else if (status === "still_active") {
+    const genText = verifiedGen !== undefined ? ` (generation ${verifiedGen})` : "";
+    verificationBadgeHtml = `<span class="badge badge-verification badge-active">&#9888; Applied — finding still active</span>`;
+    verificationBannerHtml = `
+    <div class="verification-status-banner verification-status-active">
+      <strong>Applied — finding still active${escapeHtml(genText)}</strong>
+      <span>${escapeHtml(verificationExplanation ?? "The edit was applied, but fresh post-edit analysis confirmed that the contract drift incompatibility remains active.")}</span>
+    </div>`;
+  } else if (status === "unresolved") {
+    const genText = verifiedGen !== undefined ? ` (generation ${verifiedGen})` : "";
+    verificationBadgeHtml = `<span class="badge badge-verification badge-unresolved">&#9888; Applied — resolution could not be verified</span>`;
+    verificationBannerHtml = `
+    <div class="verification-status-banner verification-status-unresolved">
+      <strong>Applied — resolution could not be verified${escapeHtml(genText)}</strong>
+      <span>${escapeHtml(verificationExplanation ?? "Post-edit analysis could not confirm contract drift resolution.")}</span>
+    </div>`;
+  } else if (status === "stale") {
+    verificationBadgeHtml = `<span class="badge badge-verification badge-stale">Stale — source modified</span>`;
+  }
+
   return `
   <div class="proposal-card ${isTarget ? "proposal-target-highlight" : ""}" id="proposal-${escapeHtml(proposal.id)}">
     <div class="proposal-header">
       <h4>${escapeHtml(proposal.title)}</h4>
-      <div style="display: flex; gap: 6px; align-items: center;">
+      <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+        ${verificationBadgeHtml}
         <span class="badge ${roleBadgeClass}">${escapeHtml(roleLabel)}</span>
         <span class="badge ${riskBadgeClass}">Risk: ${escapeHtml(riskDisplay)}</span>
       </div>
@@ -1272,6 +1411,8 @@ function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
     <div class="proposal-rationale">
       <strong>Rationale:</strong> ${escapeHtml(proposal.rationale)}
     </div>
+
+    ${verificationBannerHtml}
 
     ${proposal.edits
       .map((edit) => {
@@ -1315,8 +1456,12 @@ function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {
       .join("")}
 
     <div class="proposal-actions">
-      <button type="button" class="btn-apply-fix" data-action="apply-fix" data-proposal-id="${escapeHtml(proposal.id)}">Apply Repair</button>
-      <span class="proposal-apply-disclaimer">Application requires confirmation and re-validates source freshness immediately before applying. Post-edit re-analysis required to verify resolution.</span>
+      ${
+        status === "proposed"
+          ? `<button type="button" class="btn-apply-fix" data-action="apply-fix" data-proposal-id="${escapeHtml(proposal.id)}">Apply Repair</button>
+      <span class="proposal-apply-disclaimer">Application requires confirmation and re-validates source freshness immediately before applying. Post-edit re-analysis required to verify resolution.</span>`
+          : `<span class="proposal-apply-disclaimer">${status === "verified" ? "Repair edit verified against post-edit source." : status === "applied" ? "Repair edit applied. Verification in progress..." : "Repair edit applied. Manual inspection required."}</span>`
+      }
     </div>
   </div>`;
 }
@@ -1560,7 +1705,10 @@ export class ReportPanelManager implements vscode.Disposable {
             try {
               await vs.commands.executeCommand("undrift.applyFix", msg.proposalId.trim());
             } catch (err) {
-              this.logger?.error("Failed to execute undrift.applyFix command from report webview", err);
+              this.logger?.error(
+                "Failed to execute undrift.applyFix command from report webview",
+                err
+              );
             }
           }
         } else {
@@ -1776,11 +1924,19 @@ export class ReportPanelManager implements vscode.Disposable {
     const state = this.getCurrentState();
 
     const proposalsByFinding = new Map<string, readonly FixProposal[]>();
-    if (this.fixService && state?.findings) {
-      for (const f of state.findings) {
-        const proposals = this.fixService.getProposalsForFinding(f.id, state.workspaceId);
-        if (proposals.length > 0) {
-          proposalsByFinding.set(f.id, proposals);
+    if (this.fixService) {
+      if (state?.findings) {
+        for (const f of state.findings) {
+          const proposals = this.fixService.getProposalsForFinding(f.id, state.workspaceId);
+          if (proposals.length > 0) {
+            proposalsByFinding.set(f.id, proposals);
+          }
+        }
+      }
+      const allTracked = this.fixService.getAllProposals(state?.workspaceId);
+      for (const [findingId, proposals] of allTracked.entries()) {
+        if (!proposalsByFinding.has(findingId)) {
+          proposalsByFinding.set(findingId, proposals);
         }
       }
     }
