@@ -15,6 +15,30 @@ export function extractObjectFields(
   const fields: FieldShape[] = [];
 
   for (const child of objectNode.namedChildren()) {
+    if (child.kind === "shorthand_property_identifier") {
+      const fieldName = child.text();
+      const fieldSpan = mapper.toSourceSpanFromUtf16(
+        child.range.start,
+        child.range.end,
+        documentUri
+      );
+      const fieldEvidence: EvidenceRef = {
+        id: `ev-field-${child.range.start}`,
+        kind: "literal-syntax",
+        strength: "direct",
+        source: fieldSpan,
+        description: `Field '${fieldName}' in request/response body payload`
+      };
+      fields.push({
+        name: fieldName,
+        type: { kind: "unknown", reason: "unresolved-reference" },
+        presence: "required",
+        nullable: "unknown",
+        evidence: [fieldEvidence]
+      });
+      continue;
+    }
+
     if (child.kind !== "pair") {
       continue;
     }

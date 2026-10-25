@@ -46,10 +46,13 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
    * Determines if this analyzer supports the given language and document URI.
    */
   supports(languageId: string, uri: DocumentUri): boolean {
+    const lowerUri = uri.toLowerCase();
+    if (lowerUri.endsWith(".d.ts") || lowerUri.endsWith(".d.cts") || lowerUri.endsWith(".d.mts")) {
+      return false;
+    }
     if (SUPPORTED_LANGUAGES.has(languageId.toLowerCase())) {
       return true;
     }
-    const lowerUri = uri.toLowerCase();
     return SUPPORTED_EXTENSIONS.some((ext) => lowerUri.endsWith(ext));
   }
 

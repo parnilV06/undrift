@@ -463,7 +463,7 @@ function extractOptions(
                 message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
                 source: bodySpan,
                 analyzerId: "analyzer-js-ts",
-                affectsCompleteness: true,
+                affectsCompleteness: false,
                 scope: "consumer",
                 targetDimension: "request-shape"
               };
@@ -492,7 +492,7 @@ function extractOptions(
               message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
               source: bodySpan,
               analyzerId: "analyzer-js-ts",
-              affectsCompleteness: true,
+              affectsCompleteness: false,
               scope: "consumer",
               targetDimension: "request-shape"
             };
@@ -521,7 +521,7 @@ function extractOptions(
             message: `Unsupported body serialization call in fetch options: ${valNode.text()}`,
             source: bodySpan,
             analyzerId: "analyzer-js-ts",
-            affectsCompleteness: true,
+            affectsCompleteness: false,
             scope: "consumer",
             targetDimension: "request-shape"
           };
@@ -567,7 +567,7 @@ function extractOptions(
           message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
           source: bodySpan,
           analyzerId: "analyzer-js-ts",
-          affectsCompleteness: true,
+          affectsCompleteness: false,
           scope: "consumer",
           targetDimension: "request-shape"
         };

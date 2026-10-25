@@ -102,7 +102,7 @@ function matchesGlob(filePath: string, glob: string): boolean {
     );
   }
   if (glob.startsWith("**/") && glob.includes("*.")) {
-    const ext = glob.slice(glob.lastIndexOf("."));
+    const ext = glob.slice(glob.lastIndexOf("*") + 1);
     return normalizedPath.endsWith(ext);
   }
   return normalizedPath.includes(cleanPattern);

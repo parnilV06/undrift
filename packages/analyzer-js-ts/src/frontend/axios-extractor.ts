@@ -388,7 +388,7 @@ function extractRequestBody(
     analyzerId: "analyzer-js-ts",
     scope: "consumer",
     targetDimension: "request-shape",
-    affectsCompleteness: true
+    affectsCompleteness: false
   };
   warnings.push(warning);
 
@@ -573,15 +573,29 @@ export interface AxiosExtractionResult {
 export function extractAxiosObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal,
+  signal?: AbortSignal | LocalReferenceResolver,
   resolver?: LocalReferenceResolver
 ): AxiosExtractionResult {
+  let actualSignal: AbortSignal | undefined;
+  let actualResolver = resolver;
+
+  if (signal) {
+    if (
+      "aborted" in signal ||
+      typeof (signal as unknown as AbortSignal).addEventListener === "function"
+    ) {
+      actualSignal = signal as unknown as AbortSignal;
+    } else {
+      actualResolver = signal as unknown as LocalReferenceResolver;
+    }
+  }
+
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
   const mapper = new PositionMapper(document.text, document.uri);
 
   walkTree(parsed.root, (node) => {
-    signal?.throwIfAborted();
+    actualSignal?.throwIfAborted();
 
     const match = checkAxiosCall(node);
     if (!match.matched) {
@@ -654,7 +668,7 @@ export function extractAxiosObservations(
     }
 
     // 2. URL Path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
+    const path = extractPath(args[0], document.uri, mapper, localWarnings, actualResolver);
 
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
@@ -664,7 +678,7 @@ export function extractAxiosObservations(
         document.uri,
         mapper,
         localWarnings,
-        resolver,
+        actualResolver,
         parsed,
         document
       );

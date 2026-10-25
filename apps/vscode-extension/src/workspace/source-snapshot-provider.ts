@@ -30,7 +30,12 @@ export const DEFAULT_EXCLUDE_GLOBS = [
   "**/.prisma/**",
   "**/prisma/generated/**",
   "**/prisma/client/**",
+  "**/generated/prisma/**",
+  "**/prisma/**/generated/**",
   "**/.generated/**",
+  "**/*.d.ts",
+  "**/*.d.cts",
+  "**/*.d.mts",
   "**/*.min.js",
   "**/*.min.cjs",
   "**/*.min.mjs"
@@ -71,6 +76,9 @@ export function extensionToLanguageId(pathOrUri: string): string {
  */
 export function isSupportedSourceFile(pathOrUri: string): boolean {
   const lower = pathOrUri.toLowerCase();
+  if (lower.endsWith(".d.ts") || lower.endsWith(".d.cts") || lower.endsWith(".d.mts")) {
+    return false;
+  }
   return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 

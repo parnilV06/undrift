@@ -218,33 +218,40 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
                       allWarnings.push(w);
                       filesWithWarnings.add(doc.uri);
                       if (w.affectsCompleteness) {
-                        if (w.scope === "provider") {
-                          backendScopeHasFailures = true;
-                        } else if (w.scope === "consumer") {
-                          consumerScopeHasFailures = true;
-                        } else if (w.scope === "workspace" || w.scope === "unknown") {
-                          backendScopeHasFailures = true;
-                          consumerScopeHasFailures = true;
-                        } else {
-                          // Fallback scope inference
-                          if (
-                            analyzer.id.includes("backend") ||
-                            analyzer.id.includes("express") ||
-                            w.message.toLowerCase().includes("backend") ||
-                            w.message.toLowerCase().includes("provider")
-                          ) {
+                        const affectsRouteOrScope =
+                          !w.targetDimension ||
+                          w.targetDimension === "route" ||
+                          w.targetDimension === "method" ||
+                          w.targetDimension === "all";
+                        if (affectsRouteOrScope) {
+                          if (w.scope === "provider") {
                             backendScopeHasFailures = true;
-                          } else if (
-                            analyzer.id.includes("frontend") ||
-                            analyzer.id.includes("fetch") ||
-                            analyzer.id.includes("axios") ||
-                            w.message.toLowerCase().includes("frontend") ||
-                            w.message.toLowerCase().includes("consumer")
-                          ) {
+                          } else if (w.scope === "consumer") {
+                            consumerScopeHasFailures = true;
+                          } else if (w.scope === "workspace" || w.scope === "unknown") {
+                            backendScopeHasFailures = true;
                             consumerScopeHasFailures = true;
                           } else {
-                            backendScopeHasFailures = true;
-                            consumerScopeHasFailures = true;
+                            // Fallback scope inference
+                            if (
+                              analyzer.id.includes("backend") ||
+                              analyzer.id.includes("express") ||
+                              w.message.toLowerCase().includes("backend") ||
+                              w.message.toLowerCase().includes("provider")
+                            ) {
+                              backendScopeHasFailures = true;
+                            } else if (
+                              analyzer.id.includes("frontend") ||
+                              analyzer.id.includes("fetch") ||
+                              analyzer.id.includes("axios") ||
+                              w.message.toLowerCase().includes("frontend") ||
+                              w.message.toLowerCase().includes("consumer")
+                            ) {
+                              consumerScopeHasFailures = true;
+                            } else {
+                              backendScopeHasFailures = true;
+                              consumerScopeHasFailures = true;
+                            }
                           }
                         }
                       }
@@ -340,7 +347,14 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
     }
 
     // 8. Coverage and completeness evaluation
-    const hasCompletenessAffectingWarning = allWarnings.some((w) => w.affectsCompleteness);
+    const hasCompletenessAffectingWarning = allWarnings.some(
+      (w) =>
+        w.affectsCompleteness &&
+        (!w.targetDimension ||
+          w.targetDimension === "route" ||
+          w.targetDimension === "method" ||
+          w.targetDimension === "all")
+    );
     const hasIncompleteScopeWarning = allWarnings.some((w) => w.code === "INCOMPLETE_SCOPE");
 
     const isComplete =
@@ -358,6 +372,10 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       !allWarnings.some(
         (w) =>
           w.affectsCompleteness &&
+          (!w.targetDimension ||
+            w.targetDimension === "route" ||
+            w.targetDimension === "method" ||
+            w.targetDimension === "all") &&
           (w.scope === "provider" ||
             w.scope === "workspace" ||
             (w.scope === undefined &&
@@ -374,6 +392,10 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       !allWarnings.some(
         (w) =>
           w.affectsCompleteness &&
+          (!w.targetDimension ||
+            w.targetDimension === "route" ||
+            w.targetDimension === "method" ||
+            w.targetDimension === "all") &&
           (w.scope === "consumer" ||
             w.scope === "workspace" ||
             (w.scope === undefined &&
