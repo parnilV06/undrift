@@ -538,13 +538,33 @@ export function indexLocalDeclarations(
       if (child.kind === "lexical_declaration") {
         const declType = child.text().startsWith("const") ? "const" : "let";
         processDeclarationList(child, declType, true);
+        for (const dec of child.namedChildren()) {
+          if (dec.kind === "variable_declarator") {
+            const valNode = dec.childForField("value") ?? dec.namedChildren()[1];
+            if (valNode) {
+              walk(valNode);
+            }
+          }
+        }
       } else if (child.kind === "variable_declaration") {
         processDeclarationList(child, "var", true);
+        for (const dec of child.namedChildren()) {
+          if (dec.kind === "variable_declarator") {
+            const valNode = dec.childForField("value") ?? dec.namedChildren()[1];
+            if (valNode) {
+              walk(valNode);
+            }
+          }
+        }
       } else if (
         child.kind === "function_declaration" ||
         child.kind === "generator_function_declaration"
       ) {
         processFunctionDeclaration(child, true);
+        const bodyNode = child.childForField("body");
+        if (bodyNode) {
+          walk(bodyNode);
+        }
       } else if (child.kind === "type_alias_declaration") {
         processTypeAliasDeclaration(child, true);
       } else if (child.kind === "interface_declaration") {
@@ -602,16 +622,36 @@ export function indexLocalDeclarations(
     if (node.kind === "lexical_declaration") {
       const declType = node.text().startsWith("const") ? "const" : "let";
       processDeclarationList(node, declType, false);
+      for (const child of node.namedChildren()) {
+        if (child.kind === "variable_declarator") {
+          const valNode = child.childForField("value") ?? child.namedChildren()[1];
+          if (valNode) {
+            walk(valNode);
+          }
+        }
+      }
       return;
     }
 
     if (node.kind === "variable_declaration") {
       processDeclarationList(node, "var", false);
+      for (const child of node.namedChildren()) {
+        if (child.kind === "variable_declarator") {
+          const valNode = child.childForField("value") ?? child.namedChildren()[1];
+          if (valNode) {
+            walk(valNode);
+          }
+        }
+      }
       return;
     }
 
     if (node.kind === "function_declaration" || node.kind === "generator_function_declaration") {
       processFunctionDeclaration(node, false);
+      const bodyNode = node.childForField("body");
+      if (bodyNode) {
+        walk(bodyNode);
+      }
       return;
     }
 

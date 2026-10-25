@@ -3,7 +3,7 @@
 // derives lifecycle events with conservative coverage gating, and constructs updated candidate snapshots.
 
 import * as crypto from "crypto";
-import type { Finding } from "../domain/finding";
+import type { AnalysisWarning, Finding } from "../domain/finding";
 import type {
   AnalysisSnapshot,
   FindingLifecycleContext,
@@ -214,12 +214,18 @@ function createLifecycleEventId(
  */
 export function extractCoverageSummary(result: AnalysisResult): AnalysisCoverageSummary {
   const warnings = Array.isArray(result.warnings) ? [...result.warnings] : [];
-  const hasCriticalWarning = warnings.some((w) => w.affectsCompleteness);
+  const isCriticalWarning = (w: AnalysisWarning) =>
+    w.affectsCompleteness &&
+    (!w.targetDimension ||
+      w.targetDimension === "route" ||
+      w.targetDimension === "method" ||
+      w.targetDimension === "all");
+  const hasCriticalWarning = warnings.some(isCriticalWarning);
   const complete = Boolean(result.complete && !hasCriticalWarning);
 
   const backendHasCritical = warnings.some(
     (w) =>
-      w.affectsCompleteness &&
+      isCriticalWarning(w) &&
       (w.scope === "provider" ||
         w.scope === "workspace" ||
         (w.scope === undefined &&
@@ -231,7 +237,7 @@ export function extractCoverageSummary(result: AnalysisResult): AnalysisCoverage
 
   const consumerHasCritical = warnings.some(
     (w) =>
-      w.affectsCompleteness &&
+      isCriticalWarning(w) &&
       (w.scope === "consumer" ||
         w.scope === "workspace" ||
         (w.scope === undefined &&
@@ -284,10 +290,17 @@ export function reconcileState(
   }
 
   // 2. Evaluate coverage sufficiency
-  // Analysis is sufficient ONLY if result.complete is true AND no warning with affectsCompleteness is present
+  // Analysis is sufficient ONLY if result.complete is true AND no warning affecting route/method completeness is present
   const hasCriticalWarning =
     Array.isArray(currentResult.warnings) &&
-    currentResult.warnings.some((w) => w.affectsCompleteness);
+    currentResult.warnings.some(
+      (w) =>
+        w.affectsCompleteness &&
+        (!w.targetDimension ||
+          w.targetDimension === "route" ||
+          w.targetDimension === "method" ||
+          w.targetDimension === "all")
+    );
   const coverageSufficient = Boolean(currentResult.complete && !hasCriticalWarning);
 
   if (!coverageSufficient) {

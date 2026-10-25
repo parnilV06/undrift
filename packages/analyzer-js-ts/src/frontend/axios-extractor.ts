@@ -28,9 +28,13 @@ import {
   LocalReferenceResolver,
   createLocalReferenceResolver
 } from "../project-index/local-reference-resolver";
-import { createLocalDeclarationIndex } from "../project-index/local-declaration-index";
+import {
+  createLocalDeclarationIndex,
+  type LocalVariableDeclaration
+} from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
 import { extractObjectFields } from "../shapes/shape-extractor";
+import { combineRoutePaths } from "../backend/express-mount-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
   ["get", "GET"],
@@ -55,17 +59,140 @@ interface AxiosCallMatch {
 }
 
 /**
+ * Extracts pathname prefix from an absolute or relative URL string.
+ */
+function extractPathnameFromUrlString(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const url = new URL(trimmed);
+      return url.pathname.replace(/\/+$/, "");
+    } catch {
+      const match = trimmed.match(/^https?:\/\/[^/]+(\/.*)$/);
+      return match ? match[1].replace(/\/+$/, "") : "";
+    }
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+/**
+ * Extracts static pathname prefix from an expression text (e.g. env fallback or string literal).
+ */
+function extractPathnameFromExpressionText(exprText: string): string {
+  const urlMatches = exprText.matchAll(/['"`](https?:\/\/[^'"`]+|\/[a-zA-Z0-9_/-]+)['"`]/g);
+  for (const match of urlMatches) {
+    const candidate = match[1];
+    const path = extractPathnameFromUrlString(candidate);
+    if (path && path !== "/") {
+      return path;
+    }
+  }
+  const suffixMatch = exprText.match(/\/([a-zA-Z0-9_-]+)['"`]?$/);
+  if (suffixMatch) {
+    return "/" + suffixMatch[1];
+  }
+  return "";
+}
+
+/**
+ * Discovers Axios client instances created with `axios.create({ baseURL: ... })`.
+ * Returns a map from client variable name to its static baseURL pathname prefix.
+ */
+function discoverAxiosClients(
+  root: SyntaxNode,
+  documentUri: DocumentUri,
+  resolver?: LocalReferenceResolver
+): Map<string, string> {
+  const clients = new Map<string, string>();
+
+  walkTree(root, (node) => {
+    if (node.kind !== "variable_declarator") {
+      return;
+    }
+
+    const nameNode = node.childForField("name") ?? node.namedChildren()[0];
+    const valNode = node.childForField("value") ?? node.namedChildren()[1];
+
+    if (
+      !nameNode ||
+      nameNode.kind !== "identifier" ||
+      !valNode ||
+      valNode.kind !== "call_expression"
+    ) {
+      return;
+    }
+
+    const clientName = nameNode.text();
+    const callee = valNode.childForField("function") ?? valNode.namedChildren()[0];
+    if (!callee || callee.kind !== "member_expression") {
+      return;
+    }
+
+    const obj = callee.childForField("object") ?? callee.namedChildren()[0];
+    const prop = callee.childForField("property") ?? callee.namedChildren()[1];
+
+    if (obj?.text() !== "axios" || prop?.text() !== "create") {
+      return;
+    }
+
+    // Found `axios.create(...)`
+    let basePath = "";
+    const args = valNode.childForField("arguments")?.namedChildren() ?? [];
+    if (args.length > 0 && args[0].kind === "object") {
+      for (const pair of args[0].namedChildren()) {
+        if (pair.kind === "pair") {
+          const key = pair.childForField("key") ?? pair.namedChildren()[0];
+          const val = pair.childForField("value") ?? pair.namedChildren()[1];
+          const keyText = key?.text()?.replace(/['"]/g, "");
+
+          if ((keyText === "baseURL" || keyText === "baseUrl") && val) {
+            if (val.kind === "string") {
+              const rawStr = val.text().slice(1, -1);
+              basePath = extractPathnameFromUrlString(rawStr);
+            } else if (val.kind === "identifier" && resolver) {
+              const identName = val.text();
+              const res = resolver.resolveConstant<string>(identName, documentUri, val.range);
+              if (res.state === "resolved" && typeof res.value === "string") {
+                basePath = extractPathnameFromUrlString(res.value);
+              } else {
+                const decls = resolver.index
+                  .lookupSymbols(identName, documentUri)
+                  .filter((d) => d.documentUri === documentUri);
+                if (decls.length > 0 && decls[0].kind === "variable") {
+                  const init = (decls[0] as LocalVariableDeclaration).initializerText ?? "";
+                  basePath = extractPathnameFromExpressionText(init);
+                }
+              }
+            } else if (val.kind === "template_string") {
+              basePath = extractPathnameFromExpressionText(val.text());
+            }
+          }
+        }
+      }
+    }
+
+    clients.set(clientName, basePath);
+  });
+
+  return clients;
+}
+
+/**
  * Checks if a syntax node represents an Axios method call expression.
  * Matches:
  *  - `axios.<method>(...)`
  *  - `window.axios.<method>(...)`
  *  - `globalThis.axios.<method>(...)`
  *  - `api.<method>(...)` (configured client per LLD Section 7.2)
+ *  - configured clients created via `axios.create(...)`
  * Rejects:
  *  - non-HTTP members like `axios.create`, `axios.all`, `axios.isAxiosError`
  *  - unrelated receivers like `console.log`, `router.get`, `app.get`, `client.get`
  */
-function checkAxiosCall(node: SyntaxNode): AxiosCallMatch {
+function checkAxiosCall(
+  node: SyntaxNode,
+  knownClients?: ReadonlyMap<string, string>
+): AxiosCallMatch {
   if (node.kind !== "call_expression") {
     return { matched: false, receiver: "", methodName: "", strength: "direct" };
   }
@@ -103,11 +230,14 @@ function checkAxiosCall(node: SyntaxNode): AxiosCallMatch {
       };
     }
 
-    // Direct `api.<method>` (configured client per LLD Section 7.2)
-    if (objectNode.kind === "identifier" && objectNode.text() === "api") {
+    // Direct `api.<method>` or discovered configured client
+    if (
+      objectNode.kind === "identifier" &&
+      (objectNode.text() === "api" || (knownClients && knownClients.has(objectNode.text())))
+    ) {
       return {
         matched: true,
-        receiver: "api",
+        receiver: objectNode.text(),
         methodName: propText,
         httpMethod,
         strength: "inferred"
@@ -258,6 +388,55 @@ function extractPath(
         evidence: result.evidence
       };
     }
+
+    // If not resolved as constant, check if it's a locally initialized variable (e.g. let url = '/path?param=...')
+    const localDecls = resolver.index
+      .lookupSymbols(refName, documentUri)
+      .filter((c) => c.documentUri === documentUri);
+    if (localDecls.length === 1 && localDecls[0].kind === "variable") {
+      const varDecl = localDecls[0] as LocalVariableDeclaration;
+      const initText = varDecl.initializerText?.trim();
+      if (
+        initText &&
+        (initText.startsWith('"') || initText.startsWith("'") || initText.startsWith("`"))
+      ) {
+        const unquoted = initText.slice(1, -1);
+        const queryIndex = unquoted.indexOf("?");
+        const subStart = initText.startsWith("`") ? unquoted.indexOf("${") : -1;
+        let pathPart: string | undefined;
+        if (queryIndex > 0 && (subStart === -1 || queryIndex < subStart)) {
+          pathPart = unquoted.slice(0, queryIndex);
+        } else if (subStart > 0) {
+          const subExpr = unquoted.slice(subStart + 2);
+          if (/(?:query|search|param|qs)/i.test(subExpr) || subExpr.includes("?")) {
+            pathPart = unquoted.slice(0, subStart);
+          }
+        } else if (queryIndex > 0) {
+          pathPart = unquoted.slice(0, queryIndex);
+        }
+        // Only resolve mutable variable if the path is separated from dynamic query parameters
+        if (pathPart && pathPart.startsWith("/")) {
+          const normalizedPath = pathPart.replace(/\$\{([a-zA-Z0-9_$]+)\}/g, ":$1");
+          if (!normalizedPath.includes("${")) {
+            const routePattern = parseRoutePattern(normalizedPath);
+            const evidence: EvidenceRef = {
+              id: `ev-path-${argNode.range.start}`,
+              kind: "local-declaration",
+              strength: "resolved",
+              source: argSpan,
+              description: `Resolved local variable '${refName}' with path '${routePattern.rawPath}' (query parameters excluded from route)`
+            };
+
+            return {
+              state: "known",
+              value: routePattern,
+              strength: "resolved",
+              evidence: [evidence, varDecl.evidence]
+            };
+          }
+        }
+      }
+    }
   }
 
   // 4. Dynamic expression (variable, call, binary expression, unresolved reference, etc.)
@@ -388,7 +567,7 @@ function extractRequestBody(
     analyzerId: "analyzer-js-ts",
     scope: "consumer",
     targetDimension: "request-shape",
-    affectsCompleteness: true
+    affectsCompleteness: false
   };
   warnings.push(warning);
 
@@ -573,17 +752,32 @@ export interface AxiosExtractionResult {
 export function extractAxiosObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal,
+  signal?: AbortSignal | LocalReferenceResolver,
   resolver?: LocalReferenceResolver
 ): AxiosExtractionResult {
+  let actualSignal: AbortSignal | undefined;
+  let actualResolver = resolver;
+
+  if (signal) {
+    if (
+      "aborted" in signal ||
+      typeof (signal as unknown as AbortSignal).addEventListener === "function"
+    ) {
+      actualSignal = signal as unknown as AbortSignal;
+    } else {
+      actualResolver = signal as unknown as LocalReferenceResolver;
+    }
+  }
+
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
   const mapper = new PositionMapper(document.text, document.uri);
+  const clients = discoverAxiosClients(parsed.root, document.uri, actualResolver);
 
   walkTree(parsed.root, (node) => {
-    signal?.throwIfAborted();
+    actualSignal?.throwIfAborted();
 
-    const match = checkAxiosCall(node);
+    const match = checkAxiosCall(node, clients);
     if (!match.matched) {
       return;
     }
@@ -654,7 +848,19 @@ export function extractAxiosObservations(
     }
 
     // 2. URL Path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
+    let path = extractPath(args[0], document.uri, mapper, localWarnings, actualResolver);
+
+    // Apply client baseURL prefix if configured on this Axios instance
+    const clientBasePath = clients.get(match.receiver);
+    if (clientBasePath && clientBasePath !== "/" && path.state === "known" && path.value) {
+      const composedRaw = combineRoutePaths(clientBasePath, path.value.rawPath);
+      if (composedRaw !== path.value.rawPath) {
+        path = {
+          ...path,
+          value: parseRoutePattern(composedRaw)
+        };
+      }
+    }
 
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
@@ -664,7 +870,7 @@ export function extractAxiosObservations(
         document.uri,
         mapper,
         localWarnings,
-        resolver,
+        actualResolver,
         parsed,
         document
       );

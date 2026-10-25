@@ -23,6 +23,11 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import {
+  ExpressMountRegistry,
+  type ExpressMountInfo,
+  combineRoutePaths
+} from "./express-mount-resolver";
 
 const VALID_EXPRESS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
   ["get", "GET"],
@@ -42,6 +47,53 @@ interface ExpressCallMatch {
   isDynamicMethod?: boolean;
   strength: EvidenceStrength;
   methodNode?: SyntaxNode;
+  routePathNode?: SyntaxNode;
+}
+
+/**
+ * Traces a call expression chain to locate an originating router.route(path) or app.route(path) call.
+ */
+function findRouteCall(
+  callExpr: SyntaxNode
+): { receiver: string; pathNode?: SyntaxNode } | undefined {
+  const fn = callExpr.childForField("function") ?? callExpr.namedChildren()[0];
+  if (!fn || fn.kind !== "member_expression") {
+    return undefined;
+  }
+  const prop = fn.childForField("property") ?? fn.namedChildren()[1];
+  const obj = fn.childForField("object") ?? fn.namedChildren()[0];
+  if (!prop || !obj) {
+    return undefined;
+  }
+
+  // Case A: Root route() call e.g. router.route('/api/posts')
+  if (prop.text() === "route") {
+    let receiver = "";
+    if (obj.kind === "identifier") {
+      const name = obj.text();
+      if (name === "router" || name === "app" || name === "server") {
+        receiver = name;
+      }
+    } else if (obj.kind === "member_expression") {
+      const subProp = obj.childForField("property") ?? obj.namedChildren()[1];
+      if (subProp?.text() === "router" || subProp?.text() === "app") {
+        receiver = obj.text();
+      }
+    }
+    if (receiver) {
+      const argsNode = callExpr.childForField("arguments");
+      const pathNode = argsNode ? argsNode.namedChildren()[0] : undefined;
+      return { receiver, pathNode };
+    }
+  }
+
+  // Case B: Chained method e.g. router.route(path).post(...).get(...)
+  const propLower = prop.text().toLowerCase();
+  if (VALID_EXPRESS_METHODS.has(propLower) && obj.kind === "call_expression") {
+    return findRouteCall(obj);
+  }
+
+  return undefined;
 }
 
 /**
@@ -50,6 +102,7 @@ interface ExpressCallMatch {
  *  - `app.<method>(path, ...handlers)`
  *  - `router.<method>(path, ...handlers)`
  *  - `server.<method>(path, ...handlers)`
+ *  - `router.route(path).<method>(...handlers)`
  * Rejects:
  *  - non-HTTP members like `app.use`, `app.listen`, `app.set`, `router.use`
  *  - setting getter `app.get("env")` with 1 argument not starting with `/`
@@ -83,6 +136,8 @@ function checkExpressRouteCall(node: SyntaxNode): ExpressCallMatch {
     }
 
     let receiverName = "";
+    let routePathNode: SyntaxNode | undefined;
+
     if (objectNode.kind === "identifier") {
       const name = objectNode.text();
       if (name === "app" || name === "router" || name === "server") {
@@ -92,6 +147,12 @@ function checkExpressRouteCall(node: SyntaxNode): ExpressCallMatch {
       const subProp = objectNode.childForField("property") ?? objectNode.namedChildren()[1];
       if (subProp?.text() === "app" || subProp?.text() === "router") {
         receiverName = objectNode.text();
+      }
+    } else if (objectNode.kind === "call_expression") {
+      const routeCall = findRouteCall(objectNode);
+      if (routeCall) {
+        receiverName = routeCall.receiver;
+        routePathNode = routeCall.pathNode;
       }
     }
 
@@ -116,7 +177,8 @@ function checkExpressRouteCall(node: SyntaxNode): ExpressCallMatch {
       methodName: propText,
       httpMethod,
       strength: "direct",
-      methodNode: propNode
+      methodNode: propNode,
+      routePathNode
     };
   }
 
@@ -295,6 +357,30 @@ function extractObjectFields(
   const fields: FieldShape[] = [];
 
   for (const child of objectNode.namedChildren()) {
+    if (child.kind === "shorthand_property_identifier") {
+      const fieldName = child.text();
+      const fieldSpan = mapper.toSourceSpanFromUtf16(
+        child.range.start,
+        child.range.end,
+        documentUri
+      );
+      const fieldEvidence: EvidenceRef = {
+        id: `ev-field-${child.range.start}`,
+        kind: "literal-syntax",
+        strength: "direct",
+        source: fieldSpan,
+        description: `Field '${fieldName}' in response body payload`
+      };
+      fields.push({
+        name: fieldName,
+        type: { kind: "unknown", reason: "unresolved-reference" },
+        presence: "required",
+        nullable: "unknown",
+        evidence: [fieldEvidence]
+      });
+      continue;
+    }
+
     if (child.kind !== "pair") {
       continue;
     }
@@ -475,7 +561,7 @@ function extractResponseBodyShape(
     analyzerId: "analyzer-js-ts",
     scope: "provider",
     targetDimension: "response-shape",
-    affectsCompleteness: true
+    affectsCompleteness: false
   };
   warnings.push(warning);
 
@@ -737,7 +823,8 @@ export interface ExpressExtractionResult {
 export function extractExpressObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mountRegistry?: ExpressMountRegistry
 ): ExpressExtractionResult {
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
@@ -756,13 +843,37 @@ export function extractExpressObservations(
     const argsNode = node.childForField("arguments");
     const args = argsNode ? argsNode.namedChildren() : [];
 
-    // Zero arguments e.g. `app.get()`
-    if (args.length === 0) {
+    let pathArgNode: SyntaxNode | undefined;
+    let handlerArgs: readonly SyntaxNode[] = [];
+
+    if (match.routePathNode) {
+      pathArgNode = match.routePathNode;
+      handlerArgs = args;
+    } else {
+      if (args.length === 0) {
+        warnings.push({
+          code: "UNSUPPORTED_PATTERN",
+          message: `${match.receiver}.${match.methodName}() route declaration without required path argument cannot be analyzed`,
+          source: callSpan,
+          analyzerId: "analyzer-js-ts",
+          scope: "provider",
+          targetDimension: "route",
+          affectsCompleteness: true
+        });
+        return;
+      }
+      pathArgNode = args[0];
+      handlerArgs = args.slice(1);
+    }
+
+    if (!pathArgNode) {
       warnings.push({
         code: "UNSUPPORTED_PATTERN",
         message: `${match.receiver}.${match.methodName}() route declaration without required path argument cannot be analyzed`,
         source: callSpan,
         analyzerId: "analyzer-js-ts",
+        scope: "provider",
+        targetDimension: "route",
         affectsCompleteness: true
       });
       return;
@@ -778,6 +889,8 @@ export function extractExpressObservations(
         message: `Dynamic HTTP method dispatch on Express route declaration cannot be statically determined: ${match.methodName}`,
         source: callSpan,
         analyzerId: "analyzer-js-ts",
+        scope: "provider",
+        targetDimension: "method",
         affectsCompleteness: true
       };
       localWarnings.push(warning);
@@ -822,9 +935,139 @@ export function extractExpressObservations(
     }
 
     // 2. Route Path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings);
+    const path = extractPath(pathArgNode, document.uri, mapper, localWarnings);
 
-    // 3. Request Path Parameters
+    // 3. Inspect Handlers for Response Shapes
+    const responses: ResponseShapeObservation[] = [];
+    for (const handlerArg of handlerArgs) {
+      if (
+        handlerArg.kind === "arrow_function" ||
+        handlerArg.kind === "function_expression" ||
+        handlerArg.kind === "function"
+      ) {
+        const handlerResponses = extractHandlerResponses(
+          handlerArg,
+          document.uri,
+          mapper,
+          localWarnings
+        );
+        responses.push(...handlerResponses);
+      }
+    }
+
+    // Collect local warnings to document warnings
+    warnings.push(...localWarnings);
+
+    // 4. Determine applicable mount prefixes (from ExpressMountRegistry if present)
+    let applicableMounts: Array<{ prefix: string; mount: ExpressMountInfo }> = [];
+    if (mountRegistry && match.receiver !== "app") {
+      const docMounts = mountRegistry.getMountsForDocument(document.uri);
+      const localMounts = mountRegistry.getMountsForLocalRouter(document.uri, match.receiver);
+      applicableMounts = docMounts.length > 0 ? docMounts : localMounts;
+    }
+
+    if (applicableMounts.length > 0 && path.state === "known") {
+      for (const { prefix, mount } of applicableMounts) {
+        if (mount.isDynamic) {
+          const dynamicWarn: AnalysisWarning = {
+            code: "DYNAMIC_ROUTE",
+            message:
+              mount.dynamicReason ??
+              "Dynamic Express router mount prefix cannot be statically resolved",
+            source: callSpan,
+            analyzerId: "analyzer-js-ts",
+            scope: "provider",
+            targetDimension: "route",
+            affectsCompleteness: true
+          };
+          warnings.push(dynamicWarn);
+
+          observations.push({
+            id: `obs:${document.uri}:${node.range.start}-${node.range.end}`,
+            role: "provider",
+            languageId: document.languageId,
+            framework: "express",
+            extractorId: "express-extractor",
+            source: [callSpan],
+            snapshot: {
+              uri: document.uri,
+              contentHash: document.contentHash
+            },
+            endpoint: {
+              method: methodValue,
+              path: {
+                state: "dynamic",
+                expression: mount.dynamicReason ?? "Dynamic mount prefix",
+                reason: "Dynamic Express router mount prefix",
+                evidence: [
+                  {
+                    id: `ev-mount-dynamic-${node.range.start}`,
+                    kind: "framework-convention",
+                    strength: "inferred",
+                    source: mount.sourceSpan,
+                    description: "Dynamic mount prefix in Express app.use()"
+                  }
+                ]
+              },
+              request: undefined,
+              responses
+            },
+            limitations: [dynamicWarn]
+          });
+          continue;
+        }
+
+        const effectiveRawPath = combineRoutePaths(prefix, path.value.rawPath);
+        const effectiveRoutePattern = parseRoutePattern(effectiveRawPath);
+        const mountEvidence: EvidenceRef = {
+          id: `ev-mount-${node.range.start}`,
+          kind: "framework-convention",
+          strength: "direct",
+          source: mount.sourceSpan,
+          description: `Express router mounted with prefix '${prefix}' in ${mount.mountingDocUri}`
+        };
+
+        const effectivePath: ObservedValue<RoutePattern> = {
+          state: "known",
+          value: effectiveRoutePattern,
+          strength: path.strength,
+          evidence: [...path.evidence, mountEvidence]
+        };
+
+        const effectivePathParams = createPathParametersShape(effectiveRoutePattern, callSpan);
+        const effectiveRequest: RequestShapeObservation | undefined = effectivePathParams
+          ? { pathParams: effectivePathParams }
+          : undefined;
+
+        const effectiveObsId: ObservationId =
+          applicableMounts.length > 1
+            ? `obs:${document.uri}:${node.range.start}-${node.range.end}:${effectiveRawPath}`
+            : `obs:${document.uri}:${node.range.start}-${node.range.end}`;
+
+        observations.push({
+          id: effectiveObsId,
+          role: "provider",
+          languageId: document.languageId,
+          framework: "express",
+          extractorId: "express-extractor",
+          source: [callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method: methodValue,
+            path: effectivePath,
+            request: effectiveRequest,
+            responses
+          },
+          limitations: localWarnings
+        });
+      }
+      return;
+    }
+
+    // Default: direct route without mount prefix
     let request: RequestShapeObservation | undefined;
     if (path.state === "known") {
       const pathParams = createPathParametersShape(path.value, callSpan);
@@ -833,32 +1076,6 @@ export function extractExpressObservations(
       }
     }
 
-    // 4. Inspect Handlers for Response Shapes
-    const responses: ResponseShapeObservation[] = [];
-    if (args.length > 1) {
-      // Handlers are arguments from index 1 onward
-      for (let i = 1; i < args.length; i++) {
-        const handlerArg = args[i];
-        if (
-          handlerArg.kind === "arrow_function" ||
-          handlerArg.kind === "function_expression" ||
-          handlerArg.kind === "function"
-        ) {
-          const handlerResponses = extractHandlerResponses(
-            handlerArg,
-            document.uri,
-            mapper,
-            localWarnings
-          );
-          responses.push(...handlerResponses);
-        }
-      }
-    }
-
-    // Collect local warnings to document warnings
-    warnings.push(...localWarnings);
-
-    // 5. Build ApiObservation with provider role
     const observationId: ObservationId = `obs:${document.uri}:${node.range.start}-${node.range.end}`;
 
     const observation: ApiObservation = {
@@ -891,11 +1108,19 @@ export function extractExpressObservations(
  * Extractor class conforming to extractor module architecture.
  */
 export class ExpressExtractor {
+  constructor(private readonly mountRegistry?: ExpressMountRegistry) {}
+
   extract(
     document: SourceDocument,
     parsed: ParsedDocument,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    mountRegistry?: ExpressMountRegistry
   ): ExpressExtractionResult {
-    return extractExpressObservations(document, parsed, signal);
+    return extractExpressObservations(
+      document,
+      parsed,
+      signal,
+      mountRegistry ?? this.mountRegistry
+    );
   }
 }

@@ -11,6 +11,7 @@ import {
   areRouteShapesEqual,
   getKnownMethod,
   getKnownRoute,
+  isSuspectedSegmentTypo,
   matchCandidates
 } from "../matching/contract-matcher";
 import { formatRoutePattern } from "../normalization/route-normalizer";
@@ -222,6 +223,19 @@ export function evaluateSuspectedRouteMismatchRule(
     return undefined;
   }
 
+  // Verify high similarity threshold on the differing static segment before declaring UND130
+  if (cRoute.segments.length === pRoute.segments.length) {
+    for (let i = 0; i < cRoute.segments.length; i++) {
+      const cSeg = cRoute.segments[i];
+      const pSeg = pRoute.segments[i];
+      if (cSeg.kind === "static" && pSeg.kind === "static" && cSeg.value !== pSeg.value) {
+        if (!isSuspectedSegmentTypo(cSeg.value, pSeg.value, cRoute.segments.length === 1)) {
+          return undefined;
+        }
+      }
+    }
+  }
+
   const sourceLocations = [...(consumer.source ?? []), ...(provider.source ?? [])];
   const limitations = mergeLimitations([
     rel.limitations,
@@ -303,8 +317,17 @@ export function evaluateMissingProviderRule(
     return undefined;
   }
 
-  // If consumer's own extraction had completeness-affecting limitations, do not assert missing provider
-  if (consumer.limitations?.some((lim) => lim.affectsCompleteness)) {
+  // If consumer's own extraction had completeness-affecting limitations on route/method, do not assert missing provider
+  if (
+    consumer.limitations?.some(
+      (lim) =>
+        lim.affectsCompleteness &&
+        (!lim.targetDimension ||
+          lim.targetDimension === "route" ||
+          lim.targetDimension === "method" ||
+          lim.targetDimension === "all")
+    )
+  ) {
     return undefined;
   }
 
@@ -398,8 +421,17 @@ export function evaluateNoKnownConsumerRule(
     return undefined;
   }
 
-  // If provider's own extraction had completeness-affecting limitations, do not assert orphaned status
-  if (provider.limitations?.some((lim) => lim.affectsCompleteness)) {
+  // If provider's own extraction had completeness-affecting limitations on route/method, do not assert orphaned status
+  if (
+    provider.limitations?.some(
+      (lim) =>
+        lim.affectsCompleteness &&
+        (!lim.targetDimension ||
+          lim.targetDimension === "route" ||
+          lim.targetDimension === "method" ||
+          lim.targetDimension === "all")
+    )
+  ) {
     return undefined;
   }
 

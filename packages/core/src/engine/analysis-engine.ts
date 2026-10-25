@@ -110,11 +110,16 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
     for (const doc of documents) {
       docMap.set(doc.uri, doc);
     }
+    const parsedDocMap = new Map<DocumentUri, ParsedDocument>();
+    const parsedEntries: Array<{ document: SourceDocument; parsed: ParsedDocument }> = [];
+
     const projectIndex: ProjectIndexView = {
-      getDocument: (uri: DocumentUri) => docMap.get(uri)
+      getDocument: (uri: DocumentUri) => docMap.get(uri),
+      getParsedDocument: (uri: DocumentUri) => parsedDocMap.get(uri),
+      getAllParsedDocuments: () => parsedEntries
     };
 
-    // 4. Per-document parsing and analyzer extraction
+    // 4. Phase 1: Per-document parsing and diagnostic collection
     for (const doc of documents) {
       // Check cancellation at document boundary
       if (signal?.aborted) {
@@ -158,145 +163,162 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       }
 
       if (parsedDoc) {
-        try {
-          // Process parser diagnostics and syntax issues
-          if (Array.isArray(parsedDoc.issues)) {
-            for (const issue of parsedDoc.issues) {
-              const docScope = inferDocumentScope(doc.uri);
-              allWarnings.push({
-                code: "PARSE_ERROR",
-                message: issue.message,
-                source: issue.source ?? this.createFallbackSpan(doc.uri),
-                scope: docScope === "unknown" ? "workspace" : docScope,
-                affectsCompleteness: issue.isError
-              });
-              filesWithWarnings.add(doc.uri);
-              if (issue.isError) {
-                hasHardParseError = true;
-                docParseFailed = true;
-                if (docScope === "provider") {
-                  backendScopeHasFailures = true;
-                } else if (docScope === "consumer") {
-                  consumerScopeHasFailures = true;
-                } else {
-                  backendScopeHasFailures = true;
-                  consumerScopeHasFailures = true;
-                }
+        // Process parser diagnostics and syntax issues
+        if (Array.isArray(parsedDoc.issues)) {
+          for (const issue of parsedDoc.issues) {
+            const docScope = inferDocumentScope(doc.uri);
+            allWarnings.push({
+              code: "PARSE_ERROR",
+              message: issue.message,
+              source: issue.source ?? this.createFallbackSpan(doc.uri),
+              scope: docScope === "unknown" ? "workspace" : docScope,
+              affectsCompleteness: issue.isError
+            });
+            filesWithWarnings.add(doc.uri);
+            if (issue.isError) {
+              hasHardParseError = true;
+              docParseFailed = true;
+              if (docScope === "provider") {
+                backendScopeHasFailures = true;
+              } else if (docScope === "consumer") {
+                consumerScopeHasFailures = true;
+              } else {
+                backendScopeHasFailures = true;
+                consumerScopeHasFailures = true;
               }
             }
           }
+        }
 
-          if (!docParseFailed) {
-            filesParsedCount++;
+        if (!docParseFailed) {
+          filesParsedCount++;
+          parsedDocMap.set(doc.uri, parsedDoc);
+          parsedEntries.push({ document: doc, parsed: parsedDoc });
+        }
+      }
+    }
 
-            // Find matching language analyzers
-            const matchingAnalyzers = this.analyzers.filter((a) =>
-              a.supports(doc.languageId, doc.uri)
-            );
+    // 5. Phase 2: Per-document analyzer extraction across parsed documents
+    try {
+      for (const { document: doc, parsed: parsedDoc } of parsedEntries) {
+        if (signal?.aborted) {
+          isCancelled = true;
+          break;
+        }
 
-            for (const analyzer of matchingAnalyzers) {
-              if (signal?.aborted) {
-                isCancelled = true;
-                break;
+        // Find matching language analyzers
+        const matchingAnalyzers = this.analyzers.filter((a) => a.supports(doc.languageId, doc.uri));
+
+        for (const analyzer of matchingAnalyzers) {
+          if (signal?.aborted) {
+            isCancelled = true;
+            break;
+          }
+
+          const analyzerInput: AnalyzerInput = {
+            document: doc,
+            parsed: parsedDoc,
+            projectIndex,
+            config: request.config
+          };
+
+          try {
+            const output = await analyzer.analyze(analyzerInput, signal);
+            if (output) {
+              if (Array.isArray(output.observations)) {
+                extractedObservations.push(...output.observations);
               }
-
-              const analyzerInput: AnalyzerInput = {
-                document: doc,
-                parsed: parsedDoc,
-                projectIndex,
-                config: request.config
-              };
-
-              try {
-                const output = await analyzer.analyze(analyzerInput, signal);
-                if (output) {
-                  if (Array.isArray(output.observations)) {
-                    extractedObservations.push(...output.observations);
-                  }
-                  if (Array.isArray(output.warnings)) {
-                    for (const w of output.warnings) {
-                      allWarnings.push(w);
-                      filesWithWarnings.add(doc.uri);
-                      if (w.affectsCompleteness) {
-                        if (w.scope === "provider") {
+              if (Array.isArray(output.warnings)) {
+                for (const w of output.warnings) {
+                  allWarnings.push(w);
+                  filesWithWarnings.add(doc.uri);
+                  if (w.affectsCompleteness) {
+                    const affectsRouteOrScope =
+                      !w.targetDimension ||
+                      w.targetDimension === "route" ||
+                      w.targetDimension === "method" ||
+                      w.targetDimension === "all";
+                    if (affectsRouteOrScope) {
+                      if (w.scope === "provider") {
+                        backendScopeHasFailures = true;
+                      } else if (w.scope === "consumer") {
+                        consumerScopeHasFailures = true;
+                      } else if (w.scope === "workspace" || w.scope === "unknown") {
+                        backendScopeHasFailures = true;
+                        consumerScopeHasFailures = true;
+                      } else {
+                        // Fallback scope inference
+                        if (
+                          analyzer.id.includes("backend") ||
+                          analyzer.id.includes("express") ||
+                          w.message.toLowerCase().includes("backend") ||
+                          w.message.toLowerCase().includes("provider")
+                        ) {
                           backendScopeHasFailures = true;
-                        } else if (w.scope === "consumer") {
-                          consumerScopeHasFailures = true;
-                        } else if (w.scope === "workspace" || w.scope === "unknown") {
-                          backendScopeHasFailures = true;
+                        } else if (
+                          analyzer.id.includes("frontend") ||
+                          analyzer.id.includes("fetch") ||
+                          analyzer.id.includes("axios") ||
+                          w.message.toLowerCase().includes("frontend") ||
+                          w.message.toLowerCase().includes("consumer")
+                        ) {
                           consumerScopeHasFailures = true;
                         } else {
-                          // Fallback scope inference
-                          if (
-                            analyzer.id.includes("backend") ||
-                            analyzer.id.includes("express") ||
-                            w.message.toLowerCase().includes("backend") ||
-                            w.message.toLowerCase().includes("provider")
-                          ) {
-                            backendScopeHasFailures = true;
-                          } else if (
-                            analyzer.id.includes("frontend") ||
-                            analyzer.id.includes("fetch") ||
-                            analyzer.id.includes("axios") ||
-                            w.message.toLowerCase().includes("frontend") ||
-                            w.message.toLowerCase().includes("consumer")
-                          ) {
-                            consumerScopeHasFailures = true;
-                          } else {
-                            backendScopeHasFailures = true;
-                            consumerScopeHasFailures = true;
-                          }
+                          backendScopeHasFailures = true;
+                          consumerScopeHasFailures = true;
                         }
                       }
                     }
                   }
                 }
-              } catch (err: unknown) {
-                const message = err instanceof Error ? err.message : String(err);
-                const docScope = inferDocumentScope(doc.uri);
-                allWarnings.push({
-                  code: "ANALYZER_FAILURE",
-                  message: `Analyzer '${analyzer.id}' failed on document ${doc.uri}: ${message}`,
-                  source: this.createFallbackSpan(doc.uri),
-                  analyzerId: analyzer.id,
-                  scope: docScope === "unknown" ? "workspace" : docScope,
-                  affectsCompleteness: true
-                });
-                filesWithWarnings.add(doc.uri);
-                hasAnalyzerFailure = true;
-
-                if (
-                  docScope === "provider" ||
-                  analyzer.id.includes("backend") ||
-                  analyzer.id.includes("express")
-                ) {
-                  backendScopeHasFailures = true;
-                } else if (
-                  docScope === "consumer" ||
-                  analyzer.id.includes("frontend") ||
-                  analyzer.id.includes("fetch") ||
-                  analyzer.id.includes("axios")
-                ) {
-                  consumerScopeHasFailures = true;
-                } else {
-                  backendScopeHasFailures = true;
-                  consumerScopeHasFailures = true;
-                }
               }
             }
-          }
-        } finally {
-          // Dispose temporary syntax tree resources
-          try {
-            parsedDoc.dispose();
-          } catch {
-            // Resource disposal error suppressed
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            const docScope = inferDocumentScope(doc.uri);
+            allWarnings.push({
+              code: "ANALYZER_FAILURE",
+              message: `Analyzer '${analyzer.id}' failed on document ${doc.uri}: ${message}`,
+              source: this.createFallbackSpan(doc.uri),
+              analyzerId: analyzer.id,
+              scope: docScope === "unknown" ? "workspace" : docScope,
+              affectsCompleteness: true
+            });
+            filesWithWarnings.add(doc.uri);
+            hasAnalyzerFailure = true;
+
+            if (
+              docScope === "provider" ||
+              analyzer.id.includes("backend") ||
+              analyzer.id.includes("express")
+            ) {
+              backendScopeHasFailures = true;
+            } else if (
+              docScope === "consumer" ||
+              analyzer.id.includes("frontend") ||
+              analyzer.id.includes("fetch") ||
+              analyzer.id.includes("axios")
+            ) {
+              consumerScopeHasFailures = true;
+            } else {
+              backendScopeHasFailures = true;
+              consumerScopeHasFailures = true;
+            }
           }
         }
-      }
 
-      if (isCancelled) {
-        break;
+        if (isCancelled) {
+          break;
+        }
+      }
+    } finally {
+      // Dispose all parsed documents
+      for (const parsed of parsedDocMap.values()) {
+        try {
+          parsed.dispose();
+        } catch {
+          // Resource disposal error suppressed
+        }
       }
     }
 
@@ -340,7 +362,14 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
     }
 
     // 8. Coverage and completeness evaluation
-    const hasCompletenessAffectingWarning = allWarnings.some((w) => w.affectsCompleteness);
+    const hasCompletenessAffectingWarning = allWarnings.some(
+      (w) =>
+        w.affectsCompleteness &&
+        (!w.targetDimension ||
+          w.targetDimension === "route" ||
+          w.targetDimension === "method" ||
+          w.targetDimension === "all")
+    );
     const hasIncompleteScopeWarning = allWarnings.some((w) => w.code === "INCOMPLETE_SCOPE");
 
     const isComplete =
@@ -358,6 +387,10 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       !allWarnings.some(
         (w) =>
           w.affectsCompleteness &&
+          (!w.targetDimension ||
+            w.targetDimension === "route" ||
+            w.targetDimension === "method" ||
+            w.targetDimension === "all") &&
           (w.scope === "provider" ||
             w.scope === "workspace" ||
             (w.scope === undefined &&
@@ -374,6 +407,10 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       !allWarnings.some(
         (w) =>
           w.affectsCompleteness &&
+          (!w.targetDimension ||
+            w.targetDimension === "route" ||
+            w.targetDimension === "method" ||
+            w.targetDimension === "all") &&
           (w.scope === "consumer" ||
             w.scope === "workspace" ||
             (w.scope === undefined &&

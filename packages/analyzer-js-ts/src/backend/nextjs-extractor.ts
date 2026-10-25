@@ -55,6 +55,11 @@ export function deriveNextJsRouteInfo(documentUri: DocumentUri): NextJsRouteInfo
           continue;
         }
 
+        // Strip parallel routes e.g. @slot, @modal
+        if (part.startsWith("@")) {
+          continue;
+        }
+
         // Catch-all segments e.g. [...slug] or [[...slug]]
         if (
           (part.startsWith("[...") && part.endsWith("]")) ||
@@ -191,6 +196,14 @@ function extractAppRouterMethods(
   documentUri: DocumentUri
 ): Array<{ method: HttpMethod; span: SourceSpan }> {
   const result: Array<{ method: HttpMethod; span: SourceSpan }> = [];
+  const seenMethods = new Set<HttpMethod>();
+
+  function addMethod(method: HttpMethod, span: SourceSpan): void {
+    if (!seenMethods.has(method)) {
+      seenMethods.add(method);
+      result.push({ method, span });
+    }
+  }
 
   for (const topNode of parsed.root.namedChildren()) {
     if (topNode.kind !== "export_statement") {
@@ -212,26 +225,48 @@ function extractAppRouterMethods(
             topNode.range.end,
             documentUri
           );
-          result.push({ method: nameUpper as HttpMethod, span });
+          addMethod(nameUpper as HttpMethod, span);
         }
       }
       continue;
     }
 
-    // Pattern 2: `export const GET = ...`
+    // Pattern 2: `export const GET = ...` or `export const { GET, POST } = ...`
     if (decl && (decl.kind === "lexical_declaration" || decl.kind === "variable_declaration")) {
       for (const declarator of decl.namedChildren()) {
         if (declarator.kind === "variable_declarator") {
           const nameNode = declarator.childForField("name") ?? declarator.namedChildren()[0];
-          if (nameNode && nameNode.kind === "identifier") {
-            const nameUpper = nameNode.text().toUpperCase();
-            if (VALID_HTTP_METHODS.has(nameUpper)) {
-              const span = mapper.toSourceSpanFromUtf16(
-                topNode.range.start,
-                topNode.range.end,
-                documentUri
-              );
-              result.push({ method: nameUpper as HttpMethod, span });
+          if (nameNode) {
+            if (nameNode.kind === "identifier") {
+              const nameUpper = nameNode.text().toUpperCase();
+              if (VALID_HTTP_METHODS.has(nameUpper)) {
+                const span = mapper.toSourceSpanFromUtf16(
+                  topNode.range.start,
+                  topNode.range.end,
+                  documentUri
+                );
+                addMethod(nameUpper as HttpMethod, span);
+              }
+            } else if (nameNode.kind === "object_pattern") {
+              for (const prop of nameNode.namedChildren()) {
+                let idNode: SyntaxNode | undefined;
+                if (prop.kind === "shorthand_property_identifier_pattern") {
+                  idNode = prop;
+                } else if (prop.kind === "pair_pattern") {
+                  idNode = prop.childForField("value") ?? prop.namedChildren()[1];
+                }
+                if (idNode) {
+                  const mUpper = idNode.text().toUpperCase();
+                  if (VALID_HTTP_METHODS.has(mUpper)) {
+                    const span = mapper.toSourceSpanFromUtf16(
+                      prop.range.start,
+                      prop.range.end,
+                      documentUri
+                    );
+                    addMethod(mUpper as HttpMethod, span);
+                  }
+                }
+              }
             }
           }
         }
@@ -239,21 +274,27 @@ function extractAppRouterMethods(
       continue;
     }
 
-    // Pattern 3: `export { GET, POST }`
+    // Pattern 3: `export { GET, POST }` or `export { handler as GET, handler as POST }`
     for (const child of topNode.namedChildren()) {
       if (child.kind === "export_clause") {
         for (const spec of child.namedChildren()) {
           if (spec.kind === "export_specifier") {
-            const nameNode = spec.childForField("name") ?? spec.namedChildren()[0];
-            if (nameNode) {
-              const nameUpper = nameNode.text().toUpperCase();
+            const aliasNode = spec.childForField("alias");
+            const nameNode = spec.childForField("name");
+            const exportedNode =
+              aliasNode ??
+              (spec.namedChildren().length > 1
+                ? spec.namedChildren()[1]
+                : (nameNode ?? spec.namedChildren()[0]));
+            if (exportedNode) {
+              const nameUpper = exportedNode.text().toUpperCase();
               if (VALID_HTTP_METHODS.has(nameUpper)) {
                 const span = mapper.toSourceSpanFromUtf16(
                   spec.range.start,
                   spec.range.end,
                   documentUri
                 );
-                result.push({ method: nameUpper as HttpMethod, span });
+                addMethod(nameUpper as HttpMethod, span);
               }
             }
           }

@@ -186,14 +186,69 @@ function extractObservationEvidence(obs?: ApiObservation): EvidenceRef[] {
   return evidence;
 }
 
+function calculateLevenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const d: number[][] = [];
+
+  for (let i = 0; i <= m; i++) {
+    d[i] = [i];
+  }
+  for (let j = 0; j <= n; j++) {
+    d[0][j] = j;
+  }
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+    }
+  }
+
+  return d[m][n];
+}
+
+export function isSuspectedSegmentTypo(
+  cVal: string,
+  pVal: string,
+  isSingleSegmentRoute: boolean
+): boolean {
+  if (cVal === pVal) {
+    return false;
+  }
+
+  // Plural/singular variation (e.g. user/users, post/posts, organization/organizations)
+  if (cVal + "s" === pVal || pVal + "s" === cVal || cVal + "es" === pVal || pVal + "es" === cVal) {
+    return true;
+  }
+
+  const dist = calculateLevenshteinDistance(cVal, pVal);
+  const maxLen = Math.max(cVal.length, pVal.length);
+  const similarity = maxLen > 0 ? (maxLen - dist) / maxLen : 0;
+
+  // Version bump pattern (e.g. v1 vs v2)
+  if (/^v\d+$/i.test(cVal) && /^v\d+$/i.test(pVal)) {
+    return dist <= 2;
+  }
+
+  if (isSingleSegmentRoute) {
+    // Single-segment route: no anchor segments to confirm correspondence.
+    // Require strict typo distance (dist <= 2) and high lexical similarity (>= 0.65).
+    return dist <= 2 && similarity >= 0.65;
+  }
+
+  // Multi-segment route: at least one other segment already matches exactly.
+  // Require distance <= 2 or similarity >= 0.65.
+  return dist <= 2 || similarity >= 0.65;
+}
+
 /**
- * Verifies conditions 1 to 5 of the suspected route mismatch policy defined in LLD.md Section 10.4:
- *
- * 1. Consumer and provider have the same known HTTP method.
- * 2. Both paths are known and contain no unresolved/wildcard segments.
- * 3. Segment counts are equal.
+ * Validates the 5 deterministic preconditions for suspected route mismatch:
+ * 1. HTTP methods are identical and known.
+ * 2. Segment counts are equal and greater than zero.
+ * 3. All segments are static or parameter (no wildcards or unresolved expressions).
  * 4. Parameter positions are compatible.
- * 5. Exactly one static segment differs.
+ * 5. Exactly one static segment differs. For single-segment routes, high typo similarity is required.
  */
 function checkSuspectedRouteMismatchConditions(
   consumer: ApiObservation,
@@ -233,6 +288,8 @@ function checkSuspectedRouteMismatchConditions(
 
   // Condition 4 & 5: Compatible parameters and exactly one static segment difference
   let differingStaticCount = 0;
+  let differingCVal = "";
+  let differingPVal = "";
 
   for (let i = 0; i < cRoute.segments.length; i++) {
     const cSeg = cRoute.segments[i];
@@ -248,11 +305,23 @@ function checkSuspectedRouteMismatchConditions(
       }
       if (cSeg.value !== pSeg.value) {
         differingStaticCount++;
+        differingCVal = cSeg.value;
+        differingPVal = pSeg.value;
       }
     }
   }
 
-  return differingStaticCount === 1;
+  if (differingStaticCount !== 1) {
+    return false;
+  }
+
+  // For 1-segment routes, require strict typo similarity so arbitrary 1-segment endpoints
+  // like /profile vs /read-all are never matched.
+  if (cRoute.segments.length === 1) {
+    return isSuspectedSegmentTypo(differingCVal, differingPVal, true);
+  }
+
+  return true;
 }
 
 /**

@@ -925,6 +925,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     </thead>
     <tbody>
       ${model.warnings
+        .slice(0, 50)
         .map(
           (w) => `
         <tr>
@@ -937,7 +938,8 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         )
         .join("")}
     </tbody>
-  </table>`
+  </table>
+  ${model.warnings.length > 50 ? `<div style="margin-top: 8px; font-size: 12px; color: var(--vscode-descriptionForeground);">Showing first 50 of ${model.warnings.length} coverage limitations.</div>` : ""}`
       : ""
   }
 
@@ -1102,10 +1104,26 @@ function renderStatusBanner(model: ReportViewModel): string {
 
   if (model.status === "analysis-incomplete") {
     const timeText = model.timestamp ? ` from ${formatTimestamp(model.timestamp)}` : "";
+    const completenessWarnings = model.warnings.filter((w) => w.affectsCompleteness);
+    let detailsText = "";
+    if (completenessWarnings.length > 0) {
+      const affectedFiles = Array.from(
+        new Set(
+          completenessWarnings
+            .map((w) => w.source?.uri)
+            .filter((uri): uri is string => Boolean(uri))
+        )
+      );
+      if (affectedFiles.length > 0) {
+        const fileList = affectedFiles.slice(0, 3).join(", ");
+        const extra = affectedFiles.length > 3 ? ` and ${affectedFiles.length - 3} more` : "";
+        detailsText = ` Unresolved patterns or parse issues in ${fileList}${extra} prevent full contract verification.`;
+      }
+    }
     return `
     <div class="banner banner-incomplete">
       <div>
-        <strong>Coverage Incomplete:</strong> The latest analysis attempt encountered limitations or unacquired files. Retaining last known complete analysis${escapeHtml(timeText)} without falsely resolving previous findings. Current source code may differ.
+        <strong>Coverage Incomplete:</strong> The latest analysis attempt encountered limitations or unacquired files.${escapeHtml(detailsText)} Retaining last known complete analysis${escapeHtml(timeText)} without falsely resolving previous findings. Current source code may differ.
       </div>
     </div>`;
   }
@@ -1884,7 +1902,10 @@ export class ReportPanelManager implements vscode.Disposable {
 
         const currentFindings = outcome.result?.findings ?? [];
         const provisionalFindings = currentFindings.filter(
-          (f) => !priorFindings.some((pf) => pf.id === f.id)
+          (f) =>
+            f.category !== "analysis-limit" &&
+            !f.ruleId.startsWith("UND9") &&
+            !priorFindings.some((pf) => pf.id === f.id)
         );
 
         this.setWorkspaceState({

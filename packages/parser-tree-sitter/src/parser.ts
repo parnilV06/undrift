@@ -31,6 +31,42 @@ export interface TreeSitterParserAdapterOptions {
 }
 
 /**
+ * Detects whether an ERROR node produced by Tree-sitter is an artifact of its JSX scanner
+ * expecting XML entities (e.g. '&amp;') when encountering plain ampersands in valid JSX text
+ * or quoted attribute strings (e.g. query strings like '?auto=format&fit=crop').
+ *
+ * Per the JSX specification, raw '&' is valid in JSXText (only '<', '>', '{', '}' are forbidden)
+ * and inside quoted attribute string literals.
+ */
+function isJsxAmpersandArtifact(node: Parser.SyntaxNode): boolean {
+  if (node.type !== "ERROR") {
+    return false;
+  }
+  const text = node.text ?? "";
+  if (!text.startsWith("&")) {
+    return false;
+  }
+
+  const parent = node.parent;
+  // Case 1: Quoted attribute string containing '&' (e.g. <img src="https://example.com?a=1&b=2" />)
+  if (
+    parent?.type === "string" &&
+    (parent.parent?.type === "jsx_attribute" || parent.parent?.type === "jsx_expression")
+  ) {
+    return true;
+  }
+
+  // Case 2: JSX element or fragment child text containing '&' (e.g. <p>Effective & Last Updated</p>)
+  if (parent?.type === "jsx_element" || parent?.type === "jsx_fragment") {
+    if (!/[<>{}]/.test(text)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Concrete implementation of UNDRIFT's core ParserPort backed by web-tree-sitter.
  *
  * Responsibilities:
@@ -205,6 +241,10 @@ export class TreeSitterParserAdapter implements ParserPort {
       }
 
       if (node.type === "ERROR") {
+        if (isJsxAmpersandArtifact(node)) {
+          return;
+        }
+
         let source: SourceSpan | undefined;
         try {
           source = mapper.toSourceSpanForNode(node, uri);
