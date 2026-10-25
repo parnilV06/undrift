@@ -20,6 +20,7 @@ import {
   LocalReferenceResolver,
   createLocalReferenceResolver
 } from "../project-index/local-reference-resolver";
+import { ExpressMountRegistry } from "../backend/express-mount-resolver";
 
 const SUPPORTED_LANGUAGES = new Set([
   "javascript",
@@ -40,7 +41,10 @@ const SUPPORTED_EXTENSIONS = [".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"];
 export class JsTsAnalyzer implements LanguageAnalyzerPort {
   readonly id = "analyzer-js-ts";
 
-  constructor(private readonly resolver?: LocalReferenceResolver) {}
+  constructor(
+    private readonly resolver?: LocalReferenceResolver,
+    private readonly mountRegistry?: ExpressMountRegistry
+  ) {}
 
   /**
    * Determines if this analyzer supports the given language and document URI.
@@ -76,6 +80,13 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
         isLocalDeclarationIndex(input.projectIndex.declarationIndex)
       ) {
         resolver = createLocalReferenceResolver(input.projectIndex.declarationIndex);
+      } else if (typeof input.projectIndex.getAllParsedDocuments === "function") {
+        const allParsed = input.projectIndex.getAllParsedDocuments();
+        if (allParsed.length > 0) {
+          const declIndex = createLocalDeclarationIndex(allParsed);
+          resolver = createLocalReferenceResolver(declIndex);
+          (input.projectIndex as { resolver?: LocalReferenceResolver }).resolver = resolver;
+        }
       }
     }
 
@@ -83,8 +94,31 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
     const fetchResult = extractFetchObservations(input.document, input.parsed, signal, resolver);
     const axiosResult = extractAxiosObservations(input.document, input.parsed, signal, resolver);
 
+    let mountRegistry = this.mountRegistry;
+    if (!mountRegistry && input.projectIndex) {
+      if (
+        "expressMountRegistry" in input.projectIndex &&
+        input.projectIndex.expressMountRegistry instanceof ExpressMountRegistry
+      ) {
+        mountRegistry = input.projectIndex.expressMountRegistry;
+      } else if (typeof input.projectIndex.getAllParsedDocuments === "function") {
+        const allParsed = input.projectIndex.getAllParsedDocuments();
+        if (allParsed.length > 0) {
+          mountRegistry = ExpressMountRegistry.build(allParsed);
+          (
+            input.projectIndex as { expressMountRegistry?: ExpressMountRegistry }
+          ).expressMountRegistry = mountRegistry;
+        }
+      }
+    }
+
     // Run backend extractors
-    const expressResult = extractExpressObservations(input.document, input.parsed, signal);
+    const expressResult = extractExpressObservations(
+      input.document,
+      input.parsed,
+      signal,
+      mountRegistry
+    );
     const nextjsResult = extractNextJsObservations(input.document, input.parsed, signal);
 
     return {

@@ -23,6 +23,11 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import {
+  ExpressMountRegistry,
+  type ExpressMountInfo,
+  combineRoutePaths
+} from "./express-mount-resolver";
 
 const VALID_EXPRESS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
   ["get", "GET"],
@@ -818,7 +823,8 @@ export interface ExpressExtractionResult {
 export function extractExpressObservations(
   document: SourceDocument,
   parsed: ParsedDocument,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mountRegistry?: ExpressMountRegistry
 ): ExpressExtractionResult {
   const observations: ApiObservation[] = [];
   const warnings: AnalysisWarning[] = [];
@@ -931,16 +937,7 @@ export function extractExpressObservations(
     // 2. Route Path
     const path = extractPath(pathArgNode, document.uri, mapper, localWarnings);
 
-    // 3. Request Path Parameters
-    let request: RequestShapeObservation | undefined;
-    if (path.state === "known") {
-      const pathParams = createPathParametersShape(path.value, callSpan);
-      if (pathParams) {
-        request = { pathParams };
-      }
-    }
-
-    // 4. Inspect Handlers for Response Shapes
+    // 3. Inspect Handlers for Response Shapes
     const responses: ResponseShapeObservation[] = [];
     for (const handlerArg of handlerArgs) {
       if (
@@ -961,7 +958,124 @@ export function extractExpressObservations(
     // Collect local warnings to document warnings
     warnings.push(...localWarnings);
 
-    // 5. Build ApiObservation with provider role
+    // 4. Determine applicable mount prefixes (from ExpressMountRegistry if present)
+    let applicableMounts: Array<{ prefix: string; mount: ExpressMountInfo }> = [];
+    if (mountRegistry && match.receiver !== "app") {
+      const docMounts = mountRegistry.getMountsForDocument(document.uri);
+      const localMounts = mountRegistry.getMountsForLocalRouter(document.uri, match.receiver);
+      applicableMounts = docMounts.length > 0 ? docMounts : localMounts;
+    }
+
+    if (applicableMounts.length > 0 && path.state === "known") {
+      for (const { prefix, mount } of applicableMounts) {
+        if (mount.isDynamic) {
+          const dynamicWarn: AnalysisWarning = {
+            code: "DYNAMIC_ROUTE",
+            message:
+              mount.dynamicReason ??
+              "Dynamic Express router mount prefix cannot be statically resolved",
+            source: callSpan,
+            analyzerId: "analyzer-js-ts",
+            scope: "provider",
+            targetDimension: "route",
+            affectsCompleteness: true
+          };
+          warnings.push(dynamicWarn);
+
+          observations.push({
+            id: `obs:${document.uri}:${node.range.start}-${node.range.end}`,
+            role: "provider",
+            languageId: document.languageId,
+            framework: "express",
+            extractorId: "express-extractor",
+            source: [callSpan],
+            snapshot: {
+              uri: document.uri,
+              contentHash: document.contentHash
+            },
+            endpoint: {
+              method: methodValue,
+              path: {
+                state: "dynamic",
+                expression: mount.dynamicReason ?? "Dynamic mount prefix",
+                reason: "Dynamic Express router mount prefix",
+                evidence: [
+                  {
+                    id: `ev-mount-dynamic-${node.range.start}`,
+                    kind: "framework-convention",
+                    strength: "inferred",
+                    source: mount.sourceSpan,
+                    description: "Dynamic mount prefix in Express app.use()"
+                  }
+                ]
+              },
+              request: undefined,
+              responses
+            },
+            limitations: [dynamicWarn]
+          });
+          continue;
+        }
+
+        const effectiveRawPath = combineRoutePaths(prefix, path.value.rawPath);
+        const effectiveRoutePattern = parseRoutePattern(effectiveRawPath);
+        const mountEvidence: EvidenceRef = {
+          id: `ev-mount-${node.range.start}`,
+          kind: "framework-convention",
+          strength: "direct",
+          source: mount.sourceSpan,
+          description: `Express router mounted with prefix '${prefix}' in ${mount.mountingDocUri}`
+        };
+
+        const effectivePath: ObservedValue<RoutePattern> = {
+          state: "known",
+          value: effectiveRoutePattern,
+          strength: path.strength,
+          evidence: [...path.evidence, mountEvidence]
+        };
+
+        const effectivePathParams = createPathParametersShape(effectiveRoutePattern, callSpan);
+        const effectiveRequest: RequestShapeObservation | undefined = effectivePathParams
+          ? { pathParams: effectivePathParams }
+          : undefined;
+
+        const effectiveObsId: ObservationId =
+          applicableMounts.length > 1
+            ? `obs:${document.uri}:${node.range.start}-${node.range.end}:${effectiveRawPath}`
+            : `obs:${document.uri}:${node.range.start}-${node.range.end}`;
+
+        observations.push({
+          id: effectiveObsId,
+          role: "provider",
+          languageId: document.languageId,
+          framework: "express",
+          extractorId: "express-extractor",
+          source: [callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method: methodValue,
+            path: effectivePath,
+            request: effectiveRequest,
+            responses
+          },
+          limitations: localWarnings
+        });
+      }
+      return;
+    }
+
+    // Default: direct route without mount prefix
+    let request: RequestShapeObservation | undefined;
+    if (path.state === "known") {
+      const pathParams = createPathParametersShape(path.value, callSpan);
+      if (pathParams) {
+        request = { pathParams };
+      }
+    }
+
     const observationId: ObservationId = `obs:${document.uri}:${node.range.start}-${node.range.end}`;
 
     const observation: ApiObservation = {
@@ -994,11 +1108,19 @@ export function extractExpressObservations(
  * Extractor class conforming to extractor module architecture.
  */
 export class ExpressExtractor {
+  constructor(private readonly mountRegistry?: ExpressMountRegistry) {}
+
   extract(
     document: SourceDocument,
     parsed: ParsedDocument,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    mountRegistry?: ExpressMountRegistry
   ): ExpressExtractionResult {
-    return extractExpressObservations(document, parsed, signal);
+    return extractExpressObservations(
+      document,
+      parsed,
+      signal,
+      mountRegistry ?? this.mountRegistry
+    );
   }
 }

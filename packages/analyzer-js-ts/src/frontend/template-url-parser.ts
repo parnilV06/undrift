@@ -43,13 +43,13 @@ function parseRawPathToPattern(rawPath: string): RoutePattern {
     segments,
     trailingSlash,
     queryHandling,
-    rawPath: pathPart
+    rawPath: pathPart.startsWith("/") ? pathPart : "/" + pathPart
   };
 }
 
 /**
  * Analyzes a template_string syntax node and extracts a RoutePattern if the pathname
- * is static or uses single-segment parameter interpolations.
+ * is static, uses base URL interpolation, or uses single-segment parameter interpolations.
  */
 export function extractTemplateRoute(
   argNode: SyntaxNode,
@@ -102,31 +102,102 @@ export function extractTemplateRoute(
     }
   }
 
-  const pathEndOffset = queryOffset >= 0 ? queryOffset : rawText.length - 1;
-  const pathRawText = rawText.slice(1, pathEndOffset);
+  // 2b. If no literal '?' found, check if a trailing substitution builds query parameters
+  // e.g. `${buildQueryString(params)}` or trailing query generator
+  let trailingQueryBuilderFound = false;
+  if (queryOffset === -1 && substitutions.length > 0) {
+    const lastSub = substitutions[substitutions.length - 1];
+    const textAfter = rawText.slice(lastSub.range.end - argNode.range.start, -1);
+    if (!textAfter.includes("/")) {
+      const subExpr = lastSub.childForField("expression") ?? lastSub.namedChildren()[0];
+      const exprText = subExpr?.text() ?? "";
+      const textBefore = rawText.slice(0, lastSub.range.start - argNode.range.start);
 
-  // 3. Find substitutions that occur in the path portion (before '?')
-  const pathSubstitutions = substitutions.filter(
-    (sub) => sub.range.start < argNode.range.start + pathEndOffset
-  );
+      const isQueryBuilder =
+        /(?:query|search|param|qs)/i.test(exprText) ||
+        textBefore.endsWith("?") ||
+        textBefore.endsWith("&");
+
+      if (isQueryBuilder) {
+        queryOffset = lastSub.range.start - argNode.range.start;
+        trailingQueryBuilderFound = true;
+      }
+    }
+  }
+
+  const pathEndOffset = queryOffset >= 0 ? queryOffset : rawText.length - 1;
+  let pathRawText = rawText.slice(1, pathEndOffset);
+
+  // 2c. Inspect if the template starts with a base URL interpolation e.g. `${API_BASE_URL}/api/...`
+  let baseSub: SyntaxNode | undefined;
+  let baseUrlPrefix = "";
+
+  if (substitutions.length > 0 && substitutions[0].range.start === argNode.range.start + 1) {
+    const firstSub = substitutions[0];
+    const exprNode = firstSub.childForField("expression") ?? firstSub.namedChildren()[0];
+    const exprText = exprNode?.text() ?? "";
+
+    const isBaseUrlIdent =
+      /(?:base_?url|api_?url|server_?url|backend_?url|host|origin)/i.test(exprText) ||
+      exprText.startsWith("process.env.") ||
+      exprText.startsWith("import.meta.env.");
+
+    if (isBaseUrlIdent) {
+      baseSub = firstSub;
+
+      // Attempt constant resolution if resolver available
+      if (resolver && exprNode?.kind === "identifier") {
+        const res = resolver.resolveConstant<string>(exprText, documentUri, exprNode.range);
+        if (res.state === "resolved" && typeof res.value === "string") {
+          try {
+            if (res.value.startsWith("http://") || res.value.startsWith("https://")) {
+              const parsedUrl = new URL(res.value);
+              baseUrlPrefix = parsedUrl.pathname.replace(/\/+$/, "");
+            } else {
+              baseUrlPrefix = res.value.replace(/\/+$/, "");
+            }
+          } catch {
+            baseUrlPrefix = res.value.replace(/\/+$/, "");
+          }
+        }
+      }
+
+      // Cut the base URL substitution out of pathRawText
+      const subEndRel = firstSub.range.end - argNode.range.start - 1;
+      pathRawText = pathRawText.slice(subEndRel);
+
+      if (baseUrlPrefix && baseUrlPrefix !== "/" && !pathRawText.startsWith(baseUrlPrefix)) {
+        pathRawText =
+          baseUrlPrefix + (pathRawText.startsWith("/") ? pathRawText : "/" + pathRawText);
+      }
+    }
+  }
+
+  // 3. Find substitutions that occur in the path portion (excluding baseSub and trailing query builder)
+  const pathSubstitutions = substitutions.filter((sub) => {
+    if (baseSub && sub.range.start === baseSub.range.start) return false;
+    return sub.range.start < argNode.range.start + pathEndOffset;
+  });
 
   // If NO substitutions exist in the path portion, the pathname is completely static!
-  // e.g. `/api/posts?page=${page}&limit=10`
+  // e.g. `/api/posts?page=${page}&limit=10` or `${API_BASE_URL}/api/transactions${buildQueryString(params)}`
   if (pathSubstitutions.length === 0) {
     const routePattern = parseRawPathToPattern(pathRawText);
     const evidence: EvidenceRef = {
       id: `ev-path-${argNode.range.start}`,
       kind: "literal-syntax",
-      strength: "direct",
+      strength: baseSub ? "inferred" : "direct",
       source: argSpan,
-      description: `Static URL literal '${routePattern.rawPath}' with dynamic query parameters in ${frameworkName} call`
+      description: baseSub
+        ? `Static template URL literal '${routePattern.rawPath}' with base URL interpolation in ${frameworkName} call`
+        : `Static URL literal '${routePattern.rawPath}' with dynamic query parameters in ${frameworkName} call`
     };
 
     return {
       routeValue: {
         state: "known",
         value: routePattern,
-        strength: "direct",
+        strength: baseSub ? "inferred" : "direct",
         evidence: [evidence]
       }
     };

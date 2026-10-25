@@ -21,6 +21,12 @@ export {
   type ExpressExtractionResult
 } from "./backend/express-extractor";
 export {
+  ExpressMountRegistry,
+  discoverExpressMounts,
+  combineRoutePaths,
+  type ExpressMountInfo
+} from "./backend/express-mount-resolver";
+export {
   NextJsExtractor,
   extractNextJsObservations,
   deriveNextJsRouteInfo,
