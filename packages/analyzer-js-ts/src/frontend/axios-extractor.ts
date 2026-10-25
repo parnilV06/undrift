@@ -24,7 +24,13 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
-import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
+import {
+  LocalReferenceResolver,
+  createLocalReferenceResolver
+} from "../project-index/local-reference-resolver";
+import { createLocalDeclarationIndex } from "../project-index/local-declaration-index";
+import { extractTemplateRoute } from "./template-url-parser";
+import { extractObjectFields } from "../shapes/shape-extractor";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
   ["get", "GET"],
@@ -211,56 +217,11 @@ function extractPath(
 
   // 2. Template string literal
   if (argNode.kind === "template_string") {
-    const hasSubstitutions = argNode
-      .namedChildren()
-      .some((child) => child.kind === "template_substitution");
-
-    if (!hasSubstitutions) {
-      // Static template literal without substitutions e.g. `/api/users`
-      const raw = argNode.text();
-      const unquoted = raw.slice(1, -1);
-      const routePattern = parseRoutePattern(unquoted);
-
-      const evidence: EvidenceRef = {
-        id: `ev-path-${argNode.range.start}`,
-        kind: "literal-syntax",
-        strength: "direct",
-        source: argSpan,
-        description: `Static template URL literal '${routePattern.rawPath}' in Axios call`
-      };
-
-      return {
-        state: "known",
-        value: routePattern,
-        strength: "direct",
-        evidence: [evidence]
-      };
+    const extraction = extractTemplateRoute(argNode, documentUri, mapper, "Axios", resolver);
+    if (extraction.warning) {
+      warnings.push(extraction.warning);
     }
-
-    // Dynamic template string with interpolation e.g. `/api/users/${id}`
-    const warning: AnalysisWarning = {
-      code: "DYNAMIC_ROUTE",
-      message: `Dynamic template string in Axios URL cannot be statically resolved: ${argNode.text()}`,
-      source: argSpan,
-      analyzerId: "analyzer-js-ts",
-      affectsCompleteness: true
-    };
-    warnings.push(warning);
-
-    const evidence: EvidenceRef = {
-      id: `ev-path-${argNode.range.start}`,
-      kind: "literal-syntax",
-      strength: "inferred",
-      source: argSpan,
-      description: "Dynamic template string URL expression in Axios call"
-    };
-
-    return {
-      state: "dynamic",
-      expression: argNode.text(),
-      reason: "Dynamic template string URL interpolation",
-      evidence: [evidence]
-    };
+    return extraction.routeValue;
   }
 
   // 3. Local constant resolution via resolver for identifier expressions
@@ -284,6 +245,8 @@ function extractPath(
         message: `Resolved constant '${refName}' is not a string URL: ${String(result.value)}`,
         source: argSpan,
         analyzerId: "analyzer-js-ts",
+        scope: "consumer",
+        targetDimension: "route",
         affectsCompleteness: true
       };
       warnings.push(warning);
@@ -303,6 +266,8 @@ function extractPath(
     message: `Dynamic URL expression in Axios call cannot be statically resolved: ${argNode.text()}`,
     source: argSpan,
     analyzerId: "analyzer-js-ts",
+    scope: "consumer",
+    targetDimension: "route",
     affectsCompleteness: true
   };
   warnings.push(warning);
@@ -324,88 +289,16 @@ function extractPath(
 }
 
 /**
- * Extracts properties from an object literal syntax node into a FieldShape array.
- */
-function extractObjectFields(
-  objectNode: SyntaxNode,
-  documentUri: DocumentUri,
-  mapper: PositionMapper
-): FieldShape[] {
-  const fields: FieldShape[] = [];
-
-  for (const child of objectNode.namedChildren()) {
-    if (child.kind !== "pair") {
-      continue;
-    }
-
-    const keyNode = child.childForField("key") ?? child.namedChildren()[0];
-    const valNode = child.childForField("value") ?? child.namedChildren()[1];
-
-    if (!keyNode || !valNode) {
-      continue;
-    }
-
-    let fieldName = keyNode.text();
-    if (keyNode.kind === "string") {
-      fieldName = fieldName.slice(1, -1);
-    }
-
-    const fieldSpan = mapper.toSourceSpanFromUtf16(child.range.start, child.range.end, documentUri);
-
-    const fieldEvidence: EvidenceRef = {
-      id: `ev-field-${child.range.start}`,
-      kind: "literal-syntax",
-      strength: "direct",
-      source: fieldSpan,
-      description: `Field '${fieldName}' in request body payload`
-    };
-
-    let fieldType: TypeShape;
-    let nullable: "yes" | "no" | "unknown" = "no";
-
-    if (valNode.kind === "string") {
-      fieldType = { kind: "literal", value: valNode.text().slice(1, -1) };
-    } else if (valNode.kind === "number") {
-      fieldType = { kind: "literal", value: Number(valNode.text()) };
-    } else if (valNode.kind === "true") {
-      fieldType = { kind: "literal", value: true };
-    } else if (valNode.kind === "false") {
-      fieldType = { kind: "literal", value: false };
-    } else if (valNode.kind === "null") {
-      fieldType = { kind: "literal", value: null };
-      nullable = "yes";
-    } else if (valNode.kind === "array") {
-      fieldType = { kind: "array", element: { kind: "unknown", reason: "not-observed" } };
-    } else if (valNode.kind === "object") {
-      fieldType = {
-        kind: "object",
-        properties: extractObjectFields(valNode, documentUri, mapper),
-        additionalProperties: "unknown"
-      };
-    } else {
-      fieldType = { kind: "unknown", reason: "dynamic-expression" };
-    }
-
-    fields.push({
-      name: fieldName,
-      type: fieldType,
-      presence: "required",
-      nullable,
-      evidence: [fieldEvidence]
-    });
-  }
-
-  return fields;
-}
-
-/**
  * Extracts request body shape from the payload argument (arg 1 in POST/PUT/PATCH).
  */
 function extractRequestBody(
   dataNode: SyntaxNode | undefined,
   documentUri: DocumentUri,
   mapper: PositionMapper,
-  warnings: AnalysisWarning[]
+  warnings: AnalysisWarning[],
+  resolver?: LocalReferenceResolver,
+  parsed?: ParsedDocument,
+  document?: SourceDocument
 ): ShapeObservation | undefined {
   if (!dataNode) {
     return undefined;
@@ -460,12 +353,41 @@ function extractRequestBody(
     };
   }
 
+  // Local identifier resolution e.g. axios.post("/api", registrationData)
+  if (dataNode.kind === "identifier") {
+    const refName = dataNode.text();
+    let resolved = resolver?.resolveObjectLiteral(refName, documentUri, dataNode.range);
+    if ((!resolved || resolved.state !== "resolved") && parsed && document) {
+      try {
+        const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+        const localResolver = createLocalReferenceResolver(localIndex);
+        resolved = localResolver.resolveObjectLiteral(refName, documentUri, dataNode.range);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (resolved && resolved.state === "resolved") {
+      return {
+        shape: {
+          kind: "object",
+          properties: [...resolved.value],
+          additionalProperties: "unknown"
+        },
+        completeness: "complete",
+        evidence: resolved.evidence
+      };
+    }
+  }
+
   // Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
   const warning: AnalysisWarning = {
     code: "PARTIAL_SHAPE",
     message: `Unresolved request payload expression in Axios call: ${dataNode.text()}`,
     source: dataSpan,
     analyzerId: "analyzer-js-ts",
+    scope: "consumer",
+    targetDimension: "request-shape",
     affectsCompleteness: true
   };
   warnings.push(warning);
@@ -678,6 +600,7 @@ export function extractAxiosObservations(
         message: `${match.receiver}.${match.methodName}() call without required URL argument cannot be analyzed`,
         source: callSpan,
         analyzerId: "analyzer-js-ts",
+        scope: "consumer",
         affectsCompleteness: true
       });
       return;
@@ -693,6 +616,8 @@ export function extractAxiosObservations(
         message: `Dynamic HTTP method dispatch on Axios call cannot be statically determined: ${match.methodName}`,
         source: callSpan,
         analyzerId: "analyzer-js-ts",
+        scope: "consumer",
+        targetDimension: "method",
         affectsCompleteness: true
       };
       localWarnings.push(warning);
@@ -734,7 +659,15 @@ export function extractAxiosObservations(
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
     if (match.httpMethod && BODY_METHODS.has(match.httpMethod) && args.length > 1) {
-      const bodyShape = extractRequestBody(args[1], document.uri, mapper, localWarnings);
+      const bodyShape = extractRequestBody(
+        args[1],
+        document.uri,
+        mapper,
+        localWarnings,
+        resolver,
+        parsed,
+        document
+      );
       if (bodyShape) {
         request = { body: bodyShape };
       }

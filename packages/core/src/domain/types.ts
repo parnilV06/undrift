@@ -89,6 +89,8 @@ export type AnalysisCompleteness = "complete" | "partial" | "unknown" | "failed"
  */
 export interface AnalysisCoverageSummary {
   complete: boolean;
+  backendComplete?: boolean;
+  consumerComplete?: boolean;
   filesScanned: number;
   filesWithWarnings: number;
   unresolvedPatterns: number;

@@ -6,6 +6,7 @@
 import type {
   DocumentUri,
   EvidenceRef,
+  FieldShape,
   ParsedDocument,
   ProjectIndexView,
   SourceDocument,
@@ -13,6 +14,7 @@ import type {
   SyntaxNode
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import { extractObjectFields } from "../shapes/shape-extractor";
 
 /**
  * Kind of local declaration indexed in source documents.
@@ -51,6 +53,8 @@ export interface LocalVariableDeclaration extends LocalDeclarationBase {
   readonly isConstant: boolean;
   /** Literal value if initialized with a static literal. */
   readonly literalValue?: string | number | boolean | null;
+  /** Extracted object properties if initialized with an object literal. */
+  readonly objectFields?: readonly FieldShape[];
   /** Source text of initializer expression, if present. */
   readonly initializerText?: string;
 }
@@ -224,6 +228,10 @@ export function indexLocalDeclarations(
       }
 
       const literalValue = valNode ? extractLiteralValue(valNode) : undefined;
+      const objectFields =
+        valNode && valNode.kind === "object"
+          ? extractObjectFields(valNode, document.uri, mapper)
+          : undefined;
       const initializerText = valNode?.text();
       const evidence = makeEvidence(
         declarator,
@@ -243,6 +251,7 @@ export function indexLocalDeclarations(
         declarationType: declType,
         isConstant: declType === "const",
         literalValue,
+        objectFields,
         initializerText
       });
       return;

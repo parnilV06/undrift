@@ -437,12 +437,44 @@ function extractResponseBodyShape(
     };
   }
 
+  // Array literal e.g. res.json([{ id: 1, name: "Alice" }])
+  if (bodyNode.kind === "array") {
+    const evidence: EvidenceRef = {
+      id: `ev-body-${bodyNode.range.start}`,
+      kind: "literal-syntax",
+      strength: "direct",
+      source: bodySpan,
+      description: "Array literal response body in Express handler"
+    };
+
+    const elements = bodyNode.namedChildren();
+    let elementShape: TypeShape = { kind: "unknown", reason: "not-observed" };
+    if (elements.length > 0 && elements[0].kind === "object") {
+      elementShape = {
+        kind: "object",
+        properties: extractObjectFields(elements[0], documentUri, mapper),
+        additionalProperties: "unknown"
+      };
+    }
+
+    return {
+      shape: {
+        kind: "array",
+        element: elementShape
+      },
+      completeness: "complete",
+      evidence: [evidence]
+    };
+  }
+
   // Variable or dynamic expression e.g. res.json(users)
   const warning: AnalysisWarning = {
     code: "PARTIAL_SHAPE",
     message: `Unresolved response body payload expression in Express handler: ${bodyNode.text()}`,
     source: bodySpan,
     analyzerId: "analyzer-js-ts",
+    scope: "provider",
+    targetDimension: "response-shape",
     affectsCompleteness: true
   };
   warnings.push(warning);

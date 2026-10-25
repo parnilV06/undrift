@@ -35,6 +35,7 @@ export interface ReportViewModel {
   readonly timestamp?: string;
   readonly statusMessage?: string;
   readonly findings: readonly DiagnosticFindingSource[];
+  readonly provisionalFindings?: readonly DiagnosticFindingSource[];
   readonly history: readonly FindingLifecycleEvent[];
   readonly warnings: readonly AnalysisWarning[];
   readonly coverage?: AnalysisCoverageSummary;
@@ -78,6 +79,7 @@ interface WorkspaceReportState {
   timestamp?: string;
   message?: string;
   findings: readonly DiagnosticFindingSource[];
+  provisionalFindings?: readonly DiagnosticFindingSource[];
   history: readonly FindingLifecycleEvent[];
   warnings: readonly AnalysisWarning[];
   coverage?: AnalysisCoverageSummary;
@@ -886,6 +888,10 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       <span class="metric-value" style="color: var(--color-info)">${infoCount}</span>
       <span class="metric-label">Information</span>
     </div>
+    <div class="metric-card">
+      <span class="metric-value" style="color: var(--color-warning)">${model.warnings ? model.warnings.length : 0}</span>
+      <span class="metric-label">Coverage Limitations</span>
+    </div>
   </div>
 
   <div class="category-pills">
@@ -912,6 +918,8 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       <tr>
         <th>Code</th>
         <th>Message</th>
+        <th>Source Location</th>
+        <th>Scope</th>
         <th>Affects Completeness</th>
       </tr>
     </thead>
@@ -922,7 +930,9 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         <tr>
           <td><code>${escapeHtml(w.code)}</code></td>
           <td>${escapeHtml(w.message)}</td>
-          <td>${w.affectsCompleteness ? "Yes" : "No"}</td>
+          <td>${w.source ? `<code>${escapeHtml(w.source.uri)}:${w.source.start ? w.source.start.line + 1 : 1}:${w.source.start ? w.source.start.character + 1 : 1}</code>` : "—"}</td>
+          <td><code>${escapeHtml(w.scope ?? "workspace")}</code></td>
+          <td>${w.affectsCompleteness ? "Yes (Limits conclusions)" : "No (Advisory)"}</td>
         </tr>`
         )
         .join("")}
@@ -946,6 +956,34 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
           model.targetFindingId === finding.id,
           model.proposalsByFinding?.get(finding.id) ?? [],
           model.targetProposalId
+        )
+      )
+      .join("")}
+  </div>`
+      : ""
+  }
+
+  ${
+    model.provisionalFindings && model.provisionalFindings.length > 0
+      ? `
+  <div class="section-title">
+    <span>Provisional Drift Findings from Latest Incomplete Analysis (${model.provisionalFindings.length})</span>
+  </div>
+  <div class="banner banner-incomplete" style="margin-bottom: 16px;">
+    <div>
+      <strong>⚠️ Provisional Findings:</strong> These positive contract discrepancies were discovered during the latest incomplete analysis. Because coverage limitations exist, they are unverified, do NOT overwrite the accepted snapshot, and do NOT trigger lifecycle resolution events.
+    </div>
+  </div>
+  <div class="findings-list">
+    ${model.provisionalFindings
+      .map((finding) =>
+        renderFindingCard(
+          finding,
+          [],
+          model.targetFindingId === finding.id,
+          model.proposalsByFinding?.get(finding.id) ?? [],
+          model.targetProposalId,
+          true
         )
       )
       .join("")}
@@ -1117,7 +1155,8 @@ function renderFindingCard(
   history: readonly FindingLifecycleEvent[],
   isTarget: boolean,
   proposals: readonly FixProposal[] = [],
-  targetProposalId?: string
+  targetProposalId?: string,
+  isProvisional = false
 ): string {
   const severityClass =
     finding.severity === "error"
@@ -1139,6 +1178,11 @@ function renderFindingCard(
           <span class="badge ${severityClass}">${escapeHtml(finding.severity)}</span>
           <span class="badge badge-category">${escapeHtml(finding.ruleId)}</span>
           <span class="badge badge-category">${escapeHtml(finding.category ?? "drift")}</span>
+          ${
+            isProvisional
+              ? '<span class="badge" style="background: rgba(204, 167, 0, 0.2); color: var(--color-warning); border: 1px solid rgba(204, 167, 0, 0.4);">Provisional — Incomplete Scan</span>'
+              : ""
+          }
           ${
             finding.evidenceStrength
               ? `<span class="badge badge-evidence">Evidence: ${escapeHtml(finding.evidenceStrength)}</span>`
@@ -1838,12 +1882,18 @@ export class ReportPanelManager implements vscode.Disposable {
         const history = prior?.history ?? this.coordinator?.getLastKnownHistory(wsId) ?? [];
         const warnings = outcome.result?.warnings ?? prior?.warnings ?? [];
 
+        const currentFindings = outcome.result?.findings ?? [];
+        const provisionalFindings = currentFindings.filter(
+          (f) => !priorFindings.some((pf) => pf.id === f.id)
+        );
+
         this.setWorkspaceState({
           workspaceId: wsId,
           status: "analysis-incomplete",
           timestamp: priorTimestamp,
           message: "Coverage incomplete; preserving last known complete analysis",
           findings: priorFindings,
+          provisionalFindings,
           history,
           warnings,
           coverage: prior?.coverage
@@ -1948,6 +1998,7 @@ export class ReportPanelManager implements vscode.Disposable {
       timestamp: state?.timestamp,
       statusMessage: state?.message,
       findings: state?.findings ?? [],
+      provisionalFindings: state?.provisionalFindings,
       history: state?.history ?? [],
       warnings: state?.warnings ?? [],
       coverage: state?.coverage,

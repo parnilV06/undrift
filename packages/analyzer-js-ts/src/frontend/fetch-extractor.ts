@@ -21,7 +21,13 @@ import type {
   TypeShape
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
-import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
+import {
+  LocalReferenceResolver,
+  createLocalReferenceResolver
+} from "../project-index/local-reference-resolver";
+import { createLocalDeclarationIndex } from "../project-index/local-declaration-index";
+import { extractTemplateRoute } from "./template-url-parser";
+import { extractObjectFields } from "../shapes/shape-extractor";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -136,58 +142,13 @@ function extractPath(
     };
   }
 
-  // 2. Template string literal
+  // 2. Template string literal (supports static, dynamic query, and parameter interpolations)
   if (argNode.kind === "template_string") {
-    const hasSubstitutions = argNode
-      .namedChildren()
-      .some((child) => child.kind === "template_substitution");
-
-    if (!hasSubstitutions) {
-      // Static template literal without substitutions e.g. `/api/users`
-      const raw = argNode.text();
-      const unquoted = raw.slice(1, -1);
-      const routePattern = parseRoutePattern(unquoted);
-
-      const evidence: EvidenceRef = {
-        id: `ev-path-${argNode.range.start}`,
-        kind: "literal-syntax",
-        strength: "direct",
-        source: argSpan,
-        description: `Static template URL literal '${routePattern.rawPath}' in fetch call`
-      };
-
-      return {
-        state: "known",
-        value: routePattern,
-        strength: "direct",
-        evidence: [evidence]
-      };
+    const extraction = extractTemplateRoute(argNode, documentUri, mapper, "fetch", resolver);
+    if (extraction.warning) {
+      warnings.push(extraction.warning);
     }
-
-    // Dynamic template string with interpolation e.g. `/api/users/${id}`
-    const warning: AnalysisWarning = {
-      code: "DYNAMIC_ROUTE",
-      message: `Dynamic template string in fetch URL cannot be statically resolved: ${argNode.text()}`,
-      source: argSpan,
-      analyzerId: "analyzer-js-ts",
-      affectsCompleteness: true
-    };
-    warnings.push(warning);
-
-    const evidence: EvidenceRef = {
-      id: `ev-path-${argNode.range.start}`,
-      kind: "literal-syntax",
-      strength: "inferred",
-      source: argSpan,
-      description: `Dynamic template string URL expression in fetch call`
-    };
-
-    return {
-      state: "dynamic",
-      expression: argNode.text(),
-      reason: "Dynamic template string URL interpolation",
-      evidence: [evidence]
-    };
+    return extraction.routeValue;
   }
 
   // 3. Local constant resolution via resolver for identifier expressions
@@ -211,7 +172,9 @@ function extractPath(
         message: `Resolved constant '${refName}' is not a string URL: ${String(result.value)}`,
         source: argSpan,
         analyzerId: "analyzer-js-ts",
-        affectsCompleteness: true
+        affectsCompleteness: true,
+        scope: "consumer",
+        targetDimension: "route"
       };
       warnings.push(warning);
 
@@ -230,7 +193,9 @@ function extractPath(
     message: `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
     source: argSpan,
     analyzerId: "analyzer-js-ts",
-    affectsCompleteness: true
+    affectsCompleteness: true,
+    scope: "consumer",
+    targetDimension: "route"
   };
   warnings.push(warning);
 
@@ -251,81 +216,6 @@ function extractPath(
 }
 
 /**
- * Extracts properties from an object literal syntax node into FieldShape array.
- */
-function extractObjectFields(
-  objectNode: SyntaxNode,
-  documentUri: DocumentUri,
-  mapper: PositionMapper
-): FieldShape[] {
-  const fields: FieldShape[] = [];
-
-  for (const child of objectNode.namedChildren()) {
-    if (child.kind !== "pair") {
-      continue;
-    }
-
-    const keyNode = child.childForField("key") ?? child.namedChildren()[0];
-    const valNode = child.childForField("value") ?? child.namedChildren()[1];
-
-    if (!keyNode || !valNode) {
-      continue;
-    }
-
-    let fieldName = keyNode.text();
-    if (keyNode.kind === "string") {
-      fieldName = fieldName.slice(1, -1);
-    }
-
-    const fieldSpan = mapper.toSourceSpanFromUtf16(child.range.start, child.range.end, documentUri);
-
-    const fieldEvidence: EvidenceRef = {
-      id: `ev-field-${child.range.start}`,
-      kind: "literal-syntax",
-      strength: "direct",
-      source: fieldSpan,
-      description: `Field '${fieldName}' in request body payload`
-    };
-
-    let fieldType: TypeShape;
-    let nullable: "yes" | "no" | "unknown" = "no";
-
-    if (valNode.kind === "string") {
-      fieldType = { kind: "literal", value: valNode.text().slice(1, -1) };
-    } else if (valNode.kind === "number") {
-      fieldType = { kind: "literal", value: Number(valNode.text()) };
-    } else if (valNode.kind === "true") {
-      fieldType = { kind: "literal", value: true };
-    } else if (valNode.kind === "false") {
-      fieldType = { kind: "literal", value: false };
-    } else if (valNode.kind === "null") {
-      fieldType = { kind: "literal", value: null };
-      nullable = "yes";
-    } else if (valNode.kind === "array") {
-      fieldType = { kind: "array", element: { kind: "unknown", reason: "not-observed" } };
-    } else if (valNode.kind === "object") {
-      fieldType = {
-        kind: "object",
-        properties: extractObjectFields(valNode, documentUri, mapper),
-        additionalProperties: "unknown"
-      };
-    } else {
-      fieldType = { kind: "unknown", reason: "dynamic-expression" };
-    }
-
-    fields.push({
-      name: fieldName,
-      type: fieldType,
-      presence: "required",
-      nullable,
-      evidence: [fieldEvidence]
-    });
-  }
-
-  return fields;
-}
-
-/**
  * Extracts HTTP method and request shape options from the second argument of fetch().
  */
 function extractOptions(
@@ -333,7 +223,10 @@ function extractOptions(
   callSpan: SourceSpan,
   documentUri: DocumentUri,
   mapper: PositionMapper,
-  warnings: AnalysisWarning[]
+  warnings: AnalysisWarning[],
+  resolver?: LocalReferenceResolver,
+  parsed?: ParsedDocument,
+  document?: SourceDocument
 ): {
   method: ObservedValue<HttpMethod>;
   request?: RequestShapeObservation;
@@ -371,7 +264,9 @@ function extractOptions(
       message: `Non-object options argument in fetch call cannot be statically resolved: ${optionsNode.text()}`,
       source: optionsSpan,
       analyzerId: "analyzer-js-ts",
-      affectsCompleteness: true
+      affectsCompleteness: true,
+      scope: "consumer",
+      targetDimension: "method"
     };
     warnings.push(warning);
 
@@ -447,7 +342,9 @@ function extractOptions(
             message: `Unsupported or invalid HTTP method in fetch options: '${rawMethod}'`,
             source: propSpan,
             analyzerId: "analyzer-js-ts",
-            affectsCompleteness: true
+            affectsCompleteness: true,
+            scope: "consumer",
+            targetDimension: "method"
           };
           warnings.push(warning);
 
@@ -471,7 +368,9 @@ function extractOptions(
           message: `Dynamic HTTP method expression in fetch options cannot be statically determined: ${valNode.text()}`,
           source: propSpan,
           analyzerId: "analyzer-js-ts",
-          affectsCompleteness: true
+          affectsCompleteness: true,
+          scope: "consumer",
+          targetDimension: "method"
         };
         warnings.push(warning);
 
@@ -527,13 +426,75 @@ function extractOptions(
               completeness: "complete",
               evidence: [evidence]
             };
+          } else if (jsonArgs.length > 0 && jsonArgs[0].kind === "identifier") {
+            const identName = jsonArgs[0].text();
+            let resolved = resolver?.resolveObjectLiteral(
+              identName,
+              documentUri,
+              jsonArgs[0].range
+            );
+            if ((!resolved || resolved.state !== "resolved") && parsed && document) {
+              try {
+                const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+                const localResolver = createLocalReferenceResolver(localIndex);
+                resolved = localResolver.resolveObjectLiteral(
+                  identName,
+                  documentUri,
+                  jsonArgs[0].range
+                );
+              } catch {
+                // ignore
+              }
+            }
+
+            if (resolved && resolved.state === "resolved") {
+              bodyShape = {
+                shape: {
+                  kind: "object",
+                  properties: [...resolved.value],
+                  additionalProperties: "unknown"
+                },
+                completeness: "complete",
+                evidence: resolved.evidence
+              };
+            } else {
+              const warning: AnalysisWarning = {
+                code: "PARTIAL_SHAPE",
+                message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
+                source: bodySpan,
+                analyzerId: "analyzer-js-ts",
+                affectsCompleteness: true,
+                scope: "consumer",
+                targetDimension: "request-shape"
+              };
+              warnings.push(warning);
+
+              const evidence: EvidenceRef = {
+                id: `ev-body-${valNode.range.start}`,
+                kind: "literal-syntax",
+                strength: "inferred",
+                source: bodySpan,
+                description: "Unresolved payload expression in JSON.stringify body"
+              };
+
+              bodyShape = {
+                shape: {
+                  kind: "unknown",
+                  reason: "unresolved-reference"
+                },
+                completeness: "partial",
+                evidence: [evidence]
+              };
+            }
           } else {
             const warning: AnalysisWarning = {
               code: "PARTIAL_SHAPE",
               message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
               source: bodySpan,
               analyzerId: "analyzer-js-ts",
-              affectsCompleteness: true
+              affectsCompleteness: true,
+              scope: "consumer",
+              targetDimension: "request-shape"
             };
             warnings.push(warning);
 
@@ -560,7 +521,9 @@ function extractOptions(
             message: `Unsupported body serialization call in fetch options: ${valNode.text()}`,
             source: bodySpan,
             analyzerId: "analyzer-js-ts",
-            affectsCompleteness: true
+            affectsCompleteness: true,
+            scope: "consumer",
+            targetDimension: "request-shape"
           };
           warnings.push(warning);
 
@@ -604,7 +567,9 @@ function extractOptions(
           message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
           source: bodySpan,
           analyzerId: "analyzer-js-ts",
-          affectsCompleteness: true
+          affectsCompleteness: true,
+          scope: "consumer",
+          targetDimension: "request-shape"
         };
         warnings.push(warning);
 
@@ -702,7 +667,9 @@ export function extractFetchObservations(
         message: "fetch() call without required URL argument cannot be analyzed",
         source: callSpan,
         analyzerId: "analyzer-js-ts",
-        affectsCompleteness: true
+        affectsCompleteness: true,
+        scope: "consumer",
+        targetDimension: "route"
       });
       return;
     }
@@ -719,7 +686,10 @@ export function extractFetchObservations(
       callSpan,
       document.uri,
       mapper,
-      localWarnings
+      localWarnings,
+      resolver,
+      parsed,
+      document
     );
 
     // Collect local warnings to document warnings

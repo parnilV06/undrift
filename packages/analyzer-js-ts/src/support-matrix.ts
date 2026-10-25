@@ -145,6 +145,42 @@ export const SUPPORT_MATRIX: readonly SupportMatrixEntry[] = [
     ],
     evidenceKind: "direct",
     testStatus: "tested"
+  },
+  {
+    patternId: "nextjs-app-router-route-handler",
+    sourceRole: "provider",
+    supportedLanguage: "typescript",
+    supportedFramework: "nextjs",
+    examples: [
+      "export async function GET(request: Request) { return Response.json(users); }",
+      "export function POST(req: Request) { ... }"
+    ],
+    fieldsReliablyExtracted: ["method", "path"],
+    knownLimitations: [
+      "Dynamic segment constraints or regex require runtime validation",
+      "Route handlers without named HTTP-method exports produce UNSUPPORTED_PATTERN",
+      "Dynamic route segment values without explicit folder brackets not inferred"
+    ],
+    evidenceKind: "direct",
+    testStatus: "tested"
+  },
+  {
+    patternId: "nextjs-pages-router-api-route",
+    sourceRole: "provider",
+    supportedLanguage: "typescript",
+    supportedFramework: "nextjs",
+    examples: [
+      'export default function handler(req: NextApiRequest, res: NextApiResponse) { if (req.method === "GET") ... }',
+      'switch (req.method) { case "POST": ... }'
+    ],
+    fieldsReliablyExtracted: ["method", "path"],
+    knownLimitations: [
+      "Handlers without static req.method switch/if dispatch produce UNSUPPORTED_PATTERN limitation",
+      "Dynamic method dispatch or helper middleware wrappers marked unsupported",
+      "Conditional method dispatches that do not compare string literals cannot be statically proven"
+    ],
+    evidenceKind: "direct",
+    testStatus: "tested"
   }
 ];
 

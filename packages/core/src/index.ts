@@ -33,6 +33,8 @@ export type {
 
 export type {
   WarningCode,
+  WarningScope,
+  WarningTargetDimension,
   AnalysisWarning,
   FindingSeverity,
   FindingState,
