@@ -583,4 +583,173 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(healthMissingFinding).toBeUndefined();
     });
   });
+
+  describe("Workstream E: Next.js API client & base URL resolution reliability", () => {
+    it("resolves template base URL with dynamic authority and port interpolation (Cubit test-auth.js pattern)", async () => {
+      const serverDoc = makeDoc(
+        "file:///server/app.js",
+        `
+        const express = require('express');
+        const app = express();
+        app.post('/api/auth/register', (req, res) => res.status(201).json({ success: true }));
+        app.post('/api/auth/login', (req, res) => res.json({ success: true }));
+        `
+      );
+
+      const testAuthDoc = makeDoc(
+        "file:///server/test-auth.js",
+        `
+        const PORT = 5001;
+        const BASE_URL = \`http://localhost:\${PORT}/api\`;
+
+        async function run() {
+          await fetch(\`\${BASE_URL}/auth/register\`, { method: 'POST' });
+          await fetch(\`\${BASE_URL}/auth/login\`, { method: 'POST' });
+        }
+        `
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const request: AnalysisRequest = {
+        workspaceId: "cubit-auth-test",
+        documents: [serverDoc, testAuthDoc],
+        generation: 1
+      };
+
+      const result = await engine.analyze(request);
+
+      expect(result.complete).toBe(true);
+      const registerConsumer = result.observations.find(
+        (o) => o.role === "consumer" && o.endpoint.path.value?.rawPath === "/api/auth/register"
+      );
+      expect(registerConsumer).toBeDefined();
+      expect(registerConsumer?.endpoint.method.value).toBe("POST");
+
+      // Verify exact match exists
+      const exactRel = result.relationships.find(
+        (r) => r.consumerId === registerConsumer?.id && r.matchKind === "exact"
+      );
+      expect(exactRel).toBeDefined();
+
+      // Zero UND100 missing provider findings
+      const missingFindings = result.findings.filter((f) => f.ruleId === "UND100");
+      expect(missingFindings).toHaveLength(0);
+    });
+
+    it("extracts client fetch helper wrapper calls (request<T>) without failing completeness on wrapper parameter forwarding", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/client.ts",
+        `
+        export async function request(url: string, options?: any) {
+          return fetch(url, options);
+        }
+        `,
+        "typescript"
+      );
+
+      const authDoc = makeDoc(
+        "file:///app/lib/api/auth.ts",
+        `
+        import { request } from './client';
+        export async function login(data: any) {
+          return request('/api/auth/login', { method: 'POST', body: JSON.stringify(data) });
+        }
+        `,
+        "typescript"
+      );
+
+      const serverDoc = makeDoc(
+        "file:///app/api/auth/login/route.ts",
+        `
+        export async function POST(req: Request) {
+          return Response.json({ ok: true });
+        }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const request: AnalysisRequest = {
+        workspaceId: "nextjs-client-wrapper",
+        documents: [clientDoc, authDoc, serverDoc],
+        generation: 1
+      };
+
+      const result = await engine.analyze(request);
+
+      expect(result.complete).toBe(true);
+      const consumer = result.observations.find(
+        (o) => o.role === "consumer" && o.endpoint.path.value?.rawPath === "/api/auth/login"
+      );
+      expect(consumer).toBeDefined();
+      expect(consumer?.endpoint.method.value).toBe("POST");
+
+      // Parameter forwarding warning in client.ts must be advisory
+      const paramWarn = result.warnings.find(
+        (w) => w.code === "DYNAMIC_ROUTE" && w.source.uri.includes("client.ts")
+      );
+      expect(paramWarn).toBeDefined();
+      expect(paramWarn?.affectsCompleteness).toBe(false);
+
+      // Verify exact match with Next.js App Router POST /api/auth/login
+      const exactRel = result.relationships.find(
+        (r) => r.consumerId === consumer?.id && r.matchKind === "exact"
+      );
+      expect(exactRel).toBeDefined();
+      expect(result.findings.filter((f) => f.ruleId === "UND100")).toHaveLength(0);
+    });
+
+    it("resolves locally initialized variable with template string conditional query (classes.ts pattern)", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/classes.ts",
+        `
+        import { request } from './client';
+        export async function getClasses(query?: string) {
+          const url = \`/api/classes\${query ? \`?\${query}\` : ''}\`;
+          return request(url, { method: 'GET' });
+        }
+        `,
+        "typescript"
+      );
+
+      const serverDoc = makeDoc(
+        "file:///app/api/classes/route.ts",
+        `
+        export async function GET() {
+          return Response.json([]);
+        }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const request: AnalysisRequest = {
+        workspaceId: "nextjs-classes",
+        documents: [clientDoc, serverDoc],
+        generation: 1
+      };
+
+      const result = await engine.analyze(request);
+
+      expect(result.complete).toBe(true);
+      const consumer = result.observations.find(
+        (o) => o.role === "consumer" && o.endpoint.path.value?.rawPath === "/api/classes"
+      );
+      expect(consumer).toBeDefined();
+      expect(consumer?.endpoint.method.value).toBe("GET");
+      expect(result.findings.filter((f) => f.ruleId === "UND100")).toHaveLength(0);
+    });
+  });
 });

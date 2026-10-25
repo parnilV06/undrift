@@ -13,6 +13,7 @@ import type {
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
 import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
+import type { LocalVariableDeclaration } from "../project-index/local-declaration-index";
 
 export interface TemplateRouteExtraction {
   readonly routeValue: ObservedValue<RoutePattern>;
@@ -158,6 +159,39 @@ export function extractTemplateRoute(
             }
           } catch {
             baseUrlPrefix = res.value.replace(/\/+$/, "");
+          }
+        } else {
+          // If not statically fully resolved (e.g. dynamic port or host interpolation like `http://localhost:${PORT}/api`),
+          // recover the static pathname prefix from the declaration initializer
+          let initText: string | undefined;
+          const decl = "declaration" in res ? res.declaration : undefined;
+          if (decl && decl.kind === "variable") {
+            initText = (decl as LocalVariableDeclaration).initializerText?.trim();
+          } else {
+            const localCandidates = resolver.index
+              .lookupSymbols(exprText, documentUri)
+              .filter((c) => c.documentUri === documentUri && c.kind === "variable");
+            if (localCandidates.length === 1) {
+              initText = (localCandidates[0] as LocalVariableDeclaration).initializerText?.trim();
+            }
+          }
+
+          if (initText) {
+            // Check for scheme and authority followed by static path e.g. `http://localhost:${PORT}/api`
+            const urlPathMatch = initText.match(
+              /(?:https?:)?\/\/[^/`'"]*\/([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*)/
+            );
+            if (urlPathMatch && urlPathMatch[1]) {
+              baseUrlPrefix = "/" + urlPathMatch[1];
+            } else {
+              // Check for static relative path e.g. '/api' or "/api/v1"
+              const relPathMatch = initText.match(
+                /(?:^|['"`])(\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*)['"`]/
+              );
+              if (relPathMatch && relPathMatch[1]) {
+                baseUrlPrefix = relPathMatch[1];
+              }
+            }
           }
         }
       }

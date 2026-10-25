@@ -52,6 +52,8 @@ const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
  *  - custom client member calls like `axios.get(...)`, `api.fetch(...)`, `client.fetch(...)`
  *  - different function names like `fetcher(...)`
  */
+const FETCH_HELPER_NAMES: ReadonlySet<string> = new Set(["request"]);
+
 function isFetchCall(node: SyntaxNode): boolean {
   if (node.kind !== "call_expression") {
     return false;
@@ -80,6 +82,76 @@ function isFetchCall(node: SyntaxNode): boolean {
     }
   }
 
+  // 3. Client fetch wrappers e.g. request('/api/...', { method: 'POST' })
+  if (fnNode.kind === "identifier" && FETCH_HELPER_NAMES.has(fnNode.text())) {
+    const argsNode = node.childForField("arguments");
+    const args = argsNode ? argsNode.namedChildren() : [];
+    if (args.length > 0) {
+      const firstArg = args[0];
+      // Check if first arg looks like a URL/route string or template
+      if (firstArg.kind === "string" || firstArg.kind === "template_string") {
+        const text = firstArg.text().slice(1, -1);
+        if (text.startsWith("/") || text.startsWith("http://") || text.startsWith("https://")) {
+          return true;
+        }
+      }
+      // Check if second arg has options object
+      if (args.length > 1 && args[1].kind === "object") {
+        return true;
+      }
+      // Check if first arg is an identifier named like a URL or route
+      if (firstArg.kind === "identifier") {
+        const argText = firstArg.text().toLowerCase();
+        if (
+          argText.includes("url") ||
+          argText.includes("path") ||
+          argText.includes("endpoint") ||
+          (args.length > 1 && args[1].kind === "object")
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Checks if a variable identifier is a formal parameter of its enclosing function.
+ */
+function isEnclosingFunctionParameter(node: SyntaxNode, paramName: string): boolean {
+  let curr: SyntaxNode | undefined = node.parent();
+  while (curr) {
+    if (
+      curr.kind === "function_declaration" ||
+      curr.kind === "function_expression" ||
+      curr.kind === "arrow_function" ||
+      curr.kind === "method_definition"
+    ) {
+      const paramsNode =
+        curr.childForField("parameters") ??
+        curr.namedChildren().find((c) => c.kind === "formal_parameters");
+      if (paramsNode) {
+        for (const p of paramsNode.namedChildren()) {
+          let idName: string | undefined;
+          if (p.kind === "identifier") {
+            idName = p.text();
+          } else if (p.kind === "required_parameter" || p.kind === "optional_parameter") {
+            const patternNode = p.childForField("pattern") ?? p.namedChildren()[0];
+            if (patternNode && patternNode.kind === "identifier") {
+              idName = patternNode.text();
+            }
+          }
+          if (idName === paramName) {
+            return true;
+          }
+        }
+      }
+      break;
+    }
+    curr = curr.parent();
+  }
   return false;
 }
 
@@ -202,28 +274,37 @@ function extractPath(
       ) {
         const unquoted = initText.slice(1, -1);
         const queryIndex = unquoted.indexOf("?");
+        const subStart = initText.startsWith("`") ? unquoted.indexOf("${") : -1;
+        let pathPart: string | undefined;
+        if (queryIndex > 0 && (subStart === -1 || queryIndex < subStart)) {
+          pathPart = unquoted.slice(0, queryIndex);
+        } else if (subStart > 0) {
+          const subExpr = unquoted.slice(subStart + 2);
+          if (/(?:query|search|param|qs)/i.test(subExpr) || subExpr.includes("?")) {
+            pathPart = unquoted.slice(0, subStart);
+          }
+        } else if (queryIndex > 0) {
+          pathPart = unquoted.slice(0, queryIndex);
+        }
         // Only resolve mutable variable if the path is separated from dynamic query parameters
-        if (queryIndex > 0) {
-          const pathPart = unquoted.slice(0, queryIndex);
-          if (pathPart.startsWith("/")) {
-            const normalizedPath = pathPart.replace(/\$\{([a-zA-Z0-9_$]+)\}/g, ":$1");
-            if (!normalizedPath.includes("${")) {
-              const routePattern = parseRoutePattern(normalizedPath);
-              const evidence: EvidenceRef = {
-                id: `ev-path-${argNode.range.start}`,
-                kind: "local-declaration",
-                strength: "resolved",
-                source: argSpan,
-                description: `Resolved local variable '${refName}' with path '${routePattern.rawPath}' (query parameters excluded from route)`
-              };
+        if (pathPart && pathPart.startsWith("/")) {
+          const normalizedPath = pathPart.replace(/\$\{([a-zA-Z0-9_$]+)\}/g, ":$1");
+          if (!normalizedPath.includes("${")) {
+            const routePattern = parseRoutePattern(normalizedPath);
+            const evidence: EvidenceRef = {
+              id: `ev-path-${argNode.range.start}`,
+              kind: "local-declaration",
+              strength: "resolved",
+              source: argSpan,
+              description: `Resolved local variable '${refName}' with path '${routePattern.rawPath}' (query parameters excluded from route)`
+            };
 
-              return {
-                state: "known",
-                value: routePattern,
-                strength: "resolved",
-                evidence: [evidence, varDecl.evidence]
-              };
-            }
+            return {
+              state: "known",
+              value: routePattern,
+              strength: "resolved",
+              evidence: [evidence, varDecl.evidence]
+            };
           }
         }
       }
@@ -231,12 +312,17 @@ function extractPath(
   }
 
   // 4. Dynamic expression (variable, call, binary expression, unresolved reference, etc.)
+  const isParamForwarding =
+    argNode.kind === "identifier" && isEnclosingFunctionParameter(argNode, argNode.text());
+
   const warning: AnalysisWarning = {
     code: "DYNAMIC_ROUTE",
-    message: `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
+    message: isParamForwarding
+      ? `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${argNode.text()}`
+      : `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
     source: argSpan,
     analyzerId: "analyzer-js-ts",
-    affectsCompleteness: true,
+    affectsCompleteness: !isParamForwarding,
     scope: "consumer",
     targetDimension: "route"
   };
@@ -302,12 +388,18 @@ function extractOptions(
 
   // If options is not an object literal (e.g. identifier or call expression)
   if (optionsNode.kind !== "object") {
+    const isParamForwarding =
+      optionsNode.kind === "identifier" &&
+      isEnclosingFunctionParameter(optionsNode, optionsNode.text());
+
     const warning: AnalysisWarning = {
       code: "UNSUPPORTED_PATTERN",
-      message: `Non-object options argument in fetch call cannot be statically resolved: ${optionsNode.text()}`,
+      message: isParamForwarding
+        ? `Dynamic options parameter forwarded in helper function; method and payload are analyzed at wrapper callsites: ${optionsNode.text()}`
+        : `Non-object options argument in fetch call cannot be statically resolved: ${optionsNode.text()}`,
       source: optionsSpan,
       analyzerId: "analyzer-js-ts",
-      affectsCompleteness: true,
+      affectsCompleteness: !isParamForwarding,
       scope: "consumer",
       targetDimension: "method"
     };

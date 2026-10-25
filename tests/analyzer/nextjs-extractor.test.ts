@@ -50,6 +50,12 @@ describe("Next.js Provider Route Extraction", () => {
       expect(info?.routePattern.rawPath).toBe("/api/login");
     });
 
+    it("strips Next.js parallel route slots like @modal from App Router URLs", () => {
+      const info = deriveNextJsRouteInfo("app/api/@slot/dashboard/route.ts");
+      expect(info).toBeDefined();
+      expect(info?.routePattern.rawPath).toBe("/api/dashboard");
+    });
+
     it("handles catch-all route segments [...slug]", () => {
       const info = deriveNextJsRouteInfo("app/api/files/[...slug]/route.ts");
       expect(info).toBeDefined();
@@ -120,6 +126,42 @@ describe("Next.js Provider Route Extraction", () => {
       const methods = result.observations.map((o) => o.endpoint.method.value).sort();
       expect(methods).toEqual(["DELETE", "PUT"]);
       expect(result.observations[0].endpoint.path.value?.rawPath).toBe("/api/items/:id");
+    });
+
+    it("extracts aliased App Router HTTP method exports (NextAuth pattern)", async () => {
+      const code = `
+        import NextAuth from "next-auth";
+        const handler = NextAuth({ providers: [] });
+        export { handler as GET, handler as POST };
+      `;
+      const doc = makeDoc("app/api/auth/[...nextauth]/route.ts", code);
+      const parsed = await parser.parse({ document: doc });
+      const result = extractNextJsObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(2);
+      const methods = result.observations.map((o) => o.endpoint.method.value).sort();
+      expect(methods).toEqual(["GET", "POST"]);
+      expect(result.observations[0].endpoint.path.value?.rawPath).toBe("/api/auth/*");
+    });
+
+    it("extracts object destructuring App Router HTTP method exports", async () => {
+      const code = `
+        const handlers = {
+          GET: async () => Response.json({ ok: true }),
+          POST: async () => Response.json({ created: true })
+        };
+        export const { GET, POST } = handlers;
+      `;
+      const doc = makeDoc("app/api/feed/route.ts", code);
+      const parsed = await parser.parse({ document: doc });
+      const result = extractNextJsObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(2);
+      const methods = result.observations.map((o) => o.endpoint.method.value).sort();
+      expect(methods).toEqual(["GET", "POST"]);
+      expect(result.observations[0].endpoint.path.value?.rawPath).toBe("/api/feed");
     });
 
     it("reports UNSUPPORTED_PATTERN warning when route.ts has no HTTP exports", async () => {

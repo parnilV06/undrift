@@ -402,28 +402,37 @@ function extractPath(
       ) {
         const unquoted = initText.slice(1, -1);
         const queryIndex = unquoted.indexOf("?");
+        const subStart = initText.startsWith("`") ? unquoted.indexOf("${") : -1;
+        let pathPart: string | undefined;
+        if (queryIndex > 0 && (subStart === -1 || queryIndex < subStart)) {
+          pathPart = unquoted.slice(0, queryIndex);
+        } else if (subStart > 0) {
+          const subExpr = unquoted.slice(subStart + 2);
+          if (/(?:query|search|param|qs)/i.test(subExpr) || subExpr.includes("?")) {
+            pathPart = unquoted.slice(0, subStart);
+          }
+        } else if (queryIndex > 0) {
+          pathPart = unquoted.slice(0, queryIndex);
+        }
         // Only resolve mutable variable if the path is separated from dynamic query parameters
-        if (queryIndex > 0) {
-          const pathPart = unquoted.slice(0, queryIndex);
-          if (pathPart.startsWith("/")) {
-            const normalizedPath = pathPart.replace(/\$\{([a-zA-Z0-9_$]+)\}/g, ":$1");
-            if (!normalizedPath.includes("${")) {
-              const routePattern = parseRoutePattern(normalizedPath);
-              const evidence: EvidenceRef = {
-                id: `ev-path-${argNode.range.start}`,
-                kind: "local-declaration",
-                strength: "resolved",
-                source: argSpan,
-                description: `Resolved local variable '${refName}' with path '${routePattern.rawPath}' (query parameters excluded from route)`
-              };
+        if (pathPart && pathPart.startsWith("/")) {
+          const normalizedPath = pathPart.replace(/\$\{([a-zA-Z0-9_$]+)\}/g, ":$1");
+          if (!normalizedPath.includes("${")) {
+            const routePattern = parseRoutePattern(normalizedPath);
+            const evidence: EvidenceRef = {
+              id: `ev-path-${argNode.range.start}`,
+              kind: "local-declaration",
+              strength: "resolved",
+              source: argSpan,
+              description: `Resolved local variable '${refName}' with path '${routePattern.rawPath}' (query parameters excluded from route)`
+            };
 
-              return {
-                state: "known",
-                value: routePattern,
-                strength: "resolved",
-                evidence: [evidence, varDecl.evidence]
-              };
-            }
+            return {
+              state: "known",
+              value: routePattern,
+              strength: "resolved",
+              evidence: [evidence, varDecl.evidence]
+            };
           }
         }
       }
