@@ -27,6 +27,10 @@ export const DEFAULT_EXCLUDE_GLOBS = [
   "**/.next/**",
   "**/.nuxt/**",
   "**/.cache/**",
+  "**/.prisma/**",
+  "**/prisma/generated/**",
+  "**/prisma/client/**",
+  "**/.generated/**",
   "**/*.min.js",
   "**/*.min.cjs",
   "**/*.min.mjs"

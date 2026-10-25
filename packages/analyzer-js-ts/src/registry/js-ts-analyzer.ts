@@ -10,9 +10,11 @@ import type {
 import { extractFetchObservations } from "../frontend/fetch-extractor";
 import { extractAxiosObservations } from "../frontend/axios-extractor";
 import { extractExpressObservations } from "../backend/express-extractor";
+import { extractNextJsObservations } from "../backend/nextjs-extractor";
 import {
   LocalDeclarationIndex,
-  isLocalDeclarationIndex
+  isLocalDeclarationIndex,
+  createLocalDeclarationIndex
 } from "../project-index/local-declaration-index";
 import {
   LocalReferenceResolver,
@@ -78,16 +80,23 @@ export class JsTsAnalyzer implements LanguageAnalyzerPort {
     const fetchResult = extractFetchObservations(input.document, input.parsed, signal, resolver);
     const axiosResult = extractAxiosObservations(input.document, input.parsed, signal, resolver);
 
-    // Run backend extractors (Express extractor remains untouched)
+    // Run backend extractors
     const expressResult = extractExpressObservations(input.document, input.parsed, signal);
+    const nextjsResult = extractNextJsObservations(input.document, input.parsed, signal);
 
     return {
       observations: [
         ...fetchResult.observations,
         ...axiosResult.observations,
-        ...expressResult.observations
+        ...expressResult.observations,
+        ...nextjsResult.observations
       ],
-      warnings: [...fetchResult.warnings, ...axiosResult.warnings, ...expressResult.warnings]
+      warnings: [
+        ...fetchResult.warnings,
+        ...axiosResult.warnings,
+        ...expressResult.warnings,
+        ...nextjsResult.warnings
+      ]
     };
   }
 }

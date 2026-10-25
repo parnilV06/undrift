@@ -21,6 +21,13 @@ export {
   type ExpressExtractionResult
 } from "./backend/express-extractor";
 export {
+  NextJsExtractor,
+  extractNextJsObservations,
+  deriveNextJsRouteInfo,
+  type NextJsExtractionResult,
+  type NextJsRouteInfo
+} from "./backend/nextjs-extractor";
+export {
   LocalDeclarationIndex,
   isLocalDeclarationIndex,
   indexLocalDeclarations,

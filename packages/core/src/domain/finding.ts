@@ -30,6 +30,18 @@ export type WarningCode =
   | "ANALYZER_FAILURE";
 
 /**
+ * Scope classification for an analysis warning indicating whether it affects
+ * consumer (frontend), provider (backend), a specific contract dimension, or the entire workspace.
+ */
+export type WarningScope = "consumer" | "provider" | "workspace" | "unknown";
+
+/**
+ * Specific API contract dimension affected by a warning.
+ */
+export type WarningTargetDimension =
+  "route" | "method" | "request-shape" | "response-shape" | "all";
+
+/**
  * Analysis warning indicating a limitation or failure during extraction.
  * Analysis warnings are NOT automatically drift findings and must not all
  * become error-level diagnostics.
@@ -40,6 +52,8 @@ export interface AnalysisWarning {
   source?: SourceSpan;
   analyzerId?: string;
   affectsCompleteness: boolean;
+  scope?: WarningScope;
+  targetDimension?: WarningTargetDimension;
 }
 
 /**

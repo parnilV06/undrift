@@ -52,17 +52,19 @@ describe("Support Matrix (Chunk 2.3)", () => {
   });
 
   describe("2. Planned vs. Implemented Capability Separation", () => {
-    it("reports exactly 6 implemented/tested patterns at Chunk 2.6", () => {
-      // Chunk 2.6 implements and tests standard fetch, axios, and express patterns.
+    it("reports exactly 8 implemented/tested patterns at Phase 6 Chunk 6.1", () => {
+      // Phase 6 Chunk 6.1 implements and tests fetch, axios, express, and nextjs patterns.
       const implemented = getImplementedPatterns();
-      expect(implemented).toHaveLength(6);
+      expect(implemented).toHaveLength(8);
       expect(implemented.map((p) => p.patternId)).toEqual([
         "fetch-standard-call",
         "fetch-standard-call-ts",
         "axios-method-call",
         "axios-method-call-ts",
         "express-route-declaration",
-        "express-route-declaration-ts"
+        "express-route-declaration-ts",
+        "nextjs-app-router-route-handler",
+        "nextjs-pages-router-api-route"
       ]);
     });
 
@@ -71,10 +73,11 @@ describe("Support Matrix (Chunk 2.3)", () => {
       expect(planned).toHaveLength(0);
     });
 
-    it("confirms all 6 documented framework patterns are tested", () => {
+    it("confirms all documented framework patterns are tested", () => {
       const fetchPatterns = getPatternsByFramework("fetch");
       const axiosPatterns = getPatternsByFramework("axios");
       const expressPatterns = getPatternsByFramework("express");
+      const nextjsPatterns = getPatternsByFramework("nextjs");
 
       expect(fetchPatterns.length).toBe(2);
       for (const pattern of fetchPatterns) {
@@ -88,6 +91,11 @@ describe("Support Matrix (Chunk 2.3)", () => {
 
       expect(expressPatterns.length).toBe(2);
       for (const pattern of expressPatterns) {
+        expect(pattern.testStatus).toBe("tested");
+      }
+
+      expect(nextjsPatterns.length).toBe(2);
+      for (const pattern of nextjsPatterns) {
         expect(pattern.testStatus).toBe("tested");
       }
     });

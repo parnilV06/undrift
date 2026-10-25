@@ -213,16 +213,43 @@ function createLifecycleEventId(
  * Assembles an AnalysisCoverageSummary from an AnalysisResult without overstating completeness.
  */
 export function extractCoverageSummary(result: AnalysisResult): AnalysisCoverageSummary {
-  const hasCriticalWarning =
-    Array.isArray(result.warnings) && result.warnings.some((w) => w.affectsCompleteness);
+  const warnings = Array.isArray(result.warnings) ? [...result.warnings] : [];
+  const hasCriticalWarning = warnings.some((w) => w.affectsCompleteness);
   const complete = Boolean(result.complete && !hasCriticalWarning);
+
+  const backendHasCritical = warnings.some(
+    (w) =>
+      w.affectsCompleteness &&
+      (w.scope === "provider" ||
+        w.scope === "workspace" ||
+        (w.scope === undefined &&
+          (w.analyzerId?.includes("backend") ||
+            w.analyzerId?.includes("express") ||
+            w.message.toLowerCase().includes("backend") ||
+            w.message.toLowerCase().includes("provider"))))
+  );
+
+  const consumerHasCritical = warnings.some(
+    (w) =>
+      w.affectsCompleteness &&
+      (w.scope === "consumer" ||
+        w.scope === "workspace" ||
+        (w.scope === undefined &&
+          (w.analyzerId?.includes("frontend") ||
+            w.analyzerId?.includes("fetch") ||
+            w.analyzerId?.includes("axios") ||
+            w.message.toLowerCase().includes("frontend") ||
+            w.message.toLowerCase().includes("consumer"))))
+  );
 
   return {
     complete,
+    backendComplete: Boolean(result.complete && !backendHasCritical),
+    consumerComplete: Boolean(result.complete && !consumerHasCritical),
     filesScanned: result.statistics?.filesConsidered ?? 0,
     filesWithWarnings: result.statistics?.filesWithWarnings ?? 0,
     unresolvedPatterns: result.statistics?.unresolvedPatterns ?? 0,
-    warnings: Array.isArray(result.warnings) ? [...result.warnings] : []
+    warnings
   };
 }
 
@@ -466,13 +493,7 @@ export function reconcileState(
   );
 
   // 8. Assemble next AnalysisSnapshot
-  const coverage: AnalysisCoverageSummary = {
-    complete: true,
-    filesScanned: currentResult.statistics?.filesConsidered ?? 0,
-    filesWithWarnings: currentResult.statistics?.filesWithWarnings ?? 0,
-    unresolvedPatterns: currentResult.statistics?.unresolvedPatterns ?? 0,
-    warnings: Array.isArray(currentResult.warnings) ? [...currentResult.warnings] : []
-  };
+  const coverage: AnalysisCoverageSummary = extractCoverageSummary(currentResult);
 
   const newSnapshot: AnalysisSnapshot = {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,

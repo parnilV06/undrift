@@ -6,6 +6,7 @@
 import type {
   DocumentUri,
   EvidenceRef,
+  FieldShape,
   ObservedValue,
   PrimitiveTypeName,
   SemanticResolutionRequest,
@@ -199,6 +200,93 @@ export class LocalReferenceResolver implements SemanticResolverPort {
     return {
       state: "unsupported",
       reason: `Reference '${referenceName}' refers to an export declaration, not a local constant value`,
+      declaration: decl,
+      evidence: [resolutionEvidence, decl.evidence]
+    };
+  }
+
+  /**
+   * Resolves a local reference to an object literal declaration and its extracted fields.
+   */
+  resolveObjectLiteral(
+    referenceName: string,
+    documentUri: DocumentUri,
+    fromRange?: TextRange
+  ): LocalReferenceResult<readonly FieldShape[]> {
+    const candidates = this.index.lookupSymbols(referenceName, documentUri);
+    const localCandidates = candidates.filter((c) => c.documentUri === documentUri);
+
+    if (localCandidates.length === 0) {
+      if (candidates.length > 0) {
+        return {
+          state: "unsupported",
+          reason: `Cross-file symbol resolution for '${referenceName}' is deferred (POC GATE)`,
+          evidence: []
+        };
+      }
+      return {
+        state: "unresolved",
+        reason: `Reference '${referenceName}' does not match any declaration in '${documentUri}'`,
+        evidence: []
+      };
+    }
+
+    if (localCandidates.length > 1) {
+      return {
+        state: "ambiguous",
+        reason: `Reference '${referenceName}' has ${localCandidates.length} conflicting declarations in '${documentUri}'`,
+        candidates: localCandidates,
+        evidence: []
+      };
+    }
+
+    const decl = localCandidates[0];
+    let refSpan: SourceSpan | undefined;
+    const doc = this.index.getDocument(documentUri);
+    if (doc && fromRange) {
+      const mapper = new PositionMapper(doc.text, doc.uri);
+      refSpan = mapper.toSourceSpanFromUtf16(fromRange.start, fromRange.end, doc.uri);
+    }
+
+    const resolutionEvidence: EvidenceRef = {
+      id: `ev-resolve-${referenceName}-${fromRange ? fromRange.start : decl.source.range.start}`,
+      kind: "local-declaration",
+      strength: "resolved",
+      source: refSpan ?? decl.source,
+      description: `Resolved reference '${referenceName}' to local declaration at ${decl.source.range.start}:${decl.source.range.end}`
+    };
+
+    if (decl.kind === "variable") {
+      const varDecl = decl as LocalVariableDeclaration;
+      if (varDecl.declarationType !== "const") {
+        return {
+          state: "unresolved",
+          reason: `Reference '${referenceName}' is declared with mutable '${varDecl.declarationType}', which cannot be statically guaranteed constant`,
+          declaration: decl,
+          evidence: [resolutionEvidence, decl.evidence]
+        };
+      }
+
+      if (varDecl.objectFields !== undefined) {
+        return {
+          state: "resolved",
+          value: varDecl.objectFields,
+          declaration: decl,
+          evidence: [resolutionEvidence, decl.evidence]
+        };
+      }
+
+      return {
+        state: "unresolved",
+        reason: `Constant '${referenceName}' was not initialized with a static object literal`,
+        declaration: decl,
+        evidence: [resolutionEvidence, decl.evidence]
+      };
+    }
+
+    return {
+      state: "unsupported",
+      reason: `Reference '${referenceName}' refers to a ${decl.kind} declaration, not a local constant object`,
       declaration: decl,
       evidence: [resolutionEvidence, decl.evidence]
     };

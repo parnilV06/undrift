@@ -324,7 +324,7 @@ describe("Frontend Fetch Call Extractor (Chunk 2.4)", () => {
     });
 
     it("marks dynamic template string with interpolation as dynamic with warning", async () => {
-      const code = "fetch(`/api/users/${userId}/details`);";
+      const code = "fetch(`/api/users/${getUserId()}/details`);";
       const output = await analyzeCode(code);
 
       expect(output.observations).toHaveLength(1);

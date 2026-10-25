@@ -508,12 +508,12 @@ export function evaluateProtocolRules(
 
   const isBackendComplete = resolveScopeCompleteness(
     context?.backendScanComplete,
-    context?.coverage?.complete
+    context?.coverage?.backendComplete ?? context?.coverage?.complete
   );
 
   const isConsumerComplete = resolveScopeCompleteness(
     context?.consumerScanComplete,
-    context?.coverage?.complete
+    context?.coverage?.consumerComplete ?? context?.coverage?.complete
   );
 
   // Track explained consumers and matched providers to guarantee LLD suppression rules

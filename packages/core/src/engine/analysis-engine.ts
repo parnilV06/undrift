@@ -23,6 +23,32 @@ import type {
 import type { ParsedDocument, ParserPort } from "../ports/parser";
 import { RuleEngine } from "../rules/rule-engine";
 
+function inferDocumentScope(uri: DocumentUri): "consumer" | "provider" | "unknown" {
+  const lower = uri.toLowerCase().replace(/\\/g, "/");
+  if (
+    lower.includes("/backend/") ||
+    lower.includes("/server/") ||
+    lower.includes("/controllers/") ||
+    lower.includes("/routes/") ||
+    lower.includes("/pages/api/") ||
+    lower.includes("/app/api/") ||
+    lower.includes("express")
+  ) {
+    return "provider";
+  }
+  if (
+    lower.includes("/frontend/") ||
+    lower.includes("/client/") ||
+    lower.includes("/src/components/") ||
+    lower.includes("/components/") ||
+    lower.includes("/views/") ||
+    lower.includes("/hooks/")
+  ) {
+    return "consumer";
+  }
+  return "unknown";
+}
+
 /**
  * Standard in-memory AnalysisEngine implementing the core analysis pipeline.
  * Coordinates syntax parsing, language analyzers, contract matching, and drift rules
@@ -110,17 +136,25 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
         parsedDoc = await parser.parse({ document: doc }, signal);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
+        const docScope = inferDocumentScope(doc.uri);
         allWarnings.push({
           code: "PARSE_ERROR",
           message: `Failed to parse document ${doc.uri}: ${message}`,
           source: this.createFallbackSpan(doc.uri),
+          scope: docScope === "unknown" ? "workspace" : docScope,
           affectsCompleteness: true
         });
         filesWithWarnings.add(doc.uri);
         hasHardParseError = true;
         docParseFailed = true;
-        backendScopeHasFailures = true;
-        consumerScopeHasFailures = true;
+        if (docScope === "provider") {
+          backendScopeHasFailures = true;
+        } else if (docScope === "consumer") {
+          consumerScopeHasFailures = true;
+        } else {
+          backendScopeHasFailures = true;
+          consumerScopeHasFailures = true;
+        }
       }
 
       if (parsedDoc) {
@@ -128,18 +162,26 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
           // Process parser diagnostics and syntax issues
           if (Array.isArray(parsedDoc.issues)) {
             for (const issue of parsedDoc.issues) {
+              const docScope = inferDocumentScope(doc.uri);
               allWarnings.push({
                 code: "PARSE_ERROR",
                 message: issue.message,
                 source: issue.source ?? this.createFallbackSpan(doc.uri),
+                scope: docScope === "unknown" ? "workspace" : docScope,
                 affectsCompleteness: issue.isError
               });
               filesWithWarnings.add(doc.uri);
               if (issue.isError) {
                 hasHardParseError = true;
                 docParseFailed = true;
-                backendScopeHasFailures = true;
-                consumerScopeHasFailures = true;
+                if (docScope === "provider") {
+                  backendScopeHasFailures = true;
+                } else if (docScope === "consumer") {
+                  consumerScopeHasFailures = true;
+                } else {
+                  backendScopeHasFailures = true;
+                  consumerScopeHasFailures = true;
+                }
               }
             }
           }
@@ -176,24 +218,34 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
                       allWarnings.push(w);
                       filesWithWarnings.add(doc.uri);
                       if (w.affectsCompleteness) {
-                        if (
-                          analyzer.id.includes("backend") ||
-                          analyzer.id.includes("express") ||
-                          w.message.toLowerCase().includes("backend") ||
-                          w.message.toLowerCase().includes("provider")
-                        ) {
+                        if (w.scope === "provider") {
                           backendScopeHasFailures = true;
-                        } else if (
-                          analyzer.id.includes("frontend") ||
-                          analyzer.id.includes("fetch") ||
-                          analyzer.id.includes("axios") ||
-                          w.message.toLowerCase().includes("frontend") ||
-                          w.message.toLowerCase().includes("consumer")
-                        ) {
+                        } else if (w.scope === "consumer") {
+                          consumerScopeHasFailures = true;
+                        } else if (w.scope === "workspace" || w.scope === "unknown") {
+                          backendScopeHasFailures = true;
                           consumerScopeHasFailures = true;
                         } else {
-                          backendScopeHasFailures = true;
-                          consumerScopeHasFailures = true;
+                          // Fallback scope inference
+                          if (
+                            analyzer.id.includes("backend") ||
+                            analyzer.id.includes("express") ||
+                            w.message.toLowerCase().includes("backend") ||
+                            w.message.toLowerCase().includes("provider")
+                          ) {
+                            backendScopeHasFailures = true;
+                          } else if (
+                            analyzer.id.includes("frontend") ||
+                            analyzer.id.includes("fetch") ||
+                            analyzer.id.includes("axios") ||
+                            w.message.toLowerCase().includes("frontend") ||
+                            w.message.toLowerCase().includes("consumer")
+                          ) {
+                            consumerScopeHasFailures = true;
+                          } else {
+                            backendScopeHasFailures = true;
+                            consumerScopeHasFailures = true;
+                          }
                         }
                       }
                     }
@@ -201,19 +253,26 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
                 }
               } catch (err: unknown) {
                 const message = err instanceof Error ? err.message : String(err);
+                const docScope = inferDocumentScope(doc.uri);
                 allWarnings.push({
                   code: "ANALYZER_FAILURE",
                   message: `Analyzer '${analyzer.id}' failed on document ${doc.uri}: ${message}`,
                   source: this.createFallbackSpan(doc.uri),
                   analyzerId: analyzer.id,
+                  scope: docScope === "unknown" ? "workspace" : docScope,
                   affectsCompleteness: true
                 });
                 filesWithWarnings.add(doc.uri);
                 hasAnalyzerFailure = true;
 
-                if (analyzer.id.includes("backend") || analyzer.id.includes("express")) {
+                if (
+                  docScope === "provider" ||
+                  analyzer.id.includes("backend") ||
+                  analyzer.id.includes("express")
+                ) {
                   backendScopeHasFailures = true;
                 } else if (
+                  docScope === "consumer" ||
                   analyzer.id.includes("frontend") ||
                   analyzer.id.includes("fetch") ||
                   analyzer.id.includes("axios")
@@ -246,6 +305,7 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       allWarnings.push({
         code: "INCOMPLETE_SCOPE",
         message: "Analysis was cancelled before completion.",
+        scope: "workspace",
         affectsCompleteness: true
       });
     }
@@ -274,6 +334,7 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       allWarnings.push({
         code: "INCOMPLETE_SCOPE",
         message: "Analysis was cancelled before completion.",
+        scope: "workspace",
         affectsCompleteness: true
       });
     }
@@ -291,35 +352,37 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
       mode !== "scoped";
 
     const backendScanComplete =
-      isComplete ||
-      (!isCancelled &&
-        mode !== "scoped" &&
-        !backendScopeHasFailures &&
-        !hasIncompleteScopeWarning &&
-        !allWarnings.some(
-          (w) =>
-            w.affectsCompleteness &&
-            (w.analyzerId?.includes("backend") ||
-              w.analyzerId?.includes("express") ||
-              w.message.toLowerCase().includes("backend") ||
-              w.message.toLowerCase().includes("provider"))
-        ));
+      !isCancelled &&
+      mode !== "scoped" &&
+      !backendScopeHasFailures &&
+      !allWarnings.some(
+        (w) =>
+          w.affectsCompleteness &&
+          (w.scope === "provider" ||
+            w.scope === "workspace" ||
+            (w.scope === undefined &&
+              (w.analyzerId?.includes("backend") ||
+                w.analyzerId?.includes("express") ||
+                w.message.toLowerCase().includes("backend") ||
+                w.message.toLowerCase().includes("provider"))))
+      );
 
     const consumerScanComplete =
-      isComplete ||
-      (!isCancelled &&
-        mode !== "scoped" &&
-        !consumerScopeHasFailures &&
-        !hasIncompleteScopeWarning &&
-        !allWarnings.some(
-          (w) =>
-            w.affectsCompleteness &&
-            (w.analyzerId?.includes("frontend") ||
-              w.analyzerId?.includes("fetch") ||
-              w.analyzerId?.includes("axios") ||
-              w.message.toLowerCase().includes("frontend") ||
-              w.message.toLowerCase().includes("consumer"))
-        ));
+      !isCancelled &&
+      mode !== "scoped" &&
+      !consumerScopeHasFailures &&
+      !allWarnings.some(
+        (w) =>
+          w.affectsCompleteness &&
+          (w.scope === "consumer" ||
+            w.scope === "workspace" ||
+            (w.scope === undefined &&
+              (w.analyzerId?.includes("frontend") ||
+                w.analyzerId?.includes("fetch") ||
+                w.analyzerId?.includes("axios") ||
+                w.message.toLowerCase().includes("frontend") ||
+                w.message.toLowerCase().includes("consumer"))))
+      );
 
     const unresolvedPatternsCount = this.calculateUnresolvedPatterns(
       normalizedObservations,
@@ -328,6 +391,8 @@ export class AnalysisEngine implements AnalysisEnginePort, AnalysisPipeline {
 
     const coverage: AnalysisCoverageSummary = {
       complete: isComplete,
+      backendComplete: backendScanComplete,
+      consumerComplete: consumerScanComplete,
       filesScanned: documents.length,
       filesWithWarnings: filesWithWarnings.size,
       unresolvedPatterns: unresolvedPatternsCount,
