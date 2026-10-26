@@ -34,6 +34,18 @@ export interface NextJsRouteInfo {
 }
 
 /**
+ * Safely decodes a single URI-encoded filesystem path segment.
+ * If decoding fails (e.g. malformed percent sequence), returns the raw segment unchanged.
+ */
+function safeDecodeSegment(rawSegment: string): string {
+  try {
+    return decodeURIComponent(rawSegment);
+  } catch {
+    return rawSegment;
+  }
+}
+
+/**
  * Normalizes and analyzes a document URI to determine if it is a Next.js App Router
  * or Pages Router API route file, deriving its structural RoutePattern from the file hierarchy.
  */
@@ -49,30 +61,35 @@ export function deriveNextJsRouteInfo(documentUri: DocumentUri): NextJsRouteInfo
 
     if (subPath) {
       const rawParts = subPath.split("/").filter((p) => p.length > 0);
-      for (const part of rawParts) {
-        // Strip route groups e.g. (auth), (group)
+      for (const rawPart of rawParts) {
+        const part = safeDecodeSegment(rawPart);
+
+        // Strip route groups e.g. (auth), (group), %28auth%29
         if (part.startsWith("(") && part.endsWith(")")) {
           continue;
         }
 
-        // Strip parallel routes e.g. @slot, @modal
+        // Strip parallel routes e.g. @slot, @modal, %40modal
         if (part.startsWith("@")) {
           continue;
         }
 
-        // Catch-all segments e.g. [...slug] or [[...slug]]
-        if (
-          (part.startsWith("[...") && part.endsWith("]")) ||
-          (part.startsWith("[[...") && part.endsWith("]]"))
-        ) {
+        // Optional catch-all segments e.g. [[...slug]]
+        if (part.startsWith("[[...") && part.endsWith("]]")) {
+          segments.push({ kind: "wildcard", optional: true });
+          continue;
+        }
+
+        // Required catch-all segments e.g. [...slug]
+        if (part.startsWith("[...") && part.endsWith("]")) {
           segments.push({ kind: "wildcard" });
           continue;
         }
 
         // Dynamic parameter segments e.g. [id] or [userId]
         if (part.startsWith("[") && part.endsWith("]")) {
-          const paramName = part.slice(1, -1);
-          segments.push({ kind: "parameter", name: paramName });
+          const paramName = part.slice(1, -1).trim();
+          segments.push({ kind: "parameter", name: paramName || undefined });
           continue;
         }
 
@@ -86,9 +103,11 @@ export function deriveNextJsRouteInfo(documentUri: DocumentUri): NextJsRouteInfo
       segments
         .map((s) =>
           s.kind === "parameter"
-            ? `:${s.name}`
+            ? `:${s.name ?? "_"}`
             : s.kind === "wildcard"
-              ? "*"
+              ? s.optional
+                ? "*?"
+                : "*"
               : s.kind === "static"
                 ? s.value
                 : s.sourceText
@@ -120,20 +139,25 @@ export function deriveNextJsRouteInfo(documentUri: DocumentUri): NextJsRouteInfo
 
     if (subPath.length > 0) {
       const rawParts = subPath.split("/").filter((p) => p.length > 0);
-      for (const part of rawParts) {
-        // Catch-all segments e.g. [...slug]
-        if (
-          (part.startsWith("[...") && part.endsWith("]")) ||
-          (part.startsWith("[[...") && part.endsWith("]]"))
-        ) {
+      for (const rawPart of rawParts) {
+        const part = safeDecodeSegment(rawPart);
+
+        // Optional catch-all segments e.g. [[...slug]]
+        if (part.startsWith("[[...") && part.endsWith("]]")) {
+          segments.push({ kind: "wildcard", optional: true });
+          continue;
+        }
+
+        // Required catch-all segments e.g. [...slug]
+        if (part.startsWith("[...") && part.endsWith("]")) {
           segments.push({ kind: "wildcard" });
           continue;
         }
 
         // Dynamic parameter segments e.g. [id]
         if (part.startsWith("[") && part.endsWith("]")) {
-          const paramName = part.slice(1, -1);
-          segments.push({ kind: "parameter", name: paramName });
+          const paramName = part.slice(1, -1).trim();
+          segments.push({ kind: "parameter", name: paramName || undefined });
           continue;
         }
 
@@ -146,9 +170,11 @@ export function deriveNextJsRouteInfo(documentUri: DocumentUri): NextJsRouteInfo
       segments
         .map((s) =>
           s.kind === "parameter"
-            ? `:${s.name}`
+            ? `:${s.name ?? "_"}`
             : s.kind === "wildcard"
-              ? "*"
+              ? s.optional
+                ? "*?"
+                : "*"
               : s.kind === "static"
                 ? s.value
                 : s.sourceText

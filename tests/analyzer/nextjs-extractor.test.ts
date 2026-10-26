@@ -246,4 +246,96 @@ describe("Next.js Provider Route Extraction", () => {
       expect(result.warnings[0].affectsCompleteness).toBe(true);
     });
   });
+
+  describe("4. Phase 6.3: Safe Percent-Encoding & Dynamic Route Normalization", () => {
+    it("normalizes App Router dynamic parameters from percent-encoded URIs (%5Bid%5D)", () => {
+      const infoClasses = deriveNextJsRouteInfo(
+        "file:///z:/OLD%20PC%20Files/parnil%20-%20My%20Files/SlotTrack/app/api/classes/%5Bid%5D/route.ts"
+      );
+      expect(infoClasses).toBeDefined();
+      expect(infoClasses?.routePattern.rawPath).toBe("/api/classes/:id");
+      expect(infoClasses?.routePattern.segments).toEqual([
+        { kind: "static", value: "api" },
+        { kind: "static", value: "classes" },
+        { kind: "parameter", name: "id" }
+      ]);
+
+      const infoBookings = deriveNextJsRouteInfo(
+        "file:///project/app/api/bookings/%5Bid%5D/route.ts"
+      );
+      expect(infoBookings?.routePattern.rawPath).toBe("/api/bookings/:id");
+    });
+
+    it("normalizes App Router NextAuth catch-all from percent-encoded URI (%5B...nextauth%5D)", () => {
+      const info = deriveNextJsRouteInfo("file:///project/app/api/auth/%5B...nextauth%5D/route.ts");
+      expect(info).toBeDefined();
+      expect(info?.routePattern.rawPath).toBe("/api/auth/*");
+      expect(info?.routePattern.segments).toEqual([
+        { kind: "static", value: "api" },
+        { kind: "static", value: "auth" },
+        { kind: "wildcard" }
+      ]);
+    });
+
+    it("normalizes App Router required catch-all [...slug] vs optional catch-all [[...slug]]", () => {
+      const reqInfo = deriveNextJsRouteInfo("file:///app/api/posts/%5B...slug%5D/route.ts");
+      expect(reqInfo?.routePattern.rawPath).toBe("/api/posts/*");
+      expect(reqInfo?.routePattern.segments[2]).toEqual({ kind: "wildcard" });
+
+      const optInfo = deriveNextJsRouteInfo("file:///app/api/docs/%5B%5B...slug%5D%5D/route.ts");
+      expect(optInfo?.routePattern.rawPath).toBe("/api/docs/*?");
+      expect(optInfo?.routePattern.segments[2]).toEqual({ kind: "wildcard", optional: true });
+    });
+
+    it("strips percent-encoded route groups (%28auth%29) and parallel routes (%40modal)", () => {
+      const groupInfo = deriveNextJsRouteInfo(
+        "file:///app/api/%28dashboard%29/analytics/%5Bid%5D/route.ts"
+      );
+      expect(groupInfo?.routePattern.rawPath).toBe("/api/analytics/:id");
+
+      const parallelInfo = deriveNextJsRouteInfo("file:///app/api/%40modal/feed/route.ts");
+      expect(parallelInfo?.routePattern.rawPath).toBe("/api/feed");
+    });
+
+    it("handles Windows file paths containing spaces and unencoded backslashes", () => {
+      const winInfo = deriveNextJsRouteInfo(
+        "C:\\Users\\John Doe\\My Projects\\app\\api\\classes\\[id]\\route.ts"
+      );
+      expect(winInfo?.routePattern.rawPath).toBe("/api/classes/:id");
+    });
+
+    it("normalizes Pages Router percent-encoded dynamic parameters and catch-alls", () => {
+      const postInfo = deriveNextJsRouteInfo("file:///pages/api/posts/%5Bid%5D.ts");
+      expect(postInfo?.routePattern.rawPath).toBe("/api/posts/:id");
+
+      const optCatchAll = deriveNextJsRouteInfo("file:///pages/api/docs/%5B%5B...slug%5D%5D.ts");
+      expect(optCatchAll?.routePattern.rawPath).toBe("/api/docs/*?");
+      expect(optCatchAll?.routePattern.segments[2]).toEqual({ kind: "wildcard", optional: true });
+
+      const indexInfo = deriveNextJsRouteInfo("file:///pages/api/items/%5Bid%5D/index.ts");
+      expect(indexInfo?.routePattern.rawPath).toBe("/api/items/:id");
+    });
+
+    it("extracts observations from App Router handler with percent-encoded URI", async () => {
+      const code = `
+        export async function GET(req: Request) { return Response.json([]); }
+        export async function PATCH(req: Request) { return Response.json({}); }
+        export async function DELETE(req: Request) { return Response.json({}); }
+      `;
+      const doc = makeDoc("file:///app/api/classes/%5Bid%5D/route.ts", code);
+      const parsed = await parser.parse({ document: doc });
+      const result = extractNextJsObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(3);
+      for (const obs of result.observations) {
+        expect(obs.endpoint.path.value?.rawPath).toBe("/api/classes/:id");
+        expect(obs.endpoint.path.value?.segments).toEqual([
+          { kind: "static", value: "api" },
+          { kind: "static", value: "classes" },
+          { kind: "parameter", name: "id" }
+        ]);
+      }
+    });
+  });
 });

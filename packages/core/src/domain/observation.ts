@@ -13,7 +13,7 @@ import type { CompletenessStatus, HttpMethod, ObservationId } from "./types";
 export type RouteSegment =
   | { kind: "static"; value: string }
   | { kind: "parameter"; name?: string }
-  | { kind: "wildcard"; name?: string }
+  | { kind: "wildcard"; name?: string; optional?: boolean }
   | { kind: "unresolved"; sourceText: string };
 
 /**

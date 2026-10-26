@@ -752,4 +752,186 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(result.findings.filter((f) => f.ruleId === "UND100")).toHaveLength(0);
     });
   });
+
+  describe("Workstream E: Phase 6.3 Next.js Dynamic Route Normalization & Matching", () => {
+    it("matches percent-encoded provider routes against dynamic consumer endpoints (SlotTrack regression)", async () => {
+      // Consumers: classes.ts calling GET, PATCH, DELETE /api/classes/:id and bookings.ts calling PATCH /api/bookings/:id
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/endpoints.ts",
+        `
+        import { request } from './client';
+        export async function getClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'GET' });
+        }
+        export async function updateClass(id: string, data: any) {
+          return request(\`/api/classes/\${id}\`, { method: 'PATCH', body: JSON.stringify(data) });
+        }
+        export async function deleteClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'DELETE' });
+        }
+        export async function updateBooking(id: string, data: any) {
+          return request(\`/api/bookings/\${id}\`, { method: 'PATCH', body: JSON.stringify(data) });
+        }
+        `,
+        "typescript"
+      );
+
+      // Providers: simulated VS Code URI-encoded documents with %5Bid%5D
+      const classServerDoc = makeDoc(
+        "file:///z:/OLD%20PC%20Files/parnil%20-%20My%20Files/SlotTrack/app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        export async function PATCH(req: Request) { return Response.json({}); }
+        export async function DELETE(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const bookingServerDoc = makeDoc(
+        "file:///z:/OLD%20PC%20Files/parnil%20-%20My%20Files/SlotTrack/app/api/bookings/%5Bid%5D/route.ts",
+        `
+        export async function PATCH(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const request: AnalysisRequest = {
+        workspaceId: "slottrack-regression",
+        documents: [clientDoc, classServerDoc, bookingServerDoc],
+        generation: 1
+      };
+
+      const result = await engine.analyze(request);
+
+      expect(result.complete).toBe(true);
+
+      // All 4 consumer endpoints must have exact matches
+      const exactMatches = result.relationships.filter((r) => r.matchKind === "exact");
+      expect(exactMatches).toHaveLength(4);
+
+      // 0 UND100 missing provider findings
+      const und100Findings = result.findings.filter((f) => f.ruleId === "UND100");
+      expect(und100Findings).toHaveLength(0);
+
+      // 0 orphaned provider findings for these matched endpoints
+      const und110Findings = result.findings.filter((f) => f.ruleId === "UND110");
+      expect(und110Findings).toHaveLength(0);
+    });
+
+    it("preserves genuine UND100 finding when a provider endpoint is truly missing", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/missing.ts",
+        `
+        import { request } from './client';
+        export async function deletePayment(id: string) {
+          return request(\`/api/payments/\${id}\`, { method: 'DELETE' });
+        }
+        `,
+        "typescript"
+      );
+
+      // Provider only exports bookings, NOT payments
+      const bookingServerDoc = makeDoc(
+        "file:///app/api/bookings/%5Bid%5D/route.ts",
+        `
+        export async function PATCH(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "missing-provider-test",
+        documents: [clientDoc, bookingServerDoc],
+        generation: 1
+      });
+
+      // Must detect genuine missing DELETE /api/payments/:id endpoint
+      const missingFindings = result.findings.filter((f) => f.ruleId === "UND100");
+      expect(missingFindings).toHaveLength(1);
+      expect(missingFindings[0].summary).toContain("DELETE /api/payments/:id");
+    });
+
+    it("preserves method mismatch finding when path matches but method differs", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/method-mismatch.ts",
+        `
+        import { request } from './client';
+        export async function postClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'POST' });
+        }
+        `,
+        "typescript"
+      );
+
+      // Provider only exports GET
+      const classServerDoc = makeDoc(
+        "file:///app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "method-mismatch-test",
+        documents: [clientDoc, classServerDoc],
+        generation: 1
+      });
+
+      const methodConflict = result.relationships.find((r) => r.matchKind === "method-conflict");
+      expect(methodConflict).toBeDefined();
+    });
+
+    it("does not match literal percent-encoded consumer URL against dynamic route provider", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/literal.ts",
+        `
+        import { request } from './client';
+        export async function getLiteral() {
+          return request('/api/classes/%5Bid%5D', { method: 'GET' });
+        }
+        `,
+        "typescript"
+      );
+
+      const classServerDoc = makeDoc(
+        "file:///app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "literal-url-test",
+        documents: [clientDoc, classServerDoc],
+        generation: 1
+      });
+
+      // Consumer is requesting literal "%5Bid%5D" static segment, provider offers dynamic parameter ":id"
+      // They must NOT match as an exact match
+      const exactMatch = result.relationships.find((r) => r.matchKind === "exact");
+      expect(exactMatch).toBeUndefined();
+    });
+  });
 });
