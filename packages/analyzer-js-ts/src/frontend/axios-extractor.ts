@@ -33,7 +33,16 @@ import {
   type LocalVariableDeclaration
 } from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
-import { extractObjectFields } from "../shapes/shape-extractor";
+import {
+  analyzeWrapperCallsites,
+  extractFormDataFields,
+  extractObjectFields,
+  extractTypeFields,
+  findEnclosingParameter,
+  isFormDataNode,
+  isMultipartHeaders,
+  parseTypeNode
+} from "../shapes/shape-extractor";
 import { combineRoutePaths } from "../backend/express-mount-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
@@ -477,7 +486,8 @@ function extractRequestBody(
   warnings: AnalysisWarning[],
   resolver?: LocalReferenceResolver,
   parsed?: ParsedDocument,
-  document?: SourceDocument
+  document?: SourceDocument,
+  isMultipartHint?: boolean
 ): ShapeObservation | undefined {
   if (!dataNode) {
     return undefined;
@@ -489,9 +499,9 @@ function extractRequestBody(
     documentUri
   );
 
-  // Object literal e.g. axios.post("/api", { name: "Alice" })
+  // 1. Direct object literal e.g. axios.post("/api", { name: "Alice" })
   if (dataNode.kind === "object") {
-    const properties = extractObjectFields(dataNode, documentUri, mapper);
+    const properties = extractObjectFields(dataNode, documentUri, mapper, resolver);
 
     const evidence: EvidenceRef = {
       id: `ev-body-${dataNode.range.start}`,
@@ -512,7 +522,7 @@ function extractRequestBody(
     };
   }
 
-  // String literal e.g. axios.post("/api", "raw data")
+  // 2. Literal string e.g. axios.post("/api", "raw data")
   if (dataNode.kind === "string") {
     const evidence: EvidenceRef = {
       id: `ev-body-${dataNode.range.start}`,
@@ -532,7 +542,7 @@ function extractRequestBody(
     };
   }
 
-  // Local identifier resolution e.g. axios.post("/api", registrationData)
+  // 3. Local identifier resolution (object literal, constant, or useState state)
   if (dataNode.kind === "identifier") {
     const refName = dataNode.text();
     let resolved = resolver?.resolveObjectLiteral(refName, documentUri, dataNode.range);
@@ -546,7 +556,7 @@ function extractRequestBody(
       }
     }
 
-    if (resolved && resolved.state === "resolved") {
+    if (resolved && resolved.state === "resolved" && resolved.value) {
       return {
         shape: {
           kind: "object",
@@ -559,7 +569,146 @@ function extractRequestBody(
     }
   }
 
-  // Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
+  // 4. Multipart FormData
+  const isMultipart = isMultipartHint || isFormDataNode(dataNode, resolver, documentUri);
+  if (isMultipart) {
+    const enclosingParam = findEnclosingParameter(dataNode, dataNode.text());
+    const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? dataNode;
+    const formFields = extractFormDataFields(searchScope, dataNode.text(), documentUri, mapper);
+
+    if (formFields.length > 0) {
+      return {
+        shape: {
+          kind: "object",
+          properties: formFields,
+          additionalProperties: "unknown"
+        },
+        completeness: "complete",
+        evidence: formFields.flatMap((f) => f.evidence)
+      };
+    }
+
+    const warning: AnalysisWarning = {
+      code: "PARTIAL_SHAPE",
+      message: `Multipart form data payload cannot be fully statically inferred: ${dataNode.text()}`,
+      source: dataSpan,
+      analyzerId: "analyzer-js-ts",
+      scope: "consumer",
+      targetDimension: "request-shape",
+      affectsCompleteness: false
+    };
+    warnings.push(warning);
+
+    const evidence: EvidenceRef = {
+      id: `ev-body-${dataNode.range.start}`,
+      kind: "literal-syntax",
+      strength: "inferred",
+      source: dataSpan,
+      description: `Multipart form data payload expression in Axios call: ${dataNode.text()}`
+    };
+
+    return {
+      shape: {
+        kind: "unknown",
+        reason: "dynamic-expression"
+      },
+      completeness: "partial",
+      evidence: [evidence]
+    };
+  }
+
+  // 5. Parameter type annotation or wrapper callsites for identifiers
+  if (dataNode.kind === "identifier") {
+    const refName = dataNode.text();
+
+    // 5a. Enclosing function parameter type annotation (inline object_type or type_identifier)
+    const paramInfo = findEnclosingParameter(dataNode, refName);
+    if (paramInfo?.innerTypeNode) {
+      const innerNode = paramInfo.innerTypeNode;
+      if (innerNode.kind === "object_type") {
+        const properties = extractTypeFields(innerNode, documentUri, mapper);
+        const evidence: EvidenceRef = {
+          id: `ev-body-${dataNode.range.start}`,
+          kind: "explicit-annotation",
+          strength: "direct",
+          source: mapper.toSourceSpanFromUtf16(
+            paramInfo.paramNode.range.start,
+            paramInfo.paramNode.range.end,
+            documentUri
+          ),
+          description: `Request payload typed with inline object type for parameter '${refName}'`
+        };
+        return {
+          shape: {
+            kind: "object",
+            properties,
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: [evidence]
+        };
+      }
+
+      if (innerNode.kind === "type_identifier") {
+        const typeName = innerNode.text();
+        let typeRes = resolver?.resolveObjectLiteral(typeName, documentUri);
+        if ((!typeRes || typeRes.state !== "resolved") && parsed && document) {
+          try {
+            const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+            const localResolver = createLocalReferenceResolver(localIndex);
+            typeRes = localResolver.resolveObjectLiteral(typeName, documentUri);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (typeRes && typeRes.state === "resolved" && typeRes.value) {
+          return {
+            shape: {
+              kind: "object",
+              properties: [...typeRes.value],
+              additionalProperties: "unknown"
+            },
+            completeness: "complete",
+            evidence: typeRes.evidence
+          };
+        }
+      }
+    }
+
+    // 4c. Local API wrapper callsites
+    if (paramInfo?.fnName && parsed) {
+      const callRes = analyzeWrapperCallsites(
+        parsed.root,
+        paramInfo.fnName,
+        paramInfo.paramIndex,
+        documentUri,
+        mapper,
+        resolver
+      );
+      if (callRes.status === "resolved" && callRes.properties) {
+        return {
+          shape: {
+            kind: "object",
+            properties: callRes.properties,
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: callRes.evidence ?? [
+            {
+              id: `ev-body-${dataNode.range.start}`,
+              kind: "local-declaration",
+              strength: "inferred",
+              source: dataSpan,
+              description: `Resolved wrapper payload from consistent callsites for '${refName}'`
+            }
+          ]
+        };
+      }
+    }
+  }
+
+  // 5. Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
   const warning: AnalysisWarning = {
     code: "PARTIAL_SHAPE",
     message: `Unresolved request payload expression in Axios call: ${dataNode.text()}`,
@@ -590,92 +739,6 @@ function extractRequestBody(
 }
 
 /**
- * Parses a TypeScript type syntax node into a normalized TypeShape.
- */
-function parseTypeNode(node: SyntaxNode): TypeShape {
-  // Predefined primitive types: string, number, boolean, void, etc.
-  if (node.kind === "predefined_type") {
-    const text = node.text();
-    const primitiveNames: ReadonlySet<string> = new Set([
-      "string",
-      "number",
-      "boolean",
-      "bigint",
-      "symbol",
-      "null",
-      "undefined",
-      "void",
-      "unknown",
-      "never"
-    ]);
-
-    if (primitiveNames.has(text)) {
-      return { kind: "primitive", name: text as PrimitiveTypeName };
-    }
-    return { kind: "unknown", reason: "complex-type" };
-  }
-
-  // Identifier reference: User, Post, Account
-  if (node.kind === "type_identifier") {
-    return {
-      kind: "reference",
-      displayName: node.text(),
-      resolution: "unresolved"
-    };
-  }
-
-  // Array type: User[], string[]
-  if (node.kind === "array_type") {
-    const elemNode = node.namedChildren()[0];
-    const elementShape = elemNode
-      ? parseTypeNode(elemNode)
-      : { kind: "unknown" as const, reason: "not-observed" as const };
-    return {
-      kind: "array",
-      element: elementShape
-    };
-  }
-
-  // Generic type: Array<User>, Promise<User>, ApiResponse<T>
-  if (node.kind === "generic_type") {
-    const typeNameNode = node.childForField("name") ?? node.namedChildren()[0];
-    const typeArgs = node.childForField("type_arguments") ?? node.namedChildren()[1];
-
-    if (typeNameNode?.text() === "Array" && typeArgs) {
-      const firstArg = typeArgs.namedChildren()[0];
-      const elementShape = firstArg
-        ? parseTypeNode(firstArg)
-        : { kind: "unknown" as const, reason: "not-observed" as const };
-      return {
-        kind: "array",
-        element: elementShape
-      };
-    }
-
-    return {
-      kind: "reference",
-      displayName: node.text(),
-      resolution: "unresolved"
-    };
-  }
-
-  // Union type: User | null, string | number
-  if (node.kind === "union_type") {
-    const members = node.namedChildren().map((child) => parseTypeNode(child));
-    return {
-      kind: "union",
-      members
-    };
-  }
-
-  // Complex or unsupported type
-  return {
-    kind: "unknown",
-    reason: "complex-type"
-  };
-}
-
-/**
  * Extracts response type annotation from TypeScript generic type arguments on the call expression.
  * e.g. `axios.get<User[]>("/api/users")` -> extracts `User[]` response type.
  */
@@ -699,7 +762,7 @@ function extractResponseType(
 
   // First type argument is the response payload type T in Axios
   const respTypeNode = typeArgs[0];
-  const typeShape = parseTypeNode(respTypeNode);
+  const typeShape = parseTypeNode(respTypeNode, documentUri, mapper);
 
   const typeSpan = mapper.toSourceSpanFromUtf16(
     typeArgsNode.range.start,
@@ -865,6 +928,21 @@ export function extractAxiosObservations(
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
     if (match.httpMethod && BODY_METHODS.has(match.httpMethod) && args.length > 1) {
+      let isMultipartHint = false;
+      if (args.length > 2 && args[2].kind === "object") {
+        for (const child of args[2].namedChildren()) {
+          if (child.kind === "pair") {
+            const k = child.childForField("key") ?? child.namedChildren()[0];
+            const v = child.childForField("value") ?? child.namedChildren()[1];
+            if (k && v && (k.text() === "headers" || k.text() === "'headers'")) {
+              if (isMultipartHeaders(v)) {
+                isMultipartHint = true;
+              }
+            }
+          }
+        }
+      }
+
       const bodyShape = extractRequestBody(
         args[1],
         document.uri,
@@ -872,7 +950,8 @@ export function extractAxiosObservations(
         localWarnings,
         actualResolver,
         parsed,
-        document
+        document,
+        isMultipartHint
       );
       if (bodyShape) {
         request = { body: bodyShape };

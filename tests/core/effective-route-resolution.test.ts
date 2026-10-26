@@ -934,4 +934,322 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(exactMatch).toBeUndefined();
     });
   });
+
+  describe("Workstream E: Safe Request Payload Shape Resolution (Phase 6.3 Task 2)", () => {
+    it("Case 1: resolves direct object literal request payload", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        axios.post('/api/users', { name: 'Alice', age: 30 });
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      expect(body?.shape.kind).toBe("object");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties).toHaveLength(2);
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "age"]);
+      }
+    });
+
+    it("Case 2: resolves local const object alias payload", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const payload = { title: 'Post', count: 10 };
+        axios.post('/api/posts', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "count"]);
+      }
+    });
+
+    it("Case 3: resolves object with shorthand properties using local constant values", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const name = "Alice";
+        const payload = { name, active: true };
+        axios.post('/api/users', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        const nameProp = body.shape.properties.find((p) => p.name === "name");
+        expect(nameProp?.type).toEqual({ kind: "literal", value: "Alice" });
+      }
+    });
+
+    it("Case 4: resolves object with spread of another known local object", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const base = { role: 'user', active: true };
+        const payload = { ...base, username: 'alice' };
+        axios.post('/api/users', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["role", "active", "username"]);
+      }
+    });
+
+    it("Case 5: resolves React useState initial object state forwarded to axios (Fullstack Creators pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/CreatePost.jsx",
+        `
+        const [formData, setFormData] = useState({
+          title: '',
+          content: '',
+          category: 'Tech',
+          status: 'published'
+        });
+        api.post('/api/posts', formData);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual([
+          "title",
+          "content",
+          "category",
+          "status"
+        ]);
+      }
+    });
+
+    it("Case 6: resolves inline TypeScript parameter type annotation in fetch wrapper (SlotTrack pattern)", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/auth.ts",
+        `
+        export async function updateProfile(data: { name: string; age?: number; gender?: string }) {
+          return request('/api/auth/profile', {
+            method: 'PATCH',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "age", "gender"]);
+        const ageProp = body.shape.properties.find((p) => p.name === "age");
+        expect(ageProp?.presence).toBe("optional");
+        expect(ageProp?.type).toEqual({ kind: "primitive", name: "number" });
+      }
+    });
+
+    it("Case 7: resolves TypeScript parameter referencing local interface declaration", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/users.ts",
+        `
+        interface UserInput {
+          name: string;
+          email: string;
+          age?: number;
+        }
+
+        export async function createUser(data: UserInput) {
+          return request('/api/users', {
+            method: 'POST',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractFetchObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "email", "age"]);
+      }
+    });
+
+    it("Case 8: resolves TypeScript parameter referencing local type alias declaration", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/posts.ts",
+        `
+        type CreatePostInput = {
+          title: string;
+          content: string;
+          isDraft?: boolean;
+        };
+
+        export async function createPost(data: CreatePostInput) {
+          return request('/api/posts', {
+            method: 'POST',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractFetchObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "content", "isDraft"]);
+      }
+    });
+
+    it("Case 9: synthesizes payload from local API wrapper callsites when all callers pass consistent object literals", async () => {
+      const doc = makeDoc(
+        "file:///client/services/api.js",
+        `
+        function submitPost(payload) {
+          return fetch('/api/posts', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+
+        submitPost({ title: 'First Post', content: 'Hello' });
+        submitPost({ title: 'Second Post', content: 'World' });
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      const obs = result.observations.find((o) => o.endpoint.path.value?.rawPath === "/api/posts");
+      const body = obs?.endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "content"]);
+      }
+    });
+
+    it("Case 10: retains advisory PARTIAL_SHAPE limitation when API wrapper callers pass dynamic or conflicting arguments (Expense Tracker pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/services/usersApi.js",
+        `
+        export function requestUser(payload) {
+          return fetch('/api/users/login', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("PARTIAL_SHAPE");
+      expect(result.warnings[0].affectsCompleteness).toBe(false);
+      expect(result.warnings[0].targetDimension).toBe("request-shape");
+
+      const body = result.observations[0]?.endpoint.request?.body;
+      expect(body?.completeness).toBe("partial");
+    });
+
+    it("Case 11: extracts statically visible FormData.append calls into multipart shape observation", async () => {
+      const doc = makeDoc(
+        "file:///client/upload.js",
+        `
+        function upload() {
+          const formData = new FormData();
+          formData.append('title', 'My Document');
+          formData.append('file', selectedFile);
+          return api.post('/api/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+        }
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "file"]);
+      }
+    });
+
+    it("Case 12: reclassifies unresolvable multipart FormData with specific advisory warning instead of generic JSON.stringify warning (Cubit pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/services/api.js",
+        `
+        export const createPost = (formData) => {
+          return api.post('/community/posts', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+        };
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("PARTIAL_SHAPE");
+      expect(result.warnings[0].message).toContain(
+        "Multipart form data payload cannot be fully statically inferred: formData"
+      );
+      expect(result.warnings[0].affectsCompleteness).toBe(false);
+
+      const body = result.observations[0]?.endpoint.request?.body;
+      expect(body?.completeness).toBe("partial");
+    });
+  });
 });

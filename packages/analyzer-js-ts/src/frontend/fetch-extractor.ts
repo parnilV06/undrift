@@ -30,7 +30,15 @@ import {
   type LocalVariableDeclaration
 } from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
-import { extractObjectFields } from "../shapes/shape-extractor";
+import {
+  analyzeWrapperCallsites,
+  extractFormDataFields,
+  extractObjectFields,
+  extractTypeFields,
+  findEnclosingParameter,
+  isFormDataNode,
+  isMultipartHeaders
+} from "../shapes/shape-extractor";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -427,6 +435,23 @@ function extractOptions(
   let methodValue: ObservedValue<HttpMethod> | undefined;
   let bodyShape: ShapeObservation | undefined;
 
+  let isMultipartHint = false;
+  for (const child of optionsNode.namedChildren()) {
+    if (child.kind === "pair") {
+      const k = child.childForField("key") ?? child.namedChildren()[0];
+      const v = child.childForField("value") ?? child.namedChildren()[1];
+      let kText = k?.text() ?? "";
+      if (k?.kind === "string") {
+        kText = kText.slice(1, -1);
+      }
+      if (kText.toLowerCase() === "headers" && v) {
+        if (isMultipartHeaders(v)) {
+          isMultipartHint = true;
+        }
+      }
+    }
+  }
+
   for (const child of optionsNode.namedChildren()) {
     if (child.kind !== "pair") {
       continue;
@@ -542,7 +567,7 @@ function extractOptions(
           const jsonArgs = valNode.childForField("arguments")?.namedChildren() ?? [];
 
           if (jsonArgs.length > 0 && jsonArgs[0].kind === "object") {
-            const properties = extractObjectFields(jsonArgs[0], documentUri, mapper);
+            const properties = extractObjectFields(jsonArgs[0], documentUri, mapper, resolver);
 
             const evidence: EvidenceRef = {
               id: `ev-body-${valNode.range.start}`,
@@ -582,7 +607,7 @@ function extractOptions(
               }
             }
 
-            if (resolved && resolved.state === "resolved") {
+            if (resolved && resolved.state === "resolved" && resolved.value) {
               bodyShape = {
                 shape: {
                   kind: "object",
@@ -593,33 +618,130 @@ function extractOptions(
                 evidence: resolved.evidence
               };
             } else {
-              const warning: AnalysisWarning = {
-                code: "PARTIAL_SHAPE",
-                message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
-                source: bodySpan,
-                analyzerId: "analyzer-js-ts",
-                affectsCompleteness: false,
-                scope: "consumer",
-                targetDimension: "request-shape"
-              };
-              warnings.push(warning);
+              // Try function parameter type annotation (inline object_type or type_identifier)
+              let typeMatched = false;
+              const paramInfo = findEnclosingParameter(jsonArgs[0], identName);
+              if (paramInfo?.innerTypeNode) {
+                const innerNode = paramInfo.innerTypeNode;
+                if (innerNode.kind === "object_type") {
+                  const properties = extractTypeFields(innerNode, documentUri, mapper);
+                  const evidence: EvidenceRef = {
+                    id: `ev-body-${valNode.range.start}`,
+                    kind: "explicit-annotation",
+                    strength: "direct",
+                    source: mapper.toSourceSpanFromUtf16(
+                      paramInfo.paramNode.range.start,
+                      paramInfo.paramNode.range.end,
+                      documentUri
+                    ),
+                    description: `Request payload typed with inline object type for parameter '${identName}'`
+                  };
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties,
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: [evidence]
+                  };
+                  typeMatched = true;
+                } else if (innerNode.kind === "type_identifier") {
+                  const typeName = innerNode.text();
+                  let typeRes = resolver?.resolveObjectLiteral(typeName, documentUri);
+                  if ((!typeRes || typeRes.state !== "resolved") && parsed && document) {
+                    try {
+                      const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+                      const localResolver = createLocalReferenceResolver(localIndex);
+                      typeRes = localResolver.resolveObjectLiteral(typeName, documentUri);
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  if (typeRes && typeRes.state === "resolved" && typeRes.value) {
+                    bodyShape = {
+                      shape: {
+                        kind: "object",
+                        properties: [...typeRes.value],
+                        additionalProperties: "unknown"
+                      },
+                      completeness: "complete",
+                      evidence: typeRes.evidence
+                    };
+                    typeMatched = true;
+                  }
+                }
+              }
 
-              const evidence: EvidenceRef = {
-                id: `ev-body-${valNode.range.start}`,
-                kind: "literal-syntax",
-                strength: "inferred",
-                source: bodySpan,
-                description: "Unresolved payload expression in JSON.stringify body"
-              };
+              // Try wrapper callsites
+              if (!typeMatched && paramInfo?.fnName && parsed) {
+                const callRes = analyzeWrapperCallsites(
+                  parsed.root,
+                  paramInfo.fnName,
+                  paramInfo.paramIndex,
+                  documentUri,
+                  mapper,
+                  resolver
+                );
+                if (callRes.status === "resolved" && callRes.properties) {
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties: callRes.properties,
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: callRes.evidence ?? [
+                      {
+                        id: `ev-body-${valNode.range.start}`,
+                        kind: "local-declaration",
+                        strength: "inferred",
+                        source: bodySpan,
+                        description: `Resolved wrapper payload from consistent callsites for '${identName}'`
+                      }
+                    ]
+                  };
+                  typeMatched = true;
+                }
+              }
 
-              bodyShape = {
-                shape: {
-                  kind: "unknown",
-                  reason: "unresolved-reference"
-                },
-                completeness: "partial",
-                evidence: [evidence]
-              };
+              if (!typeMatched) {
+                const isMultipart =
+                  isMultipartHint || isFormDataNode(jsonArgs[0], resolver, documentUri);
+                const warningMsg = isMultipart
+                  ? `Multipart form data payload cannot be fully statically inferred: ${valNode.text()}`
+                  : `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`;
+
+                const warning: AnalysisWarning = {
+                  code: "PARTIAL_SHAPE",
+                  message: warningMsg,
+                  source: bodySpan,
+                  analyzerId: "analyzer-js-ts",
+                  affectsCompleteness: false,
+                  scope: "consumer",
+                  targetDimension: "request-shape"
+                };
+                warnings.push(warning);
+
+                const evidence: EvidenceRef = {
+                  id: `ev-body-${valNode.range.start}`,
+                  kind: "literal-syntax",
+                  strength: "inferred",
+                  source: bodySpan,
+                  description: isMultipart
+                    ? `Multipart form data payload in fetch call`
+                    : "Unresolved payload expression in JSON.stringify body"
+                };
+
+                bodyShape = {
+                  shape: {
+                    kind: "unknown",
+                    reason: isMultipart ? "dynamic-expression" : "unresolved-reference"
+                  },
+                  completeness: "partial",
+                  evidence: [evidence]
+                };
+              }
             }
           } else {
             const warning: AnalysisWarning = {
@@ -697,33 +819,141 @@ function extractOptions(
           evidence: [evidence]
         };
       } else {
-        const warning: AnalysisWarning = {
-          code: "UNSUPPORTED_PATTERN",
-          message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
-          source: bodySpan,
-          analyzerId: "analyzer-js-ts",
-          affectsCompleteness: false,
-          scope: "consumer",
-          targetDimension: "request-shape"
-        };
-        warnings.push(warning);
+        // Direct body expression (e.g. body: formData, body: payload, body: new FormData())
+        const isMultipart = isMultipartHint || isFormDataNode(valNode, resolver, documentUri);
+        if (isMultipart) {
+          const enclosingParam =
+            valNode.kind === "identifier"
+              ? findEnclosingParameter(valNode, valNode.text())
+              : undefined;
+          const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? valNode;
+          const formFields = extractFormDataFields(
+            searchScope,
+            valNode.text(),
+            documentUri,
+            mapper
+          );
 
-        const evidence: EvidenceRef = {
-          id: `ev-body-${valNode.range.start}`,
-          kind: "literal-syntax",
-          strength: "inferred",
-          source: bodySpan,
-          description: "Unsupported request body expression"
-        };
+          if (formFields.length > 0) {
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: formFields,
+                additionalProperties: "unknown"
+              },
+              completeness: "complete",
+              evidence: formFields.flatMap((f) => f.evidence)
+            };
+          } else {
+            const warning: AnalysisWarning = {
+              code: "PARTIAL_SHAPE",
+              message: `Multipart form data payload cannot be fully statically inferred: ${valNode.text()}`,
+              source: bodySpan,
+              analyzerId: "analyzer-js-ts",
+              affectsCompleteness: false,
+              scope: "consumer",
+              targetDimension: "request-shape"
+            };
+            warnings.push(warning);
 
-        bodyShape = {
-          shape: {
-            kind: "unknown",
-            reason: "unsupported-syntax"
-          },
-          completeness: "partial",
-          evidence: [evidence]
-        };
+            const evidence: EvidenceRef = {
+              id: `ev-body-${valNode.range.start}`,
+              kind: "literal-syntax",
+              strength: "inferred",
+              source: bodySpan,
+              description: `Multipart form data payload in fetch call: ${valNode.text()}`
+            };
+
+            bodyShape = {
+              shape: {
+                kind: "unknown",
+                reason: "dynamic-expression"
+              },
+              completeness: "partial",
+              evidence: [evidence]
+            };
+          }
+        } else if (valNode.kind === "identifier") {
+          const refName = valNode.text();
+          let resolved = resolver?.resolveObjectLiteral(refName, documentUri, valNode.range);
+          if ((!resolved || resolved.state !== "resolved") && parsed && document) {
+            try {
+              const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+              const localResolver = createLocalReferenceResolver(localIndex);
+              resolved = localResolver.resolveObjectLiteral(refName, documentUri, valNode.range);
+            } catch {
+              // ignore
+            }
+          }
+
+          if (resolved && resolved.state === "resolved" && resolved.value) {
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: [...resolved.value],
+                additionalProperties: "unknown"
+              },
+              completeness: "complete",
+              evidence: resolved.evidence
+            };
+          } else {
+            const warning: AnalysisWarning = {
+              code: "PARTIAL_SHAPE",
+              message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
+              source: bodySpan,
+              analyzerId: "analyzer-js-ts",
+              affectsCompleteness: false,
+              scope: "consumer",
+              targetDimension: "request-shape"
+            };
+            warnings.push(warning);
+
+            const evidence: EvidenceRef = {
+              id: `ev-body-${valNode.range.start}`,
+              kind: "literal-syntax",
+              strength: "inferred",
+              source: bodySpan,
+              description: "Unsupported request body expression"
+            };
+
+            bodyShape = {
+              shape: {
+                kind: "unknown",
+                reason: "unsupported-syntax"
+              },
+              completeness: "partial",
+              evidence: [evidence]
+            };
+          }
+        } else {
+          const warning: AnalysisWarning = {
+            code: "PARTIAL_SHAPE",
+            message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
+            source: bodySpan,
+            analyzerId: "analyzer-js-ts",
+            affectsCompleteness: false,
+            scope: "consumer",
+            targetDimension: "request-shape"
+          };
+          warnings.push(warning);
+
+          const evidence: EvidenceRef = {
+            id: `ev-body-${valNode.range.start}`,
+            kind: "literal-syntax",
+            strength: "inferred",
+            source: bodySpan,
+            description: "Unsupported request body expression"
+          };
+
+          bodyShape = {
+            shape: {
+              kind: "unknown",
+              reason: "unsupported-syntax"
+            },
+            completeness: "partial",
+            evidence: [evidence]
+          };
+        }
       }
     }
   }
