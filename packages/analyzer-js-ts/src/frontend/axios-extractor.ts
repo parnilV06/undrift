@@ -767,7 +767,25 @@ function extractRequestBody(
   const isMultipart = isMultipartHint || isFormDataNode(dataNode, resolver, documentUri);
   if (isMultipart) {
     const enclosingParam = findEnclosingParameter(dataNode, dataNode.text());
-    const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? dataNode;
+    let searchScope: SyntaxNode = enclosingParam?.fnNode ?? dataNode;
+    if (!enclosingParam?.fnNode) {
+      let curr: SyntaxNode | undefined = dataNode.parent();
+      while (curr) {
+        if (
+          curr.kind === "function_declaration" ||
+          curr.kind === "function_expression" ||
+          curr.kind === "arrow_function" ||
+          curr.kind === "method_definition"
+        ) {
+          searchScope = curr;
+          break;
+        }
+        curr = curr.parent();
+      }
+      if (!curr && parsed?.root) {
+        searchScope = parsed.root;
+      }
+    }
     const formAnalysis = analyzeFormData(searchScope, dataNode.text(), documentUri, mapper);
 
     if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {
@@ -835,6 +853,7 @@ function extractRequestBody(
   }
 
   // 5. Parameter type annotation or wrapper callsites for identifiers
+  let callRes: WrapperCallsitesResult | undefined;
   if (dataNode.kind === "identifier") {
     const refName = dataNode.text();
 
@@ -894,7 +913,6 @@ function extractRequestBody(
     }
 
     // 4c. Local API wrapper callsites
-    let callRes: WrapperCallsitesResult | undefined;
     if (paramInfo?.fnName && parsed) {
       callRes = analyzeWrapperCallsites(
         parsed.root,
@@ -932,7 +950,8 @@ function extractRequestBody(
     parsed,
     documentUri,
     mapper,
-    resolver
+    resolver,
+    wrapperCallsites: callRes
   });
   const warning = createPayloadWarning(limitation, dataSpan);
   warnings.push(warning);

@@ -70,6 +70,20 @@ export function classifyPayloadLimitation(
       };
     }
 
+    if (
+      formAnalysis &&
+      formAnalysis.fields.length === 0 &&
+      formAnalysis.hasConstruction &&
+      !formAnalysis.hasAppends
+    ) {
+      return {
+        reasonCode: "multipart-partial-field-evidence",
+        message: `Multipart FormData instance '${payloadNode.text()}' is constructed, but no static field append or set operations were observed in the analyzed scope.`,
+        evidenceDescription: `Constructed FormData instance without statically observed field mutations`,
+        evidenceReason: "dynamic-expression"
+      };
+    }
+
     if (formAnalysis && formAnalysis.fields.length === 0 && formAnalysis.hasDynamicAppends) {
       return {
         reasonCode: "multipart-partial-field-evidence",
@@ -98,11 +112,20 @@ export function classifyPayloadLimitation(
         const typeText = paramInfo.innerTypeNode.text().trim();
         const typeKind = paramInfo.innerTypeNode.kind;
 
-        if (typeText === "unknown" || typeText === "any") {
+        if (typeText === "unknown") {
           return {
             reasonCode: "explicit-unknown-type",
-            message: `Request payload parameter '${identName}' is explicitly typed as '${typeText}'. No statically usable object shape is available at this request site.`,
-            evidenceDescription: `Request payload parameter '${identName}' has explicit '${typeText}' type annotation`,
+            message: `Request payload parameter '${identName}' is explicitly typed as 'unknown'. No statically usable object shape is available at this request site.`,
+            evidenceDescription: `Request payload parameter '${identName}' has explicit 'unknown' type annotation`,
+            evidenceReason: "unresolved-reference"
+          };
+        }
+
+        if (typeText === "any") {
+          return {
+            reasonCode: "explicit-any-type",
+            message: `Request payload parameter '${identName}' is explicitly typed as 'any'. Static shape inference cannot determine object fields from an unconstrained 'any' type.`,
+            evidenceDescription: `Request payload parameter '${identName}' has explicit 'any' type annotation`,
             evidenceReason: "unresolved-reference"
           };
         }
@@ -117,26 +140,17 @@ export function classifyPayloadLimitation(
         }
       }
 
-      // 2b. Unannotated parameter check (plain JS or untyped TS)
+      // 2b. Same-file wrapper callsites inspection
       const enclosingFn = options.parsed
         ? findEnclosingFunction(payloadNode, options.parsed.root)
         : undefined;
 
-      if (enclosingFn?.isExported) {
-        return {
-          reasonCode: "unannotated-parameter",
-          message: `Payload parameter '${identName}' is forwarded into this exported API function. Its object shape is not declared locally, and cross-module caller data is not included in the current shape inference scope.`,
-          evidenceDescription: `Unannotated payload parameter '${identName}' in exported API function`,
-          evidenceReason: "unresolved-reference"
-        };
-      }
-
-      // Unexported helper function: check same-file callsites
       let callsites = options.wrapperCallsites;
-      if (!callsites && options.parsed && enclosingFn?.fnName) {
+      const fnName = enclosingFn?.fnName ?? paramInfo.fnName;
+      if (!callsites && options.parsed && fnName) {
         callsites = analyzeWrapperCallsites(
           options.parsed.root,
-          enclosingFn.fnName,
+          fnName,
           paramInfo.paramIndex,
           options.documentUri,
           options.mapper,
@@ -147,8 +161,17 @@ export function classifyPayloadLimitation(
       if (callsites?.foundCallsites) {
         return {
           reasonCode: "cross-module-forwarding",
-          message: `Payload parameter '${identName}' is forwarded from outer function callers. Its object shape is constructed upstream across modules and cannot be inferred within the local file scope.`,
+          message: `Payload parameter '${identName}' is forwarded through local helper callsites, but their arguments do not provide a statically resolvable object shape within the current file scope.`,
           evidenceDescription: `Payload parameter '${identName}' forwarded across local helper callsites`,
+          evidenceReason: "unresolved-reference"
+        };
+      }
+
+      if (enclosingFn?.isExported) {
+        return {
+          reasonCode: "unannotated-parameter",
+          message: `Payload parameter '${identName}' of exported API function is unannotated. Its object shape is not declared locally, and cross-module caller data is not included in the current shape inference scope.`,
+          evidenceDescription: `Unannotated payload parameter '${identName}' in exported API function`,
           evidenceReason: "unresolved-reference"
         };
       }

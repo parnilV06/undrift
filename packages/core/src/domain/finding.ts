@@ -46,6 +46,7 @@ export type WarningTargetDimension =
  */
 export type PartialShapeReasonCode =
   | "explicit-unknown-type"
+  | "explicit-any-type"
   | "unannotated-parameter"
   | "cross-module-forwarding"
   | "no-caller-evidence"
@@ -68,7 +69,7 @@ export interface AnalysisWarning {
   affectsCompleteness: boolean;
   scope?: WarningScope;
   targetDimension?: WarningTargetDimension;
-  reasonCode?: string;
+  reasonCode?: PartialShapeReasonCode | (string & {});
 }
 
 /**

@@ -72,7 +72,7 @@ describe("Phase 6.3 Task 5: Evidence-Backed Coverage Diagnostics", () => {
     const warning = result.warnings[0];
     expect(warning.code).toBe("PARTIAL_SHAPE");
     expect(warning.reasonCode).toBe("unannotated-parameter");
-    expect(warning.message).toContain("forwarded into this exported API function");
+    expect(warning.message).toContain("of exported API function is unannotated");
     expect(warning.message).toContain("cross-module caller data is not included");
     expect(warning.message).not.toContain("no callers exist");
     expect(warning.affectsCompleteness).toBe(false);
@@ -120,8 +120,8 @@ describe("Phase 6.3 Task 5: Evidence-Backed Coverage Diagnostics", () => {
     const shapeWarning = result.warnings.find((w) => w.code === "PARTIAL_SHAPE");
     expect(shapeWarning).toBeDefined();
     expect(shapeWarning?.reasonCode).toBe("cross-module-forwarding");
-    expect(shapeWarning?.message).toContain("forwarded from outer function callers");
-    expect(shapeWarning?.message).toContain("constructed upstream across modules");
+    expect(shapeWarning?.message).toContain("forwarded through local helper callsites");
+    expect(shapeWarning?.message).toContain("do not provide a statically resolvable object shape");
     expect(shapeWarning?.message).not.toContain("without same-file caller evidence");
     expect(shapeWarning?.affectsCompleteness).toBe(false);
   });
@@ -353,5 +353,244 @@ describe("Phase 6.3 Task 5: Evidence-Backed Coverage Diagnostics", () => {
     // Limitations array does not affect core identity inputs
     expect(warningA.code).toBe(warningB.code);
     expect(warningA.affectsCompleteness).toBe(warningB.affectsCompleteness);
+  });
+
+  // Test 13 — Explicit any type annotation
+  it("Test 13: identifies explicit any type annotation and distinguishes it from unknown", async () => {
+    const code = `
+      export function updateSettings(data: any) {
+        return fetch('/api/settings', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+      }
+    `;
+    const doc = makeDoc("file:///app/lib/api/settings.ts", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractFetchObservations(doc, parsed);
+
+    expect(result.warnings).toHaveLength(1);
+    const warning = result.warnings[0];
+    expect(warning.code).toBe("PARTIAL_SHAPE");
+    expect(warning.reasonCode).toBe("explicit-any-type");
+    expect(warning.message).toContain("explicitly typed as 'any'");
+    expect(warning.message).not.toContain("unknown");
+    expect(warning.affectsCompleteness).toBe(false);
+  });
+
+  // Test 14 — FormData unrelated object isolation
+  it("Test 14: ignores unrelated object mutations when tracking FormData", async () => {
+    const code = `
+      import api from './client';
+      export function uploadFiles(file) {
+        const formData = new FormData();
+        const items = [];
+        items.append('unrelated');
+        const params = new URLSearchParams();
+        params.append('search', 'query');
+        formData.append('avatar', file);
+
+        return api.post('/api/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+    `;
+    const doc = makeDoc("file:///client/upload.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const body = result.observations[0]?.endpoint.request?.body;
+    expect(body?.completeness).toBe("complete");
+    if (body?.shape.kind === "object") {
+      const fieldNames = body.shape.properties.map((p) => p.name);
+      expect(fieldNames).toEqual(["avatar"]);
+      expect(fieldNames).not.toContain("unrelated");
+      expect(fieldNames).not.toContain("search");
+    }
+  });
+
+  // Test 15 — Multiple FormData instances in one file
+  it("Test 15: isolates multiple FormData instances within the same module", async () => {
+    const code = `
+      import api from './client';
+      export function sendBoth(avatar, title, image) {
+        const avatarData = new FormData();
+        avatarData.append('avatar', avatar);
+
+        const postData = new FormData();
+        postData.append('title', title);
+        postData.append('image', image);
+
+        api.post('/api/avatar', avatarData, { headers: { 'Content-Type': 'multipart/form-data' } });
+        api.post('/api/posts', postData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      }
+    `;
+    const doc = makeDoc("file:///client/multi.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    expect(result.observations).toHaveLength(2);
+    const avatarObs = result.observations.find(
+      (o) => o.endpoint.path.value.rawPath === "/api/avatar"
+    );
+    const postObs = result.observations.find((o) => o.endpoint.path.value.rawPath === "/api/posts");
+
+    const avatarShape = avatarObs?.endpoint.request?.body?.shape;
+    const postShape = postObs?.endpoint.request?.body?.shape;
+
+    const avatarFields =
+      avatarShape && avatarShape.kind === "object" ? avatarShape.properties.map((p) => p.name) : [];
+    const postFields =
+      postShape && postShape.kind === "object" ? postShape.properties.map((p) => p.name) : [];
+
+    expect(avatarFields).toEqual(["avatar"]);
+    expect(postFields).toEqual(["title", "image"]);
+  });
+
+  // Test 16 — Simple variable alias for FormData
+  it("Test 16: supports simple variable aliases for FormData", async () => {
+    const code = `
+      import api from './client';
+      export function uploadWithAlias(file) {
+        const formData = new FormData();
+        const uploadData = formData;
+        uploadData.append('document', file);
+
+        return api.post('/api/docs', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+    `;
+    const doc = makeDoc("file:///client/alias.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const body = result.observations[0]?.endpoint.request?.body;
+    expect(body?.completeness).toBe("complete");
+    if (body?.shape.kind === "object") {
+      const names = body.shape.properties.map((p) => p.name);
+      expect(names).toContain("document");
+    }
+  });
+
+  // Test 17 — Conditional FormData field appends
+  it("Test 17: marks conditional FormData field appends as optional", async () => {
+    const code = `
+      import api from './client';
+      export function createRecord(title, file) {
+        const formData = new FormData();
+        formData.append('title', title);
+        if (file) {
+          formData.append('attachment', file);
+        }
+
+        return api.post('/api/records', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+    `;
+    const doc = makeDoc("file:///client/records.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const body = result.observations[0]?.endpoint.request?.body;
+    expect(body?.completeness).toBe("complete");
+    if (body?.shape.kind === "object") {
+      const titleProp = body.shape.properties.find((p) => p.name === "title");
+      const attachProp = body.shape.properties.find((p) => p.name === "attachment");
+
+      expect(titleProp?.presence).toBe("required");
+      expect(attachProp?.presence).toBe("optional");
+    }
+  });
+
+  // Test 18 — Constructed but empty FormData
+  it("Test 18: correctly reports constructed but empty FormData without fabricating empty shape", async () => {
+    const code = `
+      import api from './client';
+      export function sendEmpty() {
+        const formData = new FormData();
+        return api.post('/api/empty', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+    `;
+    const doc = makeDoc("file:///client/empty.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    expect(result.warnings).toHaveLength(1);
+    const warning = result.warnings[0];
+    expect(warning.code).toBe("PARTIAL_SHAPE");
+    expect(warning.reasonCode).toBe("multipart-partial-field-evidence");
+    expect(warning.message).toContain(
+      "constructed, but no static field append or set operations were observed"
+    );
+  });
+
+  // Test 19 — Exported function with same-file literal callers
+  it("Test 19: resolves complete shape for exported function when same-file callers provide object literal", async () => {
+    const code = `
+      import api from './client';
+      export async function createUser(data) {
+        return api.post('/api/users', data);
+      }
+
+      export function initAdmin() {
+        return createUser({ username: 'admin', role: 'superuser' });
+      }
+    `;
+    const doc = makeDoc("file:///client/userInit.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const shapeWarnings = result.warnings.filter((w) => w.code === "PARTIAL_SHAPE");
+    expect(shapeWarnings).toHaveLength(0);
+
+    const body = result.observations[0]?.endpoint.request?.body;
+    expect(body?.completeness).toBe("complete");
+    if (body?.shape.kind === "object") {
+      const names = body.shape.properties.map((p) => p.name);
+      expect(names).toContain("username");
+      expect(names).toContain("role");
+    }
+  });
+
+  // Test 20 — Exported function with dynamic callers
+  it("Test 20: classifies exported function as cross-module-forwarding when same-file callers forward dynamic arguments", async () => {
+    const code = `
+      import api from './client';
+      export async function baseRequest(payload) {
+        return api.post('/api/endpoint', payload);
+      }
+
+      export function callerA(paramA) {
+        return baseRequest(paramA);
+      }
+    `;
+    const doc = makeDoc("file:///client/forwarding.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const warning = result.warnings.find((w) => w.code === "PARTIAL_SHAPE");
+    expect(warning?.reasonCode).toBe("cross-module-forwarding");
+    expect(warning?.message).toContain("forwarded through local helper callsites");
+  });
+
+  // Test 21 — Unexported helper without same-file callsites
+  it("Test 21: classifies unexported function without same-file callsites as no-caller-evidence", async () => {
+    const code = `
+      import api from './client';
+      async function unusedHelper(payload) {
+        return api.post('/api/unused', payload);
+      }
+    `;
+    const doc = makeDoc("file:///client/unused.js", code);
+    const parsed = await parser.parse({ document: doc });
+    const result = extractAxiosObservations(doc, parsed);
+
+    const warning = result.warnings.find((w) => w.code === "PARTIAL_SHAPE");
+    expect(warning?.reasonCode).toBe("no-caller-evidence");
+    expect(warning?.message).toContain("without same-file caller evidence");
   });
 });

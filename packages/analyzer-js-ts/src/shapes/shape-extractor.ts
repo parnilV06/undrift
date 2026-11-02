@@ -378,6 +378,42 @@ export interface FormDataAnalysisResult {
   dynamicAppendCount: number;
 }
 
+function isInsideConditionalOrLoop(node: SyntaxNode, limitNode: SyntaxNode): boolean {
+  let curr: SyntaxNode | undefined = node.parent();
+  while (curr) {
+    if (
+      curr.range.start === limitNode.range.start &&
+      curr.range.end === limitNode.range.end &&
+      curr.kind === limitNode.kind
+    ) {
+      break;
+    }
+    const k = curr.kind;
+    if (
+      k === "if_statement" ||
+      k === "ternary_expression" ||
+      k === "switch_statement" ||
+      k === "switch_case" ||
+      k === "switch_default" ||
+      k === "while_statement" ||
+      k === "do_statement" ||
+      k === "for_statement" ||
+      k === "for_in_statement" ||
+      k === "for_of_statement"
+    ) {
+      return true;
+    }
+    if (k === "binary_expression" || k === "logical_expression") {
+      const op = curr.childForField("operator")?.text();
+      if (op === "&&" || op === "||" || op === "??") {
+        return true;
+      }
+    }
+    curr = curr.parent();
+  }
+  return false;
+}
+
 /**
  * Statically analyzes FormData usage within an enclosing AST scope, tracking
  * literal field appends, dynamic operations, and FormData constructor calls.
@@ -390,6 +426,48 @@ export function analyzeFormData(
 ): FormDataAnalysisResult {
   const fields: FieldShape[] = [];
   const seenNames = new Set<string>();
+  const targetNames = new Set<string>();
+  if (varName && varName !== "new FormData()") {
+    targetNames.add(varName);
+  }
+
+  // Identify simple variable aliases within scopeNode: e.g. const uploadData = formData;
+  function discoverAliases(node: SyntaxNode) {
+    if (node.kind === "variable_declarator") {
+      const nameNode = node.childForField("name");
+      const valNode = node.childForField("value");
+      if (
+        nameNode &&
+        nameNode.kind === "identifier" &&
+        valNode &&
+        valNode.kind === "identifier" &&
+        targetNames.has(valNode.text())
+      ) {
+        targetNames.add(nameNode.text());
+      }
+    } else if (node.kind === "assignment_expression") {
+      const leftNode = node.childForField("left");
+      const rightNode = node.childForField("right");
+      if (
+        leftNode &&
+        leftNode.kind === "identifier" &&
+        rightNode &&
+        rightNode.kind === "identifier" &&
+        targetNames.has(rightNode.text())
+      ) {
+        targetNames.add(leftNode.text());
+      }
+    }
+
+    for (const child of node.namedChildren()) {
+      discoverAliases(child);
+    }
+  }
+
+  if (targetNames.size > 0) {
+    discoverAliases(scopeNode);
+  }
+
   let hasConstruction = false;
   let hasAppends = false;
   let hasDynamicAppends = false;
@@ -399,7 +477,24 @@ export function analyzeFormData(
     if (node.kind === "new_expression") {
       const constructorNode = node.childForField("constructor") ?? node.namedChildren()[0];
       if (constructorNode && constructorNode.text() === "FormData") {
-        hasConstruction = true;
+        const parent = node.parent();
+        if (parent?.kind === "variable_declarator") {
+          const varNameNode = parent.childForField("name");
+          if (varNameNode && targetNames.has(varNameNode.text())) {
+            hasConstruction = true;
+          }
+        } else if (parent?.kind === "assignment_expression") {
+          const leftNode = parent.childForField("left");
+          if (leftNode && targetNames.has(leftNode.text())) {
+            hasConstruction = true;
+          }
+        } else if (
+          node.range.start === scopeNode.range.start ||
+          varName === "new FormData()" ||
+          varName === ""
+        ) {
+          hasConstruction = true;
+        }
       }
     }
 
@@ -412,9 +507,7 @@ export function analyzeFormData(
         if (
           objNode &&
           propNode &&
-          (objNode.text() === varName ||
-            varName.toLowerCase().includes("formdata") ||
-            varName.toLowerCase() === "fd") &&
+          targetNames.has(objNode.text()) &&
           (propNode.text() === "append" || propNode.text() === "set")
         ) {
           hasAppends = true;
@@ -426,40 +519,46 @@ export function analyzeFormData(
             }
 
             if (fieldName) {
-              if (!seenNames.has(fieldName)) {
-                seenNames.add(fieldName);
+              const isConditional = isInsideConditionalOrLoop(node, scopeNode);
 
-                let fieldType: TypeShape = { kind: "unknown", reason: "dynamic-expression" };
-                if (args.length >= 2) {
-                  const valArg = args[1];
-                  if (valArg.kind === "string") {
-                    fieldType = { kind: "literal", value: valArg.text().slice(1, -1) };
-                  } else if (valArg.kind === "number") {
-                    fieldType = { kind: "literal", value: Number(valArg.text()) };
-                  } else if (valArg.kind === "true") {
-                    fieldType = { kind: "literal", value: true };
-                  } else if (valArg.kind === "false") {
-                    fieldType = { kind: "literal", value: false };
-                  }
+              let fieldType: TypeShape = { kind: "unknown", reason: "dynamic-expression" };
+              if (args.length >= 2) {
+                const valArg = args[1];
+                if (valArg.kind === "string") {
+                  fieldType = { kind: "literal", value: valArg.text().slice(1, -1) };
+                } else if (valArg.kind === "number") {
+                  fieldType = { kind: "literal", value: Number(valArg.text()) };
+                } else if (valArg.kind === "true") {
+                  fieldType = { kind: "literal", value: true };
+                } else if (valArg.kind === "false") {
+                  fieldType = { kind: "literal", value: false };
                 }
+              }
 
-                const span = mapper.toSourceSpanFromUtf16(
-                  node.range.start,
-                  node.range.end,
-                  documentUri
-                );
-                const evidence: EvidenceRef = {
-                  id: `ev-formdata-${node.range.start}`,
-                  kind: "literal-syntax",
-                  strength: "direct",
-                  source: span,
-                  description: `FormData field '${fieldName}' appended via ${propNode.text()}()`
-                };
+              const span = mapper.toSourceSpanFromUtf16(
+                node.range.start,
+                node.range.end,
+                documentUri
+              );
+              const evidence: EvidenceRef = {
+                id: `ev-formdata-${node.range.start}`,
+                kind: "literal-syntax",
+                strength: "direct",
+                source: span,
+                description: `FormData field '${fieldName}' appended via ${propNode.text()}()`
+              };
 
+              const existing = fields.find((f) => f.name === fieldName);
+              if (existing) {
+                if (!isConditional) {
+                  existing.presence = "required";
+                }
+                existing.evidence.push(evidence);
+              } else {
                 fields.push({
                   name: fieldName,
                   type: fieldType,
-                  presence: "required",
+                  presence: isConditional ? "optional" : "required",
                   nullable: "no",
                   evidence: [evidence]
                 });

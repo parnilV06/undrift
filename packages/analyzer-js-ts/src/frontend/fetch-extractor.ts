@@ -1015,7 +1015,25 @@ function extractOptions(
             valNode.kind === "identifier"
               ? findEnclosingParameter(valNode, valNode.text())
               : undefined;
-          const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? valNode;
+          let searchScope: SyntaxNode = enclosingParam?.fnNode ?? valNode;
+          if (!enclosingParam?.fnNode) {
+            let curr: SyntaxNode | undefined = valNode.parent();
+            while (curr) {
+              if (
+                curr.kind === "function_declaration" ||
+                curr.kind === "function_expression" ||
+                curr.kind === "arrow_function" ||
+                curr.kind === "method_definition"
+              ) {
+                searchScope = curr;
+                break;
+              }
+              curr = curr.parent();
+            }
+            if (!curr && parsed?.root) {
+              searchScope = parsed.root;
+            }
+          }
           const formAnalysis = analyzeFormData(searchScope, valNode.text(), documentUri, mapper);
 
           if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {

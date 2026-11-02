@@ -165,6 +165,58 @@ describe("Phase 4, Chunk 4.1: WorkspaceStatePersistenceAdapter", () => {
     expect(loaded?.findings[0]?.sourceLocations[0]?.uri).toBe("file:///workspace/src/client.ts");
   });
 
+  it("1b. preserves reasonCode on AnalysisWarning through snapshot disk persistence round-trip", async () => {
+    const ws: WorkspaceId = "ws-reason-code-roundtrip";
+    const snapshot = createSampleSnapshot(ws, {
+      coverage: createSampleCoverage({
+        warnings: [
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: "explicit-any-type",
+            message: "Request payload has explicit any type",
+            affectsCompleteness: false,
+            scope: "consumer",
+            targetDimension: "request-shape",
+            source: {
+              uri: "file:///workspace/src/client.ts",
+              range: { start: 10, end: 20 },
+              start: { line: 1, character: 2 },
+              end: { line: 1, character: 12 }
+            }
+          }
+        ]
+      }),
+      findings: [
+        createSampleFinding("1", {
+          limitations: [
+            {
+              code: "PARTIAL_SHAPE",
+              reasonCode: "multipart-no-construction-evidence",
+              message: "Multipart form data forwarded without construction",
+              affectsCompleteness: false,
+              scope: "consumer",
+              targetDimension: "request-shape"
+            }
+          ]
+        })
+      ]
+    });
+
+    await adapter.saveSnapshot(ws, snapshot);
+    const loaded = await adapter.loadLatestSnapshot(ws);
+
+    expect(loaded).toBeDefined();
+    expect(loaded?.coverage.warnings).toHaveLength(1);
+    expect(loaded?.coverage.warnings[0]?.reasonCode).toBe("explicit-any-type");
+    expect(loaded?.coverage.warnings[0]?.code).toBe("PARTIAL_SHAPE");
+    expect(loaded?.coverage.warnings[0]?.affectsCompleteness).toBe(false);
+
+    expect(loaded?.findings[0]?.limitations).toHaveLength(1);
+    expect(loaded?.findings[0]?.limitations[0]?.reasonCode).toBe(
+      "multipart-no-construction-evidence"
+    );
+  });
+
   // 2. Lifecycle-event append/load
   it("2. appends lifecycle events and loads complete event history", async () => {
     const ws: WorkspaceId = "ws-events";
