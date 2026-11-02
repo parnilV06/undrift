@@ -143,6 +143,23 @@ export function extractObjectFields(
         properties: extractObjectFields(valNode, documentUri, mapper, resolver),
         additionalProperties: "unknown"
       };
+    } else if (valNode.kind === "call_expression") {
+      const callee = valNode.childForField("function");
+      const calleeText = callee?.text() ?? "";
+      if (calleeText === "Number" || calleeText === "parseInt" || calleeText === "parseFloat") {
+        fieldType = { kind: "primitive", name: "number" };
+      } else if (
+        calleeText === "String" ||
+        calleeText.endsWith(".trim") ||
+        calleeText.endsWith(".toISOString") ||
+        calleeText.endsWith(".toString")
+      ) {
+        fieldType = { kind: "primitive", name: "string" };
+      } else if (calleeText === "Boolean") {
+        fieldType = { kind: "primitive", name: "boolean" };
+      } else {
+        fieldType = { kind: "unknown", reason: "dynamic-expression" };
+      }
     } else if (valNode.kind === "identifier" && resolver?.resolveConstant) {
       const res = resolver.resolveConstant(valNode.text(), documentUri, valNode.range);
       if (res.state === "resolved" && res.value !== undefined) {

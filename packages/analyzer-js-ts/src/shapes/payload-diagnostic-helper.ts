@@ -64,7 +64,7 @@ export function classifyPayloadLimitation(
     ) {
       return {
         reasonCode: "multipart-no-construction-evidence",
-        message: `Multipart form data payload cannot be fully statically inferred: ${payloadNode.text()}. Parameter is forwarded without discoverable FormData construction or append/set operations in the analyzed source scope.`,
+        message: `Multipart form data payload cannot be fully statically inferred: ${payloadNode.text()} without discoverable FormData construction or append/set operations, or in-workspace callers. Inspect the function consumers and where FormData is instantiated.`,
         evidenceDescription: `Multipart form data parameter without discoverable construction or operations`,
         evidenceReason: "dynamic-expression"
       };
@@ -95,7 +95,7 @@ export function classifyPayloadLimitation(
 
     return {
       reasonCode: "multipart-no-construction-evidence",
-      message: `Multipart form data payload cannot be fully statically inferred: ${payloadNode.text()}. Parameter is forwarded without discoverable FormData construction or append/set operations in the analyzed source scope.`,
+      message: `Multipart form data payload cannot be fully statically inferred: ${payloadNode.text()} without discoverable FormData construction or append/set operations, or in-workspace callers. Inspect the function consumers and where FormData is instantiated.`,
       evidenceDescription: `Multipart form data payload in API call: ${payloadNode.text()}`,
       evidenceReason: "dynamic-expression"
     };
@@ -115,8 +115,8 @@ export function classifyPayloadLimitation(
         if (typeText === "unknown") {
           return {
             reasonCode: "explicit-unknown-type",
-            message: `Request payload parameter '${identName}' is explicitly typed as 'unknown'. No statically usable object shape is available at this request site.`,
-            evidenceDescription: `Request payload parameter '${identName}' has explicit 'unknown' type annotation`,
+            message: `Request payload parameter '${identName}' is explicitly typed as 'unknown'. No statically usable object shape is available at this request site, and no in-workspace callers or schema annotations provide payload evidence. Inspect the function callers, provide a concrete type annotation, or define a schema.`,
+            evidenceDescription: `Explicit 'unknown' type annotation on parameter '${identName}' without in-workspace caller evidence`,
             evidenceReason: "unresolved-reference"
           };
         }

@@ -751,6 +751,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
   readonly [key: string]: unknown;
   readonly isLocalDeclarationIndex = true;
   private readonly documents = new Map<DocumentUri, SourceDocument>();
+  private readonly parsedDocuments = new Map<DocumentUri, ParsedDocument>();
   private readonly declarationsByDoc = new Map<DocumentUri, LocalDeclaration[]>();
   private readonly declarationsByName = new Map<string, LocalDeclaration[]>();
 
@@ -772,6 +773,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
     }
 
     this.documents.set(document.uri, document);
+    this.parsedDocuments.set(document.uri, parsed);
     const decls = indexLocalDeclarations(document, parsed);
     this.declarationsByDoc.set(document.uri, decls);
 
@@ -790,6 +792,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
    */
   removeDocument(uri: DocumentUri): void {
     this.documents.delete(uri);
+    this.parsedDocuments.delete(uri);
     const oldDecls = this.declarationsByDoc.get(uri);
     if (!oldDecls) {
       return;
@@ -817,10 +820,31 @@ export class LocalDeclarationIndex implements ProjectIndexView {
   }
 
   /**
+   * Retrieves all document URIs tracked in the index.
+   */
+  getAllTrackedUris(): readonly DocumentUri[] {
+    return [...this.documents.keys()];
+  }
+
+  /**
    * Retrieves an indexed source document snapshot by URI (ProjectIndexView requirement).
    */
   getDocument(uri: DocumentUri): SourceDocument | undefined {
     return this.documents.get(uri);
+  }
+
+  /**
+   * Retrieves a parsed document snapshot by URI.
+   */
+  getParsedDocument(uri: DocumentUri): ParsedDocument | undefined {
+    return this.parsedDocuments.get(uri);
+  }
+
+  /**
+   * Retrieves all parsed documents currently tracked in the index.
+   */
+  getAllParsedDocuments(): readonly ParsedDocument[] {
+    return [...this.parsedDocuments.values()];
   }
 
   /**

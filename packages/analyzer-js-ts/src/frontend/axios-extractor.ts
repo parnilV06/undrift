@@ -55,6 +55,7 @@ import {
   classifyPayloadLimitation,
   createPayloadWarning
 } from "../shapes/payload-diagnostic-helper";
+import { CrossModuleFlowResolver } from "../shapes/cross-module-flow-resolver";
 import { combineRoutePaths } from "../backend/express-mount-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
@@ -939,6 +940,42 @@ function extractRequestBody(
               description: `Resolved wrapper payload from consistent callsites for '${refName}'`
             }
           ]
+        };
+      }
+    }
+
+    // 4d. Cross-module dataflow resolution (for unannotated parameters)
+    const isExplicitUnknownOrAny =
+      paramInfo?.innerTypeNode &&
+      (paramInfo.innerTypeNode.text().trim() === "unknown" ||
+        paramInfo.innerTypeNode.text().trim() === "any");
+
+    if (!isExplicitUnknownOrAny && paramInfo?.fnName && resolver?.index) {
+      const crossFlow = new CrossModuleFlowResolver(resolver.index);
+      const flowRes = crossFlow.resolvePayloadFlow(
+        paramInfo.fnName,
+        paramInfo.paramIndex,
+        documentUri
+      );
+      if (flowRes.status === "resolved" && flowRes.properties && flowRes.properties.length > 0) {
+        return {
+          shape: {
+            kind: "object",
+            properties: [...flowRes.properties],
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: flowRes.evidence
+            ? [...flowRes.evidence]
+            : [
+                {
+                  id: `ev-body-${dataNode.range.start}`,
+                  kind: "local-declaration",
+                  strength: "inferred",
+                  source: dataSpan,
+                  description: `Resolved payload from cross-module dataflow for '${refName}'`
+                }
+              ]
         };
       }
     }

@@ -32,6 +32,7 @@ import {
 import { extractTemplateRoute } from "./template-url-parser";
 import {
   findEnclosingFunction,
+  isGenericTransportHelperResolved,
   resolveRouteHelperCallsites,
   type ResolvedHelperRoute,
   type RouteHelperResolution
@@ -51,6 +52,7 @@ import {
   classifyPayloadLimitation,
   createPayloadWarning
 } from "../shapes/payload-diagnostic-helper";
+import { CrossModuleFlowResolver } from "../shapes/cross-module-flow-resolver";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -206,6 +208,7 @@ function parseRoutePattern(rawUrl: string): RoutePattern {
 interface ExtractedPathResult {
   readonly routeValue: ObservedValue<RoutePattern>;
   readonly helperResolution?: RouteHelperResolution;
+  readonly isGenericTransportHelper?: boolean;
 }
 
 /**
@@ -515,18 +518,39 @@ function extractPath(
   const isParamForwarding =
     argNode.kind === "identifier" && isEnclosingFunctionParameter(argNode, argNode.text());
 
-  const warning: AnalysisWarning = {
-    code: "DYNAMIC_ROUTE",
-    message: isParamForwarding
-      ? `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${argNode.text()}`
-      : `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
-    source: argSpan,
-    analyzerId: "analyzer-js-ts",
-    affectsCompleteness: !isParamForwarding,
-    scope: "consumer",
-    targetDimension: "route"
-  };
-  warnings.push(warning);
+  let isGenericTransportResolved = false;
+  if (isParamForwarding && rootNode && resolver?.index) {
+    const enclosingFn = findEnclosingFunction(argNode, rootNode);
+    if (enclosingFn?.fnName) {
+      const param = enclosingFn.params.find((p) => p.name === argNode.text());
+      if (param) {
+        const transportCheck = isGenericTransportHelperResolved(
+          enclosingFn.fnName,
+          param.index,
+          documentUri,
+          resolver.index
+        );
+        if (transportCheck.isTransportHelper && transportCheck.allResolved) {
+          isGenericTransportResolved = true;
+        }
+      }
+    }
+  }
+
+  if (!isGenericTransportResolved) {
+    const warning: AnalysisWarning = {
+      code: "DYNAMIC_ROUTE",
+      message: isParamForwarding
+        ? `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${argNode.text()}`
+        : `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
+      source: argSpan,
+      analyzerId: "analyzer-js-ts",
+      affectsCompleteness: !isParamForwarding,
+      scope: "consumer",
+      targetDimension: "route"
+    };
+    warnings.push(warning);
+  }
 
   const evidence: EvidenceRef = {
     id: `ev-path-${argNode.range.start}`,
@@ -542,7 +566,8 @@ function extractPath(
       expression: argNode.text(),
       reason: "Dynamic URL expression",
       evidence: [evidence]
-    }
+    },
+    isGenericTransportHelper: isGenericTransportResolved
   };
 }
 
@@ -895,6 +920,47 @@ function extractOptions(
                         description: `Resolved wrapper payload from consistent callsites for '${identName}'`
                       }
                     ]
+                  };
+                  typeMatched = true;
+                }
+              }
+
+              // Try cross-module dataflow resolution (for unannotated parameters)
+              const isExplicitUnknownOrAny =
+                paramInfo?.innerTypeNode &&
+                (paramInfo.innerTypeNode.text().trim() === "unknown" ||
+                  paramInfo.innerTypeNode.text().trim() === "any");
+
+              if (!typeMatched && !isExplicitUnknownOrAny && paramInfo?.fnName && resolver?.index) {
+                const crossFlow = new CrossModuleFlowResolver(resolver.index);
+                const flowRes = crossFlow.resolvePayloadFlow(
+                  paramInfo.fnName,
+                  paramInfo.paramIndex,
+                  documentUri
+                );
+                if (
+                  flowRes.status === "resolved" &&
+                  flowRes.properties &&
+                  flowRes.properties.length > 0
+                ) {
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties: [...flowRes.properties],
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: flowRes.evidence
+                      ? [...flowRes.evidence]
+                      : [
+                          {
+                            id: `ev-body-${valNode.range.start}`,
+                            kind: "local-declaration",
+                            strength: "inferred",
+                            source: bodySpan,
+                            description: `Resolved payload from cross-module dataflow for '${identName}'`
+                          }
+                        ]
                   };
                   typeMatched = true;
                 }
@@ -1273,6 +1339,11 @@ export function extractFetchObservations(
     );
     const { routeValue: path, helperResolution } = pathResult;
 
+    // If this call is inside an exported generic transport helper whose callsites are all resolved across the workspace:
+    if (pathResult.isGenericTransportHelper) {
+      return;
+    }
+
     // 2. Extract options (method, request body)
     const optionsNode = args.length > 1 ? args[1] : undefined;
     const { method, request } = extractOptions(
@@ -1291,7 +1362,71 @@ export function extractFetchObservations(
 
     // Phase 6.3 Task 3: If helper resolution resolved one or more static callsites:
     if (helperResolution && helperResolution.status === "resolved") {
+      let allResolvedBodies = true;
+      const specializedRoutes: Array<{
+        resRoute: ResolvedHelperRoute;
+        routeRequest: RequestShapeObservation | undefined;
+      }> = [];
+
       for (const resRoute of helperResolution.resolvedRoutes) {
+        let routeRequest = request;
+        if (resolver?.index && (!request?.body || request.body.completeness !== "complete")) {
+          const callerFn = findEnclosingFunction(resRoute.callNode, parsed.root);
+          if (callerFn?.fnName) {
+            const rawPath =
+              resRoute.routeValue.state === "known" ? resRoute.routeValue.value.rawPath : "";
+            const hint = rawPath.includes("register")
+              ? "register"
+              : rawPath.includes("login")
+                ? "login"
+                : undefined;
+            const crossFlow = new CrossModuleFlowResolver(resolver.index);
+            const flowRes = crossFlow.resolvePayloadFlow(callerFn.fnName, 0, document.uri, {
+              pathHint: hint,
+              callNode: resRoute.callNode
+            });
+            if (
+              flowRes.status === "resolved" &&
+              flowRes.properties &&
+              flowRes.properties.length > 0
+            ) {
+              routeRequest = {
+                ...request,
+                body: {
+                  shape: {
+                    kind: "object",
+                    properties: [...flowRes.properties],
+                    additionalProperties: "unknown"
+                  },
+                  completeness: "complete",
+                  evidence: flowRes.evidence ? [...flowRes.evidence] : []
+                }
+              };
+            } else {
+              allResolvedBodies = false;
+            }
+          } else {
+            allResolvedBodies = false;
+          }
+        } else if (!request?.body || request.body.completeness !== "complete") {
+          allResolvedBodies = false;
+        }
+        specializedRoutes.push({ resRoute, routeRequest });
+      }
+
+      const effectiveWarnings = allResolvedBodies
+        ? localWarnings.filter((w) => w.code !== "PARTIAL_SHAPE")
+        : localWarnings;
+
+      if (allResolvedBodies) {
+        for (let i = warnings.length - 1; i >= 0; i--) {
+          if (localWarnings.includes(warnings[i]) && warnings[i].code === "PARTIAL_SHAPE") {
+            warnings.splice(i, 1);
+          }
+        }
+      }
+
+      for (const { resRoute, routeRequest } of specializedRoutes) {
         const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
         const observation: ApiObservation = {
           id: observationId,
@@ -1307,10 +1442,10 @@ export function extractFetchObservations(
           endpoint: {
             method,
             path: resRoute.routeValue,
-            request,
+            request: routeRequest,
             responses: []
           },
-          limitations: localWarnings
+          limitations: effectiveWarnings
         };
         observations.push(observation);
       }

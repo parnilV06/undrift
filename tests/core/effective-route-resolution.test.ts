@@ -689,12 +689,11 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(consumer).toBeDefined();
       expect(consumer?.endpoint.method.value).toBe("POST");
 
-      // Parameter forwarding warning in client.ts must be advisory
+      // Generic transport helper parameter resolved across workspace without spurious dynamic route warning
       const paramWarn = result.warnings.find(
         (w) => w.code === "DYNAMIC_ROUTE" && w.source.uri.includes("client.ts")
       );
-      expect(paramWarn).toBeDefined();
-      expect(paramWarn?.affectsCompleteness).toBe(false);
+      expect(paramWarn).toBeUndefined();
 
       // Verify exact match with Next.js App Router POST /api/auth/login
       const exactRel = result.relationships.find(

@@ -364,14 +364,16 @@ export class ExpressMountRegistry {
    * and computing effective composite mount prefixes (resolving nested mounts).
    */
   public static build(
-    entries: Array<{ document: SourceDocument; parsed: ParsedDocument }>
+    entries: Array<{ document: SourceDocument; parsed: ParsedDocument }> | readonly ParsedDocument[]
   ): ExpressMountRegistry {
     const registry = new ExpressMountRegistry();
-    const docUris = entries.map((e) => e.document.uri);
+    const docUris = entries.map((e) => ("document" in e ? e.document.uri : e.source.uri));
     const allMounts: ExpressMountInfo[] = [];
 
     for (const entry of entries) {
-      const mounts = discoverExpressMounts(entry.document, entry.parsed, docUris);
+      const doc = "document" in entry ? entry.document : entry.source;
+      const parsed = "parsed" in entry ? entry.parsed : entry;
+      const mounts = discoverExpressMounts(doc, parsed, docUris);
       allMounts.push(...mounts);
     }
 

@@ -163,6 +163,8 @@ export function generateNonce(): string {
  */
 export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()): string {
   const activeFindings = model.findings.filter((f) => f.state !== "resolved");
+  const activeDriftFindings = activeFindings.filter((f) => f.ruleId !== "UND110");
+  const unmappedProviderFindings = activeFindings.filter((f) => f.ruleId === "UND110");
   const errorCount = activeFindings.filter((f) => f.severity === "error").length;
   const warningCount = activeFindings.filter((f) => f.severity === "warning").length;
   const infoCount = activeFindings.filter((f) => f.severity === "info").length;
@@ -944,13 +946,38 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
   }
 
   ${
-    activeFindings.length > 0
+    activeDriftFindings.length > 0
       ? `
   <div class="section-title">
-    <span>Detected Drift Findings (${activeFindings.length})</span>
+    <span>Detected Drift Findings (${activeDriftFindings.length})</span>
   </div>
   <div class="findings-list">
-    ${activeFindings
+    ${activeDriftFindings
+      .map((finding) =>
+        renderFindingCard(
+          finding,
+          historyByFinding.get(finding.id) ?? [],
+          model.targetFindingId === finding.id,
+          model.proposalsByFinding?.get(finding.id) ?? [],
+          model.targetProposalId
+        )
+      )
+      .join("")}
+  </div>`
+      : ""
+  }
+
+  ${
+    unmappedProviderFindings.length > 0
+      ? `
+  <div class="section-title">
+    <span>Unmapped Provider Endpoints (${unmappedProviderFindings.length})</span>
+  </div>
+  <div style="margin-bottom: 12px; font-size: 13px; color: var(--vscode-descriptionForeground);">
+    These backend endpoints have no known in-workspace consumer. External consumers, dynamic callers, generated clients, or third parties may consume them.
+  </div>
+  <div class="findings-list">
+    ${unmappedProviderFindings
       .map((finding) =>
         renderFindingCard(
           finding,

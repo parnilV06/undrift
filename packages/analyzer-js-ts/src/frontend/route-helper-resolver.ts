@@ -12,6 +12,11 @@ import type {
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
 import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
+import type {
+  LocalDeclarationIndex,
+  LocalVariableDeclaration
+} from "../project-index/local-declaration-index";
+import { matchesModuleSpecifier } from "../shapes/cross-module-flow-resolver";
 
 export interface EnclosingParameterInfo {
   readonly name: string;
@@ -517,4 +522,105 @@ export function resolveRouteHelperCallsites(
     resolvedCallsites,
     dynamicCallsites
   };
+}
+
+export interface GenericTransportCheckResult {
+  readonly isTransportHelper: boolean;
+  readonly allResolved: boolean;
+  readonly resolvedCount: number;
+  readonly dynamicCount: number;
+}
+
+/**
+ * Checks whether an exported generic transport function (such as `request(url, options)`)
+ * forwards a dynamic URL parameter whose callers across the workspace provide concrete endpoints.
+ */
+export function isGenericTransportHelperResolved(
+  fnName: string,
+  paramIndex: number,
+  declDocUri: DocumentUri,
+  index?: LocalDeclarationIndex
+): GenericTransportCheckResult {
+  if (!index) {
+    return { isTransportHelper: false, allResolved: false, resolvedCount: 0, dynamicCount: 0 };
+  }
+
+  const allDecls = index.lookupSymbols(fnName);
+  const imports = allDecls.filter(
+    (d) =>
+      d.kind === "import" && matchesModuleSpecifier(d.documentUri, d.moduleSpecifier, declDocUri)
+  );
+
+  if (imports.length === 0) {
+    return { isTransportHelper: false, allResolved: false, resolvedCount: 0, dynamicCount: 0 };
+  }
+
+  let totalCalls = 0;
+  let dynamicCalls = 0;
+  let resolvedCalls = 0;
+
+  for (const imp of imports) {
+    const parsed = index.getParsedDocument(imp.documentUri);
+    if (!parsed) continue;
+
+    const localIndex = index;
+    function walk(n: SyntaxNode) {
+      if (n.kind === "call_expression") {
+        const callee = n.childForField("function");
+        if (callee?.kind === "identifier" && callee.text() === imp.name) {
+          totalCalls++;
+          const args = n.childForField("arguments")?.namedChildren() ?? [];
+          if (paramIndex < args.length) {
+            const arg = args[paramIndex];
+            let isStatic = false;
+            if (arg.kind === "string") {
+              isStatic = true;
+            } else if (arg.kind === "binary_expression") {
+              const left = arg.childForField("left");
+              if (left?.kind === "string") {
+                isStatic = true;
+              }
+            } else if (arg.kind === "template_string") {
+              isStatic = true;
+            } else if (arg.kind === "identifier") {
+              const localDecls = localIndex.getDeclarationsForDocument(imp.documentUri);
+              const varDecl = localDecls.find(
+                (d): d is LocalVariableDeclaration => d.kind === "variable" && d.name === arg.text()
+              );
+              if (varDecl?.initializerText && /^['"`]\//.test(varDecl.initializerText.trim())) {
+                isStatic = true;
+              }
+            }
+            if (isStatic) {
+              resolvedCalls++;
+            } else {
+              dynamicCalls++;
+            }
+          } else {
+            dynamicCalls++;
+          }
+        }
+      }
+      for (const c of n.namedChildren()) walk(c);
+    }
+    walk(parsed.root);
+  }
+
+  if (totalCalls > 0 && dynamicCalls === 0) {
+    return {
+      isTransportHelper: true,
+      allResolved: true,
+      resolvedCount: resolvedCalls,
+      dynamicCount: 0
+    };
+  }
+  if (totalCalls > 0 && dynamicCalls > 0) {
+    return {
+      isTransportHelper: true,
+      allResolved: false,
+      resolvedCount: resolvedCalls,
+      dynamicCount: dynamicCalls
+    };
+  }
+  return { isTransportHelper: false, allResolved: false, resolvedCount: 0, dynamicCount: 0 };
 }
