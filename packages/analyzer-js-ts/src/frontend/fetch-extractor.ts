@@ -37,14 +37,20 @@ import {
   type RouteHelperResolution
 } from "./route-helper-resolver";
 import {
+  analyzeFormData,
   analyzeWrapperCallsites,
   extractFormDataFields,
   extractObjectFields,
   extractTypeFields,
   findEnclosingParameter,
   isFormDataNode,
-  isMultipartHeaders
+  isMultipartHeaders,
+  type WrapperCallsitesResult
 } from "../shapes/shape-extractor";
+import {
+  classifyPayloadLimitation,
+  createPayloadWarning
+} from "../shapes/payload-diagnostic-helper";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -862,8 +868,9 @@ function extractOptions(
               }
 
               // Try wrapper callsites
+              let callRes: WrapperCallsitesResult | undefined;
               if (!typeMatched && paramInfo?.fnName && parsed) {
-                const callRes = analyzeWrapperCallsites(
+                callRes = analyzeWrapperCallsites(
                   parsed.root,
                   paramInfo.fnName,
                   paramInfo.paramIndex,
@@ -896,19 +903,15 @@ function extractOptions(
               if (!typeMatched) {
                 const isMultipart =
                   isMultipartHint || isFormDataNode(jsonArgs[0], resolver, documentUri);
-                const warningMsg = isMultipart
-                  ? `Multipart form data payload cannot be fully statically inferred: ${valNode.text()}`
-                  : `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`;
-
-                const warning: AnalysisWarning = {
-                  code: "PARTIAL_SHAPE",
-                  message: warningMsg,
-                  source: bodySpan,
-                  analyzerId: "analyzer-js-ts",
-                  affectsCompleteness: false,
-                  scope: "consumer",
-                  targetDimension: "request-shape"
-                };
+                const limitation = classifyPayloadLimitation(jsonArgs[0], {
+                  isMultipart,
+                  parsed,
+                  documentUri,
+                  mapper,
+                  resolver,
+                  wrapperCallsites: callRes
+                });
+                const warning = createPayloadWarning(limitation, bodySpan);
                 warnings.push(warning);
 
                 const evidence: EvidenceRef = {
@@ -916,15 +919,13 @@ function extractOptions(
                   kind: "literal-syntax",
                   strength: "inferred",
                   source: bodySpan,
-                  description: isMultipart
-                    ? `Multipart form data payload in fetch call`
-                    : "Unresolved payload expression in JSON.stringify body"
+                  description: limitation.evidenceDescription
                 };
 
                 bodyShape = {
                   shape: {
                     kind: "unknown",
-                    reason: isMultipart ? "dynamic-expression" : "unresolved-reference"
+                    reason: limitation.evidenceReason
                   },
                   completeness: "partial",
                   evidence: [evidence]
@@ -932,15 +933,15 @@ function extractOptions(
               }
             }
           } else {
-            const warning: AnalysisWarning = {
-              code: "PARTIAL_SHAPE",
-              message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
-              source: bodySpan,
-              analyzerId: "analyzer-js-ts",
-              affectsCompleteness: false,
-              scope: "consumer",
-              targetDimension: "request-shape"
-            };
+            const argNode = jsonArgs[0] ?? valNode;
+            const limitation = classifyPayloadLimitation(argNode, {
+              isMultipart: isMultipartHint || isFormDataNode(argNode, resolver, documentUri),
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
             warnings.push(warning);
 
             const evidence: EvidenceRef = {
@@ -948,13 +949,13 @@ function extractOptions(
               kind: "literal-syntax",
               strength: "inferred",
               source: bodySpan,
-              description: "Unresolved payload expression in JSON.stringify body"
+              description: limitation.evidenceDescription
             };
 
             bodyShape = {
               shape: {
                 kind: "unknown",
-                reason: "unresolved-reference"
+                reason: limitation.evidenceReason
               },
               completeness: "partial",
               evidence: [evidence]
@@ -1015,33 +1016,49 @@ function extractOptions(
               ? findEnclosingParameter(valNode, valNode.text())
               : undefined;
           const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? valNode;
-          const formFields = extractFormDataFields(
-            searchScope,
-            valNode.text(),
-            documentUri,
-            mapper
-          );
+          const formAnalysis = analyzeFormData(searchScope, valNode.text(), documentUri, mapper);
 
-          if (formFields.length > 0) {
+          if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {
             bodyShape = {
               shape: {
                 kind: "object",
-                properties: formFields,
+                properties: formAnalysis.fields,
                 additionalProperties: "unknown"
               },
               completeness: "complete",
-              evidence: formFields.flatMap((f) => f.evidence)
+              evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+            };
+          } else if (formAnalysis.fields.length > 0 && formAnalysis.hasDynamicAppends) {
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: true,
+              formDataAnalysis: formAnalysis,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
+            warnings.push(warning);
+
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: formAnalysis.fields,
+                additionalProperties: "unknown"
+              },
+              completeness: "partial",
+              evidence: formAnalysis.fields.flatMap((f) => f.evidence)
             };
           } else {
-            const warning: AnalysisWarning = {
-              code: "PARTIAL_SHAPE",
-              message: `Multipart form data payload cannot be fully statically inferred: ${valNode.text()}`,
-              source: bodySpan,
-              analyzerId: "analyzer-js-ts",
-              affectsCompleteness: false,
-              scope: "consumer",
-              targetDimension: "request-shape"
-            };
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: true,
+              formDataAnalysis: formAnalysis,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
             warnings.push(warning);
 
             const evidence: EvidenceRef = {
@@ -1049,13 +1066,13 @@ function extractOptions(
               kind: "literal-syntax",
               strength: "inferred",
               source: bodySpan,
-              description: `Multipart form data payload in fetch call: ${valNode.text()}`
+              description: limitation.evidenceDescription
             };
 
             bodyShape = {
               shape: {
                 kind: "unknown",
-                reason: "dynamic-expression"
+                reason: limitation.evidenceReason
               },
               completeness: "partial",
               evidence: [evidence]
@@ -1085,15 +1102,14 @@ function extractOptions(
               evidence: resolved.evidence
             };
           } else {
-            const warning: AnalysisWarning = {
-              code: "PARTIAL_SHAPE",
-              message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
-              source: bodySpan,
-              analyzerId: "analyzer-js-ts",
-              affectsCompleteness: false,
-              scope: "consumer",
-              targetDimension: "request-shape"
-            };
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: false,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
             warnings.push(warning);
 
             const evidence: EvidenceRef = {
@@ -1101,28 +1117,27 @@ function extractOptions(
               kind: "literal-syntax",
               strength: "inferred",
               source: bodySpan,
-              description: "Unsupported request body expression"
+              description: limitation.evidenceDescription
             };
 
             bodyShape = {
               shape: {
                 kind: "unknown",
-                reason: "unsupported-syntax"
+                reason: limitation.evidenceReason
               },
               completeness: "partial",
               evidence: [evidence]
             };
           }
         } else {
-          const warning: AnalysisWarning = {
-            code: "PARTIAL_SHAPE",
-            message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
-            source: bodySpan,
-            analyzerId: "analyzer-js-ts",
-            affectsCompleteness: false,
-            scope: "consumer",
-            targetDimension: "request-shape"
-          };
+          const limitation = classifyPayloadLimitation(valNode, {
+            isMultipart: false,
+            parsed,
+            documentUri,
+            mapper,
+            resolver
+          });
+          const warning = createPayloadWarning(limitation, bodySpan);
           warnings.push(warning);
 
           const evidence: EvidenceRef = {
@@ -1130,13 +1145,13 @@ function extractOptions(
             kind: "literal-syntax",
             strength: "inferred",
             source: bodySpan,
-            description: "Unsupported request body expression"
+            description: limitation.evidenceDescription
           };
 
           bodyShape = {
             shape: {
               kind: "unknown",
-              reason: "unsupported-syntax"
+              reason: limitation.evidenceReason
             },
             completeness: "partial",
             evidence: [evidence]

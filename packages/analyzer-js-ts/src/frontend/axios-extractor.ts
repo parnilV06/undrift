@@ -40,6 +40,7 @@ import {
   type RouteHelperResolution
 } from "./route-helper-resolver";
 import {
+  analyzeFormData,
   analyzeWrapperCallsites,
   extractFormDataFields,
   extractObjectFields,
@@ -47,8 +48,13 @@ import {
   findEnclosingParameter,
   isFormDataNode,
   isMultipartHeaders,
-  parseTypeNode
+  parseTypeNode,
+  type WrapperCallsitesResult
 } from "../shapes/shape-extractor";
+import {
+  classifyPayloadLimitation,
+  createPayloadWarning
+} from "../shapes/payload-diagnostic-helper";
 import { combineRoutePaths } from "../backend/express-mount-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
@@ -762,29 +768,52 @@ function extractRequestBody(
   if (isMultipart) {
     const enclosingParam = findEnclosingParameter(dataNode, dataNode.text());
     const searchScope = enclosingParam?.fnNode ?? parsed?.root ?? dataNode;
-    const formFields = extractFormDataFields(searchScope, dataNode.text(), documentUri, mapper);
+    const formAnalysis = analyzeFormData(searchScope, dataNode.text(), documentUri, mapper);
 
-    if (formFields.length > 0) {
+    if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {
       return {
         shape: {
           kind: "object",
-          properties: formFields,
+          properties: formAnalysis.fields,
           additionalProperties: "unknown"
         },
         completeness: "complete",
-        evidence: formFields.flatMap((f) => f.evidence)
+        evidence: formAnalysis.fields.flatMap((f) => f.evidence)
       };
     }
 
-    const warning: AnalysisWarning = {
-      code: "PARTIAL_SHAPE",
-      message: `Multipart form data payload cannot be fully statically inferred: ${dataNode.text()}`,
-      source: dataSpan,
-      analyzerId: "analyzer-js-ts",
-      scope: "consumer",
-      targetDimension: "request-shape",
-      affectsCompleteness: false
-    };
+    if (formAnalysis.fields.length > 0 && formAnalysis.hasDynamicAppends) {
+      const limitation = classifyPayloadLimitation(dataNode, {
+        isMultipart: true,
+        formDataAnalysis: formAnalysis,
+        parsed,
+        documentUri,
+        mapper,
+        resolver
+      });
+      const warning = createPayloadWarning(limitation, dataSpan);
+      warnings.push(warning);
+
+      return {
+        shape: {
+          kind: "object",
+          properties: formAnalysis.fields,
+          additionalProperties: "unknown"
+        },
+        completeness: "partial",
+        evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+      };
+    }
+
+    const limitation = classifyPayloadLimitation(dataNode, {
+      isMultipart: true,
+      formDataAnalysis: formAnalysis,
+      parsed,
+      documentUri,
+      mapper,
+      resolver
+    });
+    const warning = createPayloadWarning(limitation, dataSpan);
     warnings.push(warning);
 
     const evidence: EvidenceRef = {
@@ -792,13 +821,13 @@ function extractRequestBody(
       kind: "literal-syntax",
       strength: "inferred",
       source: dataSpan,
-      description: `Multipart form data payload expression in Axios call: ${dataNode.text()}`
+      description: limitation.evidenceDescription
     };
 
     return {
       shape: {
         kind: "unknown",
-        reason: "dynamic-expression"
+        reason: limitation.evidenceReason
       },
       completeness: "partial",
       evidence: [evidence]
@@ -865,8 +894,9 @@ function extractRequestBody(
     }
 
     // 4c. Local API wrapper callsites
+    let callRes: WrapperCallsitesResult | undefined;
     if (paramInfo?.fnName && parsed) {
-      const callRes = analyzeWrapperCallsites(
+      callRes = analyzeWrapperCallsites(
         parsed.root,
         paramInfo.fnName,
         paramInfo.paramIndex,
@@ -897,15 +927,14 @@ function extractRequestBody(
   }
 
   // 5. Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
-  const warning: AnalysisWarning = {
-    code: "PARTIAL_SHAPE",
-    message: `Unresolved request payload expression in Axios call: ${dataNode.text()}`,
-    source: dataSpan,
-    analyzerId: "analyzer-js-ts",
-    scope: "consumer",
-    targetDimension: "request-shape",
-    affectsCompleteness: false
-  };
+  const limitation = classifyPayloadLimitation(dataNode, {
+    isMultipart: false,
+    parsed,
+    documentUri,
+    mapper,
+    resolver
+  });
+  const warning = createPayloadWarning(limitation, dataSpan);
   warnings.push(warning);
 
   const evidence: EvidenceRef = {
@@ -913,13 +942,13 @@ function extractRequestBody(
     kind: "literal-syntax",
     strength: "inferred",
     source: dataSpan,
-    description: "Unresolved payload expression in Axios call"
+    description: limitation.evidenceDescription
   };
 
   return {
     shape: {
       kind: "unknown",
-      reason: "unresolved-reference"
+      reason: limitation.evidenceReason
     },
     completeness: "partial",
     evidence: [evidence]

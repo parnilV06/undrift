@@ -929,7 +929,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         .map(
           (w) => `
         <tr>
-          <td><code>${escapeHtml(w.code)}</code></td>
+          <td><code>${escapeHtml(w.code)}</code>${w.reasonCode ? `<br/><span style="font-size: 11px; opacity: 0.8;"><code>${escapeHtml(w.reasonCode)}</code></span>` : ""}</td>
           <td>${escapeHtml(w.message)}</td>
           <td>${w.source ? `<code>${escapeHtml(w.source.uri)}:${w.source.start ? w.source.start.line + 1 : 1}:${w.source.start ? w.source.start.character + 1 : 1}</code>` : "—"}</td>
           <td><code>${escapeHtml(w.scope ?? "workspace")}</code></td>
@@ -1267,7 +1267,7 @@ function renderFindingCard(
     <div class="finding-explanation" style="border-left-color: var(--color-warning);">
       <strong>Known Limitations:</strong>
       <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-        ${finding.limitations.map((lim) => `<li>[${escapeHtml(lim.code)}] ${escapeHtml(lim.message)}</li>`).join("")}
+        ${finding.limitations.map((lim) => `<li>[${escapeHtml(lim.code)}${lim.reasonCode ? ` / ${escapeHtml(lim.reasonCode)}` : ""}] ${escapeHtml(lim.message)}</li>`).join("")}
       </ul>
     </div>`
         : ""

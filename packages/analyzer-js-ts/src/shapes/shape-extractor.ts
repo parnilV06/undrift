@@ -370,20 +370,39 @@ export function extractTypeFields(
   return fields;
 }
 
+export interface FormDataAnalysisResult {
+  fields: FieldShape[];
+  hasConstruction: boolean;
+  hasAppends: boolean;
+  hasDynamicAppends: boolean;
+  dynamicAppendCount: number;
+}
+
 /**
- * Statically discovers .append(...) or .set(...) calls on a FormData variable
- * within an enclosing AST scope and extracts them into FieldShapes.
+ * Statically analyzes FormData usage within an enclosing AST scope, tracking
+ * literal field appends, dynamic operations, and FormData constructor calls.
  */
-export function extractFormDataFields(
+export function analyzeFormData(
   scopeNode: SyntaxNode,
   varName: string,
   documentUri: DocumentUri,
   mapper: PositionMapper
-): FieldShape[] {
+): FormDataAnalysisResult {
   const fields: FieldShape[] = [];
   const seenNames = new Set<string>();
+  let hasConstruction = false;
+  let hasAppends = false;
+  let hasDynamicAppends = false;
+  let dynamicAppendCount = 0;
 
   function walk(node: SyntaxNode) {
+    if (node.kind === "new_expression") {
+      const constructorNode = node.childForField("constructor") ?? node.namedChildren()[0];
+      if (constructorNode && constructorNode.text() === "FormData") {
+        hasConstruction = true;
+      }
+    }
+
     if (node.kind === "call_expression") {
       const fnNode = node.childForField("function") ?? node.namedChildren()[0];
       if (fnNode && fnNode.kind === "member_expression") {
@@ -398,52 +417,56 @@ export function extractFormDataFields(
             varName.toLowerCase() === "fd") &&
           (propNode.text() === "append" || propNode.text() === "set")
         ) {
+          hasAppends = true;
           const args = node.childForField("arguments")?.namedChildren() ?? [];
           if (args.length >= 1) {
             let fieldName: string | undefined;
             if (args[0].kind === "string") {
               fieldName = args[0].text().slice(1, -1);
-            } else if (args[0].kind === "identifier") {
-              fieldName = args[0].text();
             }
 
-            if (fieldName && !seenNames.has(fieldName)) {
-              seenNames.add(fieldName);
+            if (fieldName) {
+              if (!seenNames.has(fieldName)) {
+                seenNames.add(fieldName);
 
-              let fieldType: TypeShape = { kind: "unknown", reason: "dynamic-expression" };
-              if (args.length >= 2) {
-                const valArg = args[1];
-                if (valArg.kind === "string") {
-                  fieldType = { kind: "literal", value: valArg.text().slice(1, -1) };
-                } else if (valArg.kind === "number") {
-                  fieldType = { kind: "literal", value: Number(valArg.text()) };
-                } else if (valArg.kind === "true") {
-                  fieldType = { kind: "literal", value: true };
-                } else if (valArg.kind === "false") {
-                  fieldType = { kind: "literal", value: false };
+                let fieldType: TypeShape = { kind: "unknown", reason: "dynamic-expression" };
+                if (args.length >= 2) {
+                  const valArg = args[1];
+                  if (valArg.kind === "string") {
+                    fieldType = { kind: "literal", value: valArg.text().slice(1, -1) };
+                  } else if (valArg.kind === "number") {
+                    fieldType = { kind: "literal", value: Number(valArg.text()) };
+                  } else if (valArg.kind === "true") {
+                    fieldType = { kind: "literal", value: true };
+                  } else if (valArg.kind === "false") {
+                    fieldType = { kind: "literal", value: false };
+                  }
                 }
+
+                const span = mapper.toSourceSpanFromUtf16(
+                  node.range.start,
+                  node.range.end,
+                  documentUri
+                );
+                const evidence: EvidenceRef = {
+                  id: `ev-formdata-${node.range.start}`,
+                  kind: "literal-syntax",
+                  strength: "direct",
+                  source: span,
+                  description: `FormData field '${fieldName}' appended via ${propNode.text()}()`
+                };
+
+                fields.push({
+                  name: fieldName,
+                  type: fieldType,
+                  presence: "required",
+                  nullable: "no",
+                  evidence: [evidence]
+                });
               }
-
-              const span = mapper.toSourceSpanFromUtf16(
-                node.range.start,
-                node.range.end,
-                documentUri
-              );
-              const evidence: EvidenceRef = {
-                id: `ev-formdata-${node.range.start}`,
-                kind: "literal-syntax",
-                strength: "direct",
-                source: span,
-                description: `FormData field '${fieldName}' appended via ${propNode.text()}()`
-              };
-
-              fields.push({
-                name: fieldName,
-                type: fieldType,
-                presence: "required",
-                nullable: "no",
-                evidence: [evidence]
-              });
+            } else {
+              hasDynamicAppends = true;
+              dynamicAppendCount++;
             }
           }
         }
@@ -456,7 +479,27 @@ export function extractFormDataFields(
   }
 
   walk(scopeNode);
-  return fields;
+
+  return {
+    fields,
+    hasConstruction,
+    hasAppends,
+    hasDynamicAppends,
+    dynamicAppendCount
+  };
+}
+
+/**
+ * Statically discovers .append(...) or .set(...) calls on a FormData variable
+ * within an enclosing AST scope and extracts them into FieldShapes.
+ */
+export function extractFormDataFields(
+  scopeNode: SyntaxNode,
+  varName: string,
+  documentUri: DocumentUri,
+  mapper: PositionMapper
+): FieldShape[] {
+  return analyzeFormData(scopeNode, varName, documentUri, mapper).fields;
 }
 
 export interface EnclosingParameterInfo {
@@ -635,6 +678,7 @@ export interface WrapperCallsitesResult {
   status: "resolved" | "conflicting" | "dynamic" | "none";
   properties?: FieldShape[];
   evidence?: EvidenceRef[];
+  foundCallsites?: boolean;
 }
 
 /**
@@ -715,12 +759,12 @@ export function analyzeWrapperCallsites(
 
   walk(rootNode);
 
-  if (!foundCallsite || callsitesProperties.length === 0) {
-    return { status: "none" };
+  if (!foundCallsite) {
+    return { status: "none", foundCallsites: false };
   }
 
-  if (hasDynamic) {
-    return { status: "dynamic" };
+  if (hasDynamic || callsitesProperties.length === 0) {
+    return { status: "dynamic", foundCallsites: true };
   }
 
   const firstSet = callsitesProperties[0];

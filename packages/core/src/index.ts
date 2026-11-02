@@ -35,6 +35,7 @@ export type {
   WarningCode,
   WarningScope,
   WarningTargetDimension,
+  PartialShapeReasonCode,
   AnalysisWarning,
   FindingSeverity,
   FindingState,

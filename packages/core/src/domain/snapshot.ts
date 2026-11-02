@@ -217,7 +217,10 @@ function cloneAnalysisWarning(l: AnalysisWarning): AnalysisWarning {
     message: l.message,
     analyzerId: l.analyzerId,
     affectsCompleteness: l.affectsCompleteness,
-    source: l.source ? cloneSourceSpan(l.source) : undefined
+    source: l.source ? cloneSourceSpan(l.source) : undefined,
+    scope: l.scope,
+    targetDimension: l.targetDimension,
+    reasonCode: l.reasonCode
   };
 }
 
