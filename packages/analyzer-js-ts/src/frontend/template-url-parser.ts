@@ -14,10 +14,18 @@ import type {
 import { PositionMapper } from "@undrift/parser-tree-sitter";
 import type { LocalReferenceResolver } from "../project-index/local-reference-resolver";
 import type { LocalVariableDeclaration } from "../project-index/local-declaration-index";
+import {
+  findEnclosingFunction,
+  resolveRouteHelperCallsites,
+  type DynamicHelperRoute,
+  type ResolvedHelperRoute,
+  type RouteHelperResolution
+} from "./route-helper-resolver";
 
 export interface TemplateRouteExtraction {
   readonly routeValue: ObservedValue<RoutePattern>;
   readonly warning?: AnalysisWarning;
+  readonly helperResolution?: RouteHelperResolution;
 }
 
 /**
@@ -57,7 +65,8 @@ export function extractTemplateRoute(
   documentUri: DocumentUri,
   mapper: PositionMapper,
   frameworkName: "Axios" | "fetch",
-  resolver?: LocalReferenceResolver
+  resolver?: LocalReferenceResolver,
+  rootNode?: SyntaxNode
 ): TemplateRouteExtraction {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
   const rawText = argNode.text();
@@ -294,7 +303,234 @@ export function extractTemplateRoute(
         }
       }
 
-      // Conservative parameter segment representation
+      // Phase 6.3 Task 3: Check if identName is a formal parameter of an unexported local helper function
+      if (rootNode) {
+        const enclosingFn = findEnclosingFunction(argNode, rootNode);
+        const param = enclosingFn?.params.find((p) => p.name === identName);
+        if (enclosingFn && !enclosingFn.isExported && enclosingFn.fnName && param) {
+          const fnName = enclosingFn.fnName;
+          const fnNode = enclosingFn.fnNode;
+          const callsitesResult = resolveRouteHelperCallsites(
+            rootNode,
+            fnName,
+            param.index,
+            param.name,
+            fnNode,
+            documentUri,
+            mapper,
+            resolver
+          );
+
+          if (callsitesResult.status === "resolved") {
+            const resolvedRoutes: ResolvedHelperRoute[] = [];
+            for (const cs of callsitesResult.resolvedCallsites) {
+              const resolvedSegments = rawSegments.map((s) => (s === segText ? cs.staticValue : s));
+              const resolvedPathRaw = "/" + resolvedSegments.filter((s) => s.length > 0).join("/");
+              const routePattern = parseRawPathToPattern(resolvedPathRaw);
+
+              const evidence: EvidenceRef = {
+                id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+                kind: "local-declaration",
+                strength: "resolved",
+                source: cs.callSpan,
+                description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in ${frameworkName} call`
+              };
+
+              resolvedRoutes.push({
+                routeValue: {
+                  state: "known",
+                  value: routePattern,
+                  strength: "resolved",
+                  evidence: [evidence, ...cs.evidence]
+                },
+                callNode: cs.callNode,
+                callSpan: cs.callSpan,
+                staticValue: cs.staticValue
+              });
+            }
+
+            const firstRoute = resolvedRoutes[0].routeValue;
+            return {
+              routeValue: firstRoute,
+              helperResolution: {
+                status: "resolved",
+                resolvedRoutes,
+                dynamicRoutes: []
+              }
+            };
+          }
+
+          if (callsitesResult.status === "mixed") {
+            const resolvedRoutes: ResolvedHelperRoute[] = [];
+            for (const cs of callsitesResult.resolvedCallsites) {
+              const resolvedSegments = rawSegments.map((s) => (s === segText ? cs.staticValue : s));
+              const resolvedPathRaw = "/" + resolvedSegments.filter((s) => s.length > 0).join("/");
+              const routePattern = parseRawPathToPattern(resolvedPathRaw);
+
+              const evidence: EvidenceRef = {
+                id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+                kind: "local-declaration",
+                strength: "resolved",
+                source: cs.callSpan,
+                description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in ${frameworkName} call`
+              };
+
+              resolvedRoutes.push({
+                routeValue: {
+                  state: "known",
+                  value: routePattern,
+                  strength: "resolved",
+                  evidence: [evidence, ...cs.evidence]
+                },
+                callNode: cs.callNode,
+                callSpan: cs.callSpan,
+                staticValue: cs.staticValue
+              });
+            }
+
+            const dynamicRoutes: DynamicHelperRoute[] = [];
+            for (const dyn of callsitesResult.dynamicCallsites) {
+              const warn: AnalysisWarning = {
+                code: "DYNAMIC_ROUTE",
+                message: `Dynamic route argument in helper callsite to '${fnName}' cannot be statically resolved: ${dyn.expressionText}`,
+                source: dyn.callSpan,
+                analyzerId: "analyzer-js-ts",
+                scope: "consumer",
+                targetDimension: "route",
+                affectsCompleteness: true
+              };
+
+              dynamicRoutes.push({
+                routeValue: {
+                  state: "dynamic",
+                  expression: `${rawText} (via ${fnName}(${dyn.expressionText}))`,
+                  reason: `Dynamic route argument '${dyn.expressionText}' in helper callsite to '${fnName}'`,
+                  evidence: [
+                    {
+                      id: `ev-path-${argNode.range.start}-${dyn.callNode.range.start}`,
+                      kind: "literal-syntax",
+                      strength: "inferred",
+                      source: dyn.callSpan,
+                      description: `Dynamic route argument in helper callsite to '${fnName}'`
+                    }
+                  ]
+                },
+                warning: warn,
+                callNode: dyn.callNode,
+                callSpan: dyn.callSpan
+              });
+            }
+
+            const firstRoute =
+              resolvedRoutes.length > 0
+                ? resolvedRoutes[0].routeValue
+                : dynamicRoutes[0].routeValue;
+
+            return {
+              routeValue: firstRoute,
+              warning: dynamicRoutes[0]?.warning,
+              helperResolution: {
+                status: "mixed",
+                resolvedRoutes,
+                dynamicRoutes
+              }
+            };
+          }
+
+          if (callsitesResult.status === "no-callsites") {
+            const warning: AnalysisWarning = {
+              code: "DYNAMIC_ROUTE",
+              message: `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${identName}`,
+              source: argSpan,
+              analyzerId: "analyzer-js-ts",
+              scope: "consumer",
+              targetDimension: "route",
+              affectsCompleteness: false
+            };
+
+            return {
+              routeValue: {
+                state: "dynamic",
+                expression: rawText,
+                reason: `Dynamic URL parameter forwarded in helper function without discoverable callsites: ${identName}`,
+                evidence: [
+                  {
+                    id: `ev-path-${argNode.range.start}`,
+                    kind: "literal-syntax",
+                    strength: "inferred",
+                    source: argSpan,
+                    description: `Dynamic URL parameter forwarded in helper function`
+                  }
+                ]
+              },
+              warning,
+              helperResolution: {
+                status: "no-callsites",
+                resolvedRoutes: [],
+                dynamicRoutes: [
+                  {
+                    routeValue: {
+                      state: "dynamic",
+                      expression: rawText,
+                      reason: `Dynamic URL parameter forwarded in helper function without discoverable callsites: ${identName}`,
+                      evidence: []
+                    },
+                    warning
+                  }
+                ]
+              }
+            };
+          }
+
+          if (callsitesResult.status === "unresolved" || callsitesResult.status === "escaping") {
+            const warning: AnalysisWarning = {
+              code: "DYNAMIC_ROUTE",
+              message: `Dynamic URL parameter forwarded in helper function cannot be statically resolved: ${identName}`,
+              source: argSpan,
+              analyzerId: "analyzer-js-ts",
+              scope: "consumer",
+              targetDimension: "route",
+              affectsCompleteness: true
+            };
+
+            return {
+              routeValue: {
+                state: "dynamic",
+                expression: rawText,
+                reason: `Dynamic URL parameter in helper function cannot be statically resolved: ${identName}`,
+                evidence: [
+                  {
+                    id: `ev-path-${argNode.range.start}`,
+                    kind: "literal-syntax",
+                    strength: "inferred",
+                    source: argSpan,
+                    description: `Dynamic URL parameter forwarded in helper function`
+                  }
+                ]
+              },
+              warning,
+              helperResolution: {
+                status: callsitesResult.status,
+                resolvedRoutes: [],
+                dynamicRoutes: [
+                  {
+                    routeValue: {
+                      state: "dynamic",
+                      expression: rawText,
+                      reason: `Dynamic URL parameter in helper function cannot be statically resolved: ${identName}`,
+                      evidence: []
+                    },
+                    warning
+                  }
+                ]
+              }
+            };
+          }
+        }
+      }
+
+      // If not an unexported helper parameter (e.g. exported client method like export function getPost(id)),
+      // retain standard parameter segment representation:
       segments.push({ kind: "parameter", name: identName });
       continue;
     }

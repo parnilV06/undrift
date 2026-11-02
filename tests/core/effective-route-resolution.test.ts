@@ -319,7 +319,7 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(reportObs?.endpoint.path.state).toBe("known");
     });
 
-    it("extracts path parameter from template with base URL (${API_BASE_URL}/api/users/${path})", async () => {
+    it("handles unexported helper without callsites conservatively without fabricating parameter (Expense Tracker pattern)", async () => {
       const clientDoc = makeDoc(
         "file:///client/services/usersApi.js",
         `
@@ -337,17 +337,14 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       const parsed = await parser.parse({ document: clientDoc });
       const result = extractFetchObservations(clientDoc, parsed);
 
-      expect(result.warnings.filter((w) => w.code === "DYNAMIC_ROUTE")).toHaveLength(0);
+      const dynamicRouteWarnings = result.warnings.filter((w) => w.code === "DYNAMIC_ROUTE");
+      expect(dynamicRouteWarnings).toHaveLength(1);
+      expect(dynamicRouteWarnings[0].affectsCompleteness).toBe(false);
       expect(result.observations).toHaveLength(1);
 
       const userObs = result.observations[0];
-      expect(userObs.endpoint.path.state).toBe("known");
-      expect(userObs.endpoint.path.value?.rawPath).toBe("/api/users/:path");
-      expect(userObs.endpoint.path.value?.segments).toEqual([
-        { kind: "static", value: "api" },
-        { kind: "static", value: "users" },
-        { kind: "parameter", name: "path" }
-      ]);
+      expect(userObs.endpoint.path.state).toBe("dynamic");
+      expect(userObs.endpoint.path.value).toBeUndefined();
     });
 
     it("correctly handles URL origin stripping with constant base URL", async () => {

@@ -31,6 +31,12 @@ import {
 } from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
 import {
+  findEnclosingFunction,
+  resolveRouteHelperCallsites,
+  type ResolvedHelperRoute,
+  type RouteHelperResolution
+} from "./route-helper-resolver";
+import {
   analyzeWrapperCallsites,
   extractFormDataFields,
   extractObjectFields,
@@ -191,6 +197,11 @@ function parseRoutePattern(rawUrl: string): RoutePattern {
   };
 }
 
+interface ExtractedPathResult {
+  readonly routeValue: ObservedValue<RoutePattern>;
+  readonly helperResolution?: RouteHelperResolution;
+}
+
 /**
  * Extracts the URL path ObservedValue from the first argument of fetch().
  */
@@ -199,8 +210,9 @@ function extractPath(
   documentUri: DocumentUri,
   mapper: PositionMapper,
   warnings: AnalysisWarning[],
-  resolver?: LocalReferenceResolver
-): ObservedValue<RoutePattern> {
+  resolver?: LocalReferenceResolver,
+  rootNode?: SyntaxNode
+): ExtractedPathResult {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
 
   // 1. Literal string e.g. "/api/users" or '/api/users'
@@ -218,20 +230,32 @@ function extractPath(
     };
 
     return {
-      state: "known",
-      value: routePattern,
-      strength: "direct",
-      evidence: [evidence]
+      routeValue: {
+        state: "known",
+        value: routePattern,
+        strength: "direct",
+        evidence: [evidence]
+      }
     };
   }
 
   // 2. Template string literal (supports static, dynamic query, and parameter interpolations)
   if (argNode.kind === "template_string") {
-    const extraction = extractTemplateRoute(argNode, documentUri, mapper, "fetch", resolver);
+    const extraction = extractTemplateRoute(
+      argNode,
+      documentUri,
+      mapper,
+      "fetch",
+      resolver,
+      rootNode
+    );
     if (extraction.warning) {
       warnings.push(extraction.warning);
     }
-    return extraction.routeValue;
+    return {
+      routeValue: extraction.routeValue,
+      helperResolution: extraction.helperResolution
+    };
   }
 
   // 3. Local constant resolution via resolver for identifier expressions
@@ -242,10 +266,12 @@ function extractPath(
       if (typeof result.value === "string") {
         const routePattern = parseRoutePattern(result.value);
         return {
-          state: "known",
-          value: routePattern,
-          strength: "resolved",
-          evidence: result.evidence
+          routeValue: {
+            state: "known",
+            value: routePattern,
+            strength: "resolved",
+            evidence: result.evidence
+          }
         };
       }
 
@@ -262,10 +288,12 @@ function extractPath(
       warnings.push(warning);
 
       return {
-        state: "dynamic",
-        expression: refName,
-        reason: `Constant '${refName}' resolved to non-string value`,
-        evidence: result.evidence
+        routeValue: {
+          state: "dynamic",
+          expression: refName,
+          reason: `Constant '${refName}' resolved to non-string value`,
+          evidence: result.evidence
+        }
       };
     }
 
@@ -308,13 +336,70 @@ function extractPath(
             };
 
             return {
-              state: "known",
-              value: routePattern,
-              strength: "resolved",
-              evidence: [evidence, varDecl.evidence]
+              routeValue: {
+                state: "known",
+                value: routePattern,
+                strength: "resolved",
+                evidence: [evidence, varDecl.evidence]
+              }
             };
           }
         }
+      }
+    }
+  }
+
+  // Phase 6.3 Task 3: Bounded callsite resolution for direct parameter forwarding e.g. fetch(url) or fetch(path)
+  if (argNode.kind === "identifier" && rootNode) {
+    const enclosingFn = findEnclosingFunction(argNode, rootNode);
+    const param = enclosingFn?.params.find((p) => p.name === argNode.text());
+    if (enclosingFn && !enclosingFn.isExported && enclosingFn.fnName && param) {
+      const fnName = enclosingFn.fnName;
+      const fnNode = enclosingFn.fnNode;
+      const callsitesResult = resolveRouteHelperCallsites(
+        rootNode,
+        fnName,
+        param.index,
+        param.name,
+        fnNode,
+        documentUri,
+        mapper,
+        resolver
+      );
+
+      if (callsitesResult.status === "resolved") {
+        const resolvedRoutes: ResolvedHelperRoute[] = [];
+        for (const cs of callsitesResult.resolvedCallsites) {
+          const routePattern = parseRoutePattern(cs.staticValue);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+            kind: "local-declaration",
+            strength: "resolved",
+            source: cs.callSpan,
+            description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in fetch call`
+          };
+
+          resolvedRoutes.push({
+            routeValue: {
+              state: "known",
+              value: routePattern,
+              strength: "resolved",
+              evidence: [evidence, ...cs.evidence]
+            },
+            callNode: cs.callNode,
+            callSpan: cs.callSpan,
+            staticValue: cs.staticValue
+          });
+        }
+
+        return {
+          routeValue: resolvedRoutes[0].routeValue,
+          helperResolution: {
+            status: "resolved",
+            resolvedRoutes,
+            dynamicRoutes: []
+          }
+        };
       }
     }
   }
@@ -345,10 +430,12 @@ function extractPath(
   };
 
   return {
-    state: "dynamic",
-    expression: argNode.text(),
-    reason: "Dynamic URL expression",
-    evidence: [evidence]
+    routeValue: {
+      state: "dynamic",
+      expression: argNode.text(),
+      reason: "Dynamic URL expression",
+      evidence: [evidence]
+    }
   };
 }
 
@@ -1042,7 +1129,15 @@ export function extractFetchObservations(
     const localWarnings: AnalysisWarning[] = [];
 
     // 1. Extract URL path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
+    const pathResult = extractPath(
+      args[0],
+      document.uri,
+      mapper,
+      localWarnings,
+      resolver,
+      parsed.root
+    );
+    const { routeValue: path, helperResolution } = pathResult;
 
     // 2. Extract options (method, request body)
     const optionsNode = args.length > 1 ? args[1] : undefined;
@@ -1060,7 +1155,90 @@ export function extractFetchObservations(
     // Collect local warnings to document warnings
     warnings.push(...localWarnings);
 
-    // 3. Build ApiObservation
+    // Phase 6.3 Task 3: If helper resolution resolved one or more static callsites:
+    if (helperResolution && helperResolution.status === "resolved") {
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: resRoute.routeValue,
+            request,
+            responses: []
+          },
+          limitations: localWarnings
+        };
+        observations.push(observation);
+      }
+      return;
+    }
+
+    if (helperResolution && helperResolution.status === "mixed") {
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: resRoute.routeValue,
+            request,
+            responses: []
+          },
+          limitations: localWarnings
+        };
+        observations.push(observation);
+      }
+
+      for (const dynRoute of helperResolution.dynamicRoutes) {
+        const dynCallSpan = dynRoute.callSpan ?? callSpan;
+        const dynId: ObservationId = dynRoute.callNode
+          ? `obs:${document.uri}:${dynRoute.callNode.range.start}-${dynRoute.callNode.range.end}`
+          : `obs:${document.uri}:${node.range.start}-${node.range.end}`;
+        const dynObs: ApiObservation = {
+          id: dynId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [dynCallSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: dynRoute.routeValue,
+            request,
+            responses: []
+          },
+          limitations: [...localWarnings, dynRoute.warning]
+        };
+        observations.push(dynObs);
+        warnings.push(dynRoute.warning);
+      }
+      return;
+    }
+
+    // 3. Build standard ApiObservation
     const observationId: ObservationId = `obs:${document.uri}:${node.range.start}-${node.range.end}`;
 
     const observation: ApiObservation = {
