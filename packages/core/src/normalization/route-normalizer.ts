@@ -290,7 +290,7 @@ export function formatRoutePattern(pattern: RoutePattern): string {
       case "parameter":
         return seg.name ? `:${seg.name}` : ":_";
       case "wildcard":
-        return seg.name ? `*${seg.name}` : "*";
+        return seg.name ? `*${seg.name}${seg.optional ? "?" : ""}` : seg.optional ? "*?" : "*";
       case "unresolved":
         return seg.sourceText;
     }
@@ -331,8 +331,12 @@ export function areRouteShapesCompatible(a: RoutePattern, b: RoutePattern): bool
       if (segA.sourceText !== segB.sourceText) {
         return false;
       }
+    } else if (segA.kind === "wildcard" && segB.kind === "wildcard") {
+      if (Boolean(segA.optional) !== Boolean(segB.optional)) {
+        return false;
+      }
     }
-    // Parameters and wildcards match structurally regardless of local variable name differences
+    // Parameters match structurally regardless of local variable name differences
   }
 
   return true;

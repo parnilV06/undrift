@@ -319,7 +319,7 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(reportObs?.endpoint.path.state).toBe("known");
     });
 
-    it("extracts path parameter from template with base URL (${API_BASE_URL}/api/users/${path})", async () => {
+    it("handles unexported helper without callsites conservatively without fabricating parameter (Expense Tracker pattern)", async () => {
       const clientDoc = makeDoc(
         "file:///client/services/usersApi.js",
         `
@@ -337,17 +337,14 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       const parsed = await parser.parse({ document: clientDoc });
       const result = extractFetchObservations(clientDoc, parsed);
 
-      expect(result.warnings.filter((w) => w.code === "DYNAMIC_ROUTE")).toHaveLength(0);
+      const dynamicRouteWarnings = result.warnings.filter((w) => w.code === "DYNAMIC_ROUTE");
+      expect(dynamicRouteWarnings).toHaveLength(1);
+      expect(dynamicRouteWarnings[0].affectsCompleteness).toBe(false);
       expect(result.observations).toHaveLength(1);
 
       const userObs = result.observations[0];
-      expect(userObs.endpoint.path.state).toBe("known");
-      expect(userObs.endpoint.path.value?.rawPath).toBe("/api/users/:path");
-      expect(userObs.endpoint.path.value?.segments).toEqual([
-        { kind: "static", value: "api" },
-        { kind: "static", value: "users" },
-        { kind: "parameter", name: "path" }
-      ]);
+      expect(userObs.endpoint.path.state).toBe("dynamic");
+      expect(userObs.endpoint.path.value).toBeUndefined();
     });
 
     it("correctly handles URL origin stripping with constant base URL", async () => {
@@ -692,12 +689,11 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(consumer).toBeDefined();
       expect(consumer?.endpoint.method.value).toBe("POST");
 
-      // Parameter forwarding warning in client.ts must be advisory
+      // Generic transport helper parameter resolved across workspace without spurious dynamic route warning
       const paramWarn = result.warnings.find(
         (w) => w.code === "DYNAMIC_ROUTE" && w.source.uri.includes("client.ts")
       );
-      expect(paramWarn).toBeDefined();
-      expect(paramWarn?.affectsCompleteness).toBe(false);
+      expect(paramWarn).toBeUndefined();
 
       // Verify exact match with Next.js App Router POST /api/auth/login
       const exactRel = result.relationships.find(
@@ -750,6 +746,506 @@ describe("Effective Route Resolution & Dynamic URL Analysis", () => {
       expect(consumer).toBeDefined();
       expect(consumer?.endpoint.method.value).toBe("GET");
       expect(result.findings.filter((f) => f.ruleId === "UND100")).toHaveLength(0);
+    });
+  });
+
+  describe("Workstream E: Phase 6.3 Next.js Dynamic Route Normalization & Matching", () => {
+    it("matches percent-encoded provider routes against dynamic consumer endpoints (SlotTrack regression)", async () => {
+      // Consumers: classes.ts calling GET, PATCH, DELETE /api/classes/:id and bookings.ts calling PATCH /api/bookings/:id
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/endpoints.ts",
+        `
+        import { request } from './client';
+        export async function getClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'GET' });
+        }
+        export async function updateClass(id: string, data: any) {
+          return request(\`/api/classes/\${id}\`, { method: 'PATCH', body: JSON.stringify(data) });
+        }
+        export async function deleteClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'DELETE' });
+        }
+        export async function updateBooking(id: string, data: any) {
+          return request(\`/api/bookings/\${id}\`, { method: 'PATCH', body: JSON.stringify(data) });
+        }
+        `,
+        "typescript"
+      );
+
+      // Providers: simulated VS Code URI-encoded documents with %5Bid%5D
+      const classServerDoc = makeDoc(
+        "file:///z:/OLD%20PC%20Files/parnil%20-%20My%20Files/SlotTrack/app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        export async function PATCH(req: Request) { return Response.json({}); }
+        export async function DELETE(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const bookingServerDoc = makeDoc(
+        "file:///z:/OLD%20PC%20Files/parnil%20-%20My%20Files/SlotTrack/app/api/bookings/%5Bid%5D/route.ts",
+        `
+        export async function PATCH(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const request: AnalysisRequest = {
+        workspaceId: "slottrack-regression",
+        documents: [clientDoc, classServerDoc, bookingServerDoc],
+        generation: 1
+      };
+
+      const result = await engine.analyze(request);
+
+      expect(result.complete).toBe(true);
+
+      // All 4 consumer endpoints must have exact matches
+      const exactMatches = result.relationships.filter((r) => r.matchKind === "exact");
+      expect(exactMatches).toHaveLength(4);
+
+      // 0 UND100 missing provider findings
+      const und100Findings = result.findings.filter((f) => f.ruleId === "UND100");
+      expect(und100Findings).toHaveLength(0);
+
+      // 0 orphaned provider findings for these matched endpoints
+      const und110Findings = result.findings.filter((f) => f.ruleId === "UND110");
+      expect(und110Findings).toHaveLength(0);
+    });
+
+    it("preserves genuine UND100 finding when a provider endpoint is truly missing", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/missing.ts",
+        `
+        import { request } from './client';
+        export async function deletePayment(id: string) {
+          return request(\`/api/payments/\${id}\`, { method: 'DELETE' });
+        }
+        `,
+        "typescript"
+      );
+
+      // Provider only exports bookings, NOT payments
+      const bookingServerDoc = makeDoc(
+        "file:///app/api/bookings/%5Bid%5D/route.ts",
+        `
+        export async function PATCH(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "missing-provider-test",
+        documents: [clientDoc, bookingServerDoc],
+        generation: 1
+      });
+
+      // Must detect genuine missing DELETE /api/payments/:id endpoint
+      const missingFindings = result.findings.filter((f) => f.ruleId === "UND100");
+      expect(missingFindings).toHaveLength(1);
+      expect(missingFindings[0].summary).toContain("DELETE /api/payments/:id");
+    });
+
+    it("preserves method mismatch finding when path matches but method differs", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/method-mismatch.ts",
+        `
+        import { request } from './client';
+        export async function postClass(id: string) {
+          return request(\`/api/classes/\${id}\`, { method: 'POST' });
+        }
+        `,
+        "typescript"
+      );
+
+      // Provider only exports GET
+      const classServerDoc = makeDoc(
+        "file:///app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "method-mismatch-test",
+        documents: [clientDoc, classServerDoc],
+        generation: 1
+      });
+
+      const methodConflict = result.relationships.find((r) => r.matchKind === "method-conflict");
+      expect(methodConflict).toBeDefined();
+    });
+
+    it("does not match literal percent-encoded consumer URL against dynamic route provider", async () => {
+      const clientDoc = makeDoc(
+        "file:///app/lib/api/literal.ts",
+        `
+        import { request } from './client';
+        export async function getLiteral() {
+          return request('/api/classes/%5Bid%5D', { method: 'GET' });
+        }
+        `,
+        "typescript"
+      );
+
+      const classServerDoc = makeDoc(
+        "file:///app/api/classes/%5Bid%5D/route.ts",
+        `
+        export async function GET(req: Request) { return Response.json({}); }
+        `,
+        "typescript"
+      );
+
+      const engine = new AnalysisEngine({
+        parsers: [parser],
+        analyzers: [new JsTsAnalyzer()]
+      });
+
+      const result = await engine.analyze({
+        workspaceId: "literal-url-test",
+        documents: [clientDoc, classServerDoc],
+        generation: 1
+      });
+
+      // Consumer is requesting literal "%5Bid%5D" static segment, provider offers dynamic parameter ":id"
+      // They must NOT match as an exact match
+      const exactMatch = result.relationships.find((r) => r.matchKind === "exact");
+      expect(exactMatch).toBeUndefined();
+    });
+  });
+
+  describe("Workstream E: Safe Request Payload Shape Resolution (Phase 6.3 Task 2)", () => {
+    it("Case 1: resolves direct object literal request payload", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        axios.post('/api/users', { name: 'Alice', age: 30 });
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      expect(body?.shape.kind).toBe("object");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties).toHaveLength(2);
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "age"]);
+      }
+    });
+
+    it("Case 2: resolves local const object alias payload", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const payload = { title: 'Post', count: 10 };
+        axios.post('/api/posts', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "count"]);
+      }
+    });
+
+    it("Case 3: resolves object with shorthand properties using local constant values", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const name = "Alice";
+        const payload = { name, active: true };
+        axios.post('/api/users', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        const nameProp = body.shape.properties.find((p) => p.name === "name");
+        expect(nameProp?.type).toEqual({ kind: "literal", value: "Alice" });
+      }
+    });
+
+    it("Case 4: resolves object with spread of another known local object", async () => {
+      const doc = makeDoc(
+        "file:///client/api.js",
+        `
+        const base = { role: 'user', active: true };
+        const payload = { ...base, username: 'alice' };
+        axios.post('/api/users', payload);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["role", "active", "username"]);
+      }
+    });
+
+    it("Case 5: resolves React useState initial object state forwarded to axios (Fullstack Creators pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/CreatePost.jsx",
+        `
+        const [formData, setFormData] = useState({
+          title: '',
+          content: '',
+          category: 'Tech',
+          status: 'published'
+        });
+        api.post('/api/posts', formData);
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractAxiosObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual([
+          "title",
+          "content",
+          "category",
+          "status"
+        ]);
+      }
+    });
+
+    it("Case 6: resolves inline TypeScript parameter type annotation in fetch wrapper (SlotTrack pattern)", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/auth.ts",
+        `
+        export async function updateProfile(data: { name: string; age?: number; gender?: string }) {
+          return request('/api/auth/profile', {
+            method: 'PATCH',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "age", "gender"]);
+        const ageProp = body.shape.properties.find((p) => p.name === "age");
+        expect(ageProp?.presence).toBe("optional");
+        expect(ageProp?.type).toEqual({ kind: "primitive", name: "number" });
+      }
+    });
+
+    it("Case 7: resolves TypeScript parameter referencing local interface declaration", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/users.ts",
+        `
+        interface UserInput {
+          name: string;
+          email: string;
+          age?: number;
+        }
+
+        export async function createUser(data: UserInput) {
+          return request('/api/users', {
+            method: 'POST',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractFetchObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["name", "email", "age"]);
+      }
+    });
+
+    it("Case 8: resolves TypeScript parameter referencing local type alias declaration", async () => {
+      const doc = makeDoc(
+        "file:///app/lib/api/posts.ts",
+        `
+        type CreatePostInput = {
+          title: string;
+          content: string;
+          isDraft?: boolean;
+        };
+
+        export async function createPost(data: CreatePostInput) {
+          return request('/api/posts', {
+            method: 'POST',
+            body: JSON.stringify(data)
+          });
+        }
+        `,
+        "typescript"
+      );
+      const parsed = await parser.parse({ document: doc });
+      const localIndex = createLocalDeclarationIndex([{ document: doc, parsed }]);
+      const localResolver = createLocalReferenceResolver(localIndex);
+      const result = extractFetchObservations(doc, parsed, undefined, localResolver);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "content", "isDraft"]);
+      }
+    });
+
+    it("Case 9: synthesizes payload from local API wrapper callsites when all callers pass consistent object literals", async () => {
+      const doc = makeDoc(
+        "file:///client/services/api.js",
+        `
+        function submitPost(payload) {
+          return fetch('/api/posts', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+
+        submitPost({ title: 'First Post', content: 'Hello' });
+        submitPost({ title: 'Second Post', content: 'World' });
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      const obs = result.observations.find((o) => o.endpoint.path.value?.rawPath === "/api/posts");
+      const body = obs?.endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "content"]);
+      }
+    });
+
+    it("Case 10: retains advisory PARTIAL_SHAPE limitation when API wrapper callers pass dynamic or conflicting arguments (Expense Tracker pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/services/usersApi.js",
+        `
+        export function requestUser(payload) {
+          return fetch('/api/users/login', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
+        }
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractFetchObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("PARTIAL_SHAPE");
+      expect(result.warnings[0].affectsCompleteness).toBe(false);
+      expect(result.warnings[0].targetDimension).toBe("request-shape");
+
+      const body = result.observations[0]?.endpoint.request?.body;
+      expect(body?.completeness).toBe("partial");
+    });
+
+    it("Case 11: extracts statically visible FormData.append calls into multipart shape observation", async () => {
+      const doc = makeDoc(
+        "file:///client/upload.js",
+        `
+        function upload() {
+          const formData = new FormData();
+          formData.append('title', 'My Document');
+          formData.append('file', selectedFile);
+          return api.post('/api/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+        }
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(0);
+      expect(result.observations).toHaveLength(1);
+      const body = result.observations[0].endpoint.request?.body;
+      expect(body?.completeness).toBe("complete");
+      if (body?.shape.kind === "object") {
+        expect(body.shape.properties.map((p) => p.name)).toEqual(["title", "file"]);
+      }
+    });
+
+    it("Case 12: reclassifies unresolvable multipart FormData with specific advisory warning instead of generic JSON.stringify warning (Cubit pattern)", async () => {
+      const doc = makeDoc(
+        "file:///client/services/api.js",
+        `
+        export const createPost = (formData) => {
+          return api.post('/community/posts', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+        };
+        `
+      );
+      const parsed = await parser.parse({ document: doc });
+      const result = extractAxiosObservations(doc, parsed);
+
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("PARTIAL_SHAPE");
+      expect(result.warnings[0].message).toContain(
+        "Multipart form data payload cannot be fully statically inferred: formData"
+      );
+      expect(result.warnings[0].affectsCompleteness).toBe(false);
+
+      const body = result.observations[0]?.endpoint.request?.body;
+      expect(body?.completeness).toBe("partial");
     });
   });
 });

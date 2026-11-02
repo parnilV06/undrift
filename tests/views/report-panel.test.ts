@@ -585,6 +585,75 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("provider.ts:13:5");
     });
 
+    it("renders reasonCode badges in warnings table and escapes HTML", () => {
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [],
+        history: [],
+        warnings: [
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: "explicit-any-type",
+            message: "Request payload is any",
+            affectsCompleteness: false,
+            scope: "consumer"
+          },
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: '<script>alert("xss")</script>',
+            message: "XSS test",
+            affectsCompleteness: false,
+            scope: "consumer"
+          },
+          {
+            code: "DYNAMIC_ROUTE",
+            message: "Route parameter forwarded",
+            affectsCompleteness: false,
+            scope: "consumer"
+          }
+        ]
+      });
+
+      expect(html).toContain(
+        '<code>PARTIAL_SHAPE</code><br/><span style="font-size: 11px; opacity: 0.8;"><code>explicit-any-type</code></span>'
+      );
+      expect(html).toContain("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;");
+      expect(html).not.toContain('<script>alert("xss")</script>');
+      expect(html).toContain("<code>DYNAMIC_ROUTE</code></td>");
+    });
+
+    it("renders reasonCode in finding limitations list when present", () => {
+      const fWithReason = createSampleFinding("finding-with-reason", {
+        limitations: [
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: "multipart-no-construction-evidence",
+            message: "Multipart form data cannot be fully inferred",
+            affectsCompleteness: false
+          },
+          {
+            code: "DYNAMIC_ROUTE",
+            message: "Dynamic segment",
+            affectsCompleteness: false
+          }
+        ]
+      });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [fWithReason],
+        history: [],
+        warnings: []
+      });
+
+      expect(html).toContain(
+        "[PARTIAL_SHAPE / multipart-no-construction-evidence] Multipart form data cannot be fully inferred"
+      );
+      expect(html).toContain("[DYNAMIC_ROUTE] Dynamic segment");
+    });
+
     it("does not fabricate expected or observed comparison boxes when contract values are undefined", () => {
       const fWithoutComparison = createSampleRecord("no-values", {
         title: "Endpoint missing provider",

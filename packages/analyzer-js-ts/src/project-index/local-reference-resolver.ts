@@ -16,9 +16,12 @@ import type {
   TextRange
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
+import { extractObjectFields } from "../shapes/shape-extractor";
 import type {
   LocalDeclaration,
   LocalDeclarationIndex,
+  LocalInterfaceDeclaration,
+  LocalTypeAliasDeclaration,
   LocalVariableDeclaration
 } from "./local-declaration-index";
 
@@ -267,6 +270,31 @@ export class LocalReferenceResolver implements SemanticResolverPort {
         };
       }
 
+      if (varDecl.initializerNode) {
+        let objTarget =
+          varDecl.initializerNode.kind === "object" ? varDecl.initializerNode : undefined;
+        if (!objTarget && varDecl.initializerNode.kind === "call_expression") {
+          const args = varDecl.initializerNode.childForField("arguments")?.namedChildren() ?? [];
+          if (args.length > 0 && args[0].kind === "object") {
+            objTarget = args[0];
+          }
+        }
+
+        if (objTarget) {
+          const doc = this.index.getDocument(documentUri);
+          if (doc) {
+            const mapper = new PositionMapper(doc.text, doc.uri);
+            const fields = extractObjectFields(objTarget, documentUri, mapper, this);
+            return {
+              state: "resolved",
+              value: fields,
+              declaration: decl,
+              evidence: [resolutionEvidence, decl.evidence]
+            };
+          }
+        }
+      }
+
       if (varDecl.objectFields !== undefined) {
         return {
           state: "resolved",
@@ -282,6 +310,30 @@ export class LocalReferenceResolver implements SemanticResolverPort {
         declaration: decl,
         evidence: [resolutionEvidence, decl.evidence]
       };
+    }
+
+    if (decl.kind === "interface") {
+      const ifaceDecl = decl as LocalInterfaceDeclaration;
+      if (ifaceDecl.objectFields !== undefined) {
+        return {
+          state: "resolved",
+          value: ifaceDecl.objectFields,
+          declaration: decl,
+          evidence: [resolutionEvidence, decl.evidence]
+        };
+      }
+    }
+
+    if (decl.kind === "type-alias") {
+      const typeDecl = decl as LocalTypeAliasDeclaration;
+      if (typeDecl.objectFields !== undefined) {
+        return {
+          state: "resolved",
+          value: typeDecl.objectFields,
+          declaration: decl,
+          evidence: [resolutionEvidence, decl.evidence]
+        };
+      }
     }
 
     return {

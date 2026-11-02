@@ -33,7 +33,29 @@ import {
   type LocalVariableDeclaration
 } from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
-import { extractObjectFields } from "../shapes/shape-extractor";
+import {
+  findEnclosingFunction,
+  resolveRouteHelperCallsites,
+  type ResolvedHelperRoute,
+  type RouteHelperResolution
+} from "./route-helper-resolver";
+import {
+  analyzeFormData,
+  analyzeWrapperCallsites,
+  extractFormDataFields,
+  extractObjectFields,
+  extractTypeFields,
+  findEnclosingParameter,
+  isFormDataNode,
+  isMultipartHeaders,
+  parseTypeNode,
+  type WrapperCallsitesResult
+} from "../shapes/shape-extractor";
+import {
+  classifyPayloadLimitation,
+  createPayloadWarning
+} from "../shapes/payload-diagnostic-helper";
+import { CrossModuleFlowResolver } from "../shapes/cross-module-flow-resolver";
 import { combineRoutePaths } from "../backend/express-mount-resolver";
 
 const VALID_AXIOS_METHODS: ReadonlyMap<string, HttpMethod> = new Map([
@@ -311,6 +333,11 @@ function parseRoutePattern(rawUrl: string): RoutePattern {
   };
 }
 
+interface ExtractedPathResult {
+  readonly routeValue: ObservedValue<RoutePattern>;
+  readonly helperResolution?: RouteHelperResolution;
+}
+
 /**
  * Extracts URL path ObservedValue from the first argument of an Axios call.
  */
@@ -319,8 +346,9 @@ function extractPath(
   documentUri: DocumentUri,
   mapper: PositionMapper,
   warnings: AnalysisWarning[],
-  resolver?: LocalReferenceResolver
-): ObservedValue<RoutePattern> {
+  resolver?: LocalReferenceResolver,
+  rootNode?: SyntaxNode
+): ExtractedPathResult {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
 
   // 1. Literal string e.g. "/api/users"
@@ -338,20 +366,32 @@ function extractPath(
     };
 
     return {
-      state: "known",
-      value: routePattern,
-      strength: "direct",
-      evidence: [evidence]
+      routeValue: {
+        state: "known",
+        value: routePattern,
+        strength: "direct",
+        evidence: [evidence]
+      }
     };
   }
 
   // 2. Template string literal
   if (argNode.kind === "template_string") {
-    const extraction = extractTemplateRoute(argNode, documentUri, mapper, "Axios", resolver);
+    const extraction = extractTemplateRoute(
+      argNode,
+      documentUri,
+      mapper,
+      "Axios",
+      resolver,
+      rootNode
+    );
     if (extraction.warning) {
       warnings.push(extraction.warning);
     }
-    return extraction.routeValue;
+    return {
+      routeValue: extraction.routeValue,
+      helperResolution: extraction.helperResolution
+    };
   }
 
   // 3. Local constant resolution via resolver for identifier expressions
@@ -362,10 +402,12 @@ function extractPath(
       if (typeof result.value === "string") {
         const routePattern = parseRoutePattern(result.value);
         return {
-          state: "known",
-          value: routePattern,
-          strength: "resolved",
-          evidence: result.evidence
+          routeValue: {
+            state: "known",
+            value: routePattern,
+            strength: "resolved",
+            evidence: result.evidence
+          }
         };
       }
 
@@ -382,10 +424,12 @@ function extractPath(
       warnings.push(warning);
 
       return {
-        state: "dynamic",
-        expression: refName,
-        reason: `Constant '${refName}' resolved to non-string value`,
-        evidence: result.evidence
+        routeValue: {
+          state: "dynamic",
+          expression: refName,
+          reason: `Constant '${refName}' resolved to non-string value`,
+          evidence: result.evidence
+        }
       };
     }
 
@@ -428,12 +472,170 @@ function extractPath(
             };
 
             return {
+              routeValue: {
+                state: "known",
+                value: routePattern,
+                strength: "resolved",
+                evidence: [evidence, varDecl.evidence]
+              }
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // Phase 6.3 Task 3.1: Bounded callsite resolution for direct parameter forwarding
+  if (argNode.kind === "identifier" && rootNode) {
+    const enclosingFn = findEnclosingFunction(argNode, rootNode);
+    const param = enclosingFn?.params.find((p) => p.name === argNode.text());
+    if (
+      enclosingFn &&
+      !enclosingFn.isExported &&
+      enclosingFn.isModuleScope &&
+      enclosingFn.fnName &&
+      param
+    ) {
+      const fnName = enclosingFn.fnName;
+      const fnNode = enclosingFn.fnNode;
+      const callsitesResult = resolveRouteHelperCallsites(
+        rootNode,
+        fnName,
+        param.index,
+        param.name,
+        fnNode,
+        documentUri,
+        mapper,
+        resolver
+      );
+
+      if (callsitesResult.status === "resolved") {
+        const resolvedRoutes: ResolvedHelperRoute[] = [];
+        for (const cs of callsitesResult.resolvedCallsites) {
+          const routePattern = parseRoutePattern(cs.staticValue);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+            kind: "local-declaration",
+            strength: "resolved",
+            source: cs.callSpan,
+            description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in Axios call`
+          };
+
+          resolvedRoutes.push({
+            routeValue: {
               state: "known",
               value: routePattern,
               strength: "resolved",
-              evidence: [evidence, varDecl.evidence]
-            };
+              evidence: [evidence, ...cs.evidence]
+            },
+            callNode: cs.callNode,
+            callSpan: cs.callSpan,
+            staticValue: cs.staticValue
+          });
+        }
+
+        return {
+          routeValue: resolvedRoutes[0].routeValue,
+          helperResolution: {
+            status: "resolved",
+            resolvedRoutes,
+            dynamicRoutes: []
           }
+        };
+      }
+    }
+  }
+
+  // 3b. Binary expression string concatenation: e.g. '/api/posts/' + postId
+  if (argNode.kind === "binary_expression") {
+    const left = argNode.childForField("left");
+    const right = argNode.childForField("right");
+    const op = argNode.children().find((c) => c.text() === "+");
+    if (op && left && right) {
+      if (left.kind === "string" && right.kind === "identifier") {
+        const leftVal = left.text().slice(1, -1);
+        if (leftVal.startsWith("/") || leftVal.length > 0) {
+          const identName = right.text();
+          if (rootNode) {
+            const enclosingFn = findEnclosingFunction(argNode, rootNode);
+            const param = enclosingFn?.params.find((p) => p.name === identName);
+            if (
+              enclosingFn &&
+              !enclosingFn.isExported &&
+              enclosingFn.isModuleScope &&
+              enclosingFn.fnName &&
+              param
+            ) {
+              const fnName = enclosingFn.fnName;
+              const fnNode = enclosingFn.fnNode;
+              const callsitesResult = resolveRouteHelperCallsites(
+                rootNode,
+                fnName,
+                param.index,
+                param.name,
+                fnNode,
+                documentUri,
+                mapper,
+                resolver
+              );
+              if (callsitesResult.status === "resolved") {
+                const resolvedRoutes: ResolvedHelperRoute[] = [];
+                for (const cs of callsitesResult.resolvedCallsites) {
+                  const combined = leftVal.endsWith("/")
+                    ? leftVal + cs.staticValue
+                    : leftVal + "/" + cs.staticValue;
+                  const routePattern = parseRoutePattern(combined);
+                  const evidence: EvidenceRef = {
+                    id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+                    kind: "local-declaration",
+                    strength: "resolved",
+                    source: cs.callSpan,
+                    description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in Axios call`
+                  };
+                  resolvedRoutes.push({
+                    routeValue: {
+                      state: "known",
+                      value: routePattern,
+                      strength: "resolved",
+                      evidence: [evidence, ...cs.evidence]
+                    },
+                    callNode: cs.callNode,
+                    callSpan: cs.callSpan,
+                    staticValue: cs.staticValue
+                  });
+                }
+                return {
+                  routeValue: resolvedRoutes[0].routeValue,
+                  helperResolution: {
+                    status: "resolved",
+                    resolvedRoutes,
+                    dynamicRoutes: []
+                  }
+                };
+              }
+            }
+          }
+
+          // Standard single-segment resource parameter representation:
+          const combined = leftVal.endsWith("/")
+            ? leftVal + ":" + identName
+            : leftVal + "/:" + identName;
+          const routePattern = parseRoutePattern(combined);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}`,
+            kind: "literal-syntax",
+            strength: "inferred",
+            source: argSpan,
+            description: `Concatenated URL path with parameter '${identName}' in Axios call`
+          };
+          return {
+            routeValue: {
+              state: "known",
+              value: routePattern,
+              strength: "inferred",
+              evidence: [evidence]
+            }
+          };
         }
       }
     }
@@ -460,10 +662,12 @@ function extractPath(
   };
 
   return {
-    state: "dynamic",
-    expression: argNode.text(),
-    reason: "Dynamic URL expression",
-    evidence: [evidence]
+    routeValue: {
+      state: "dynamic",
+      expression: argNode.text(),
+      reason: "Dynamic URL expression",
+      evidence: [evidence]
+    }
   };
 }
 
@@ -477,7 +681,8 @@ function extractRequestBody(
   warnings: AnalysisWarning[],
   resolver?: LocalReferenceResolver,
   parsed?: ParsedDocument,
-  document?: SourceDocument
+  document?: SourceDocument,
+  isMultipartHint?: boolean
 ): ShapeObservation | undefined {
   if (!dataNode) {
     return undefined;
@@ -489,9 +694,9 @@ function extractRequestBody(
     documentUri
   );
 
-  // Object literal e.g. axios.post("/api", { name: "Alice" })
+  // 1. Direct object literal e.g. axios.post("/api", { name: "Alice" })
   if (dataNode.kind === "object") {
-    const properties = extractObjectFields(dataNode, documentUri, mapper);
+    const properties = extractObjectFields(dataNode, documentUri, mapper, resolver);
 
     const evidence: EvidenceRef = {
       id: `ev-body-${dataNode.range.start}`,
@@ -512,7 +717,7 @@ function extractRequestBody(
     };
   }
 
-  // String literal e.g. axios.post("/api", "raw data")
+  // 2. Literal string e.g. axios.post("/api", "raw data")
   if (dataNode.kind === "string") {
     const evidence: EvidenceRef = {
       id: `ev-body-${dataNode.range.start}`,
@@ -532,7 +737,7 @@ function extractRequestBody(
     };
   }
 
-  // Local identifier resolution e.g. axios.post("/api", registrationData)
+  // 3. Local identifier resolution (object literal, constant, or useState state)
   if (dataNode.kind === "identifier") {
     const refName = dataNode.text();
     let resolved = resolver?.resolveObjectLiteral(refName, documentUri, dataNode.range);
@@ -546,7 +751,7 @@ function extractRequestBody(
       }
     }
 
-    if (resolved && resolved.state === "resolved") {
+    if (resolved && resolved.state === "resolved" && resolved.value) {
       return {
         shape: {
           kind: "object",
@@ -559,16 +764,233 @@ function extractRequestBody(
     }
   }
 
-  // Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
-  const warning: AnalysisWarning = {
-    code: "PARTIAL_SHAPE",
-    message: `Unresolved request payload expression in Axios call: ${dataNode.text()}`,
-    source: dataSpan,
-    analyzerId: "analyzer-js-ts",
-    scope: "consumer",
-    targetDimension: "request-shape",
-    affectsCompleteness: false
-  };
+  // 4. Multipart FormData
+  const isMultipart = isMultipartHint || isFormDataNode(dataNode, resolver, documentUri);
+  if (isMultipart) {
+    const enclosingParam = findEnclosingParameter(dataNode, dataNode.text());
+    let searchScope: SyntaxNode = enclosingParam?.fnNode ?? dataNode;
+    if (!enclosingParam?.fnNode) {
+      let curr: SyntaxNode | undefined = dataNode.parent();
+      while (curr) {
+        if (
+          curr.kind === "function_declaration" ||
+          curr.kind === "function_expression" ||
+          curr.kind === "arrow_function" ||
+          curr.kind === "method_definition"
+        ) {
+          searchScope = curr;
+          break;
+        }
+        curr = curr.parent();
+      }
+      if (!curr && parsed?.root) {
+        searchScope = parsed.root;
+      }
+    }
+    const formAnalysis = analyzeFormData(searchScope, dataNode.text(), documentUri, mapper);
+
+    if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {
+      return {
+        shape: {
+          kind: "object",
+          properties: formAnalysis.fields,
+          additionalProperties: "unknown"
+        },
+        completeness: "complete",
+        evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+      };
+    }
+
+    if (formAnalysis.fields.length > 0 && formAnalysis.hasDynamicAppends) {
+      const limitation = classifyPayloadLimitation(dataNode, {
+        isMultipart: true,
+        formDataAnalysis: formAnalysis,
+        parsed,
+        documentUri,
+        mapper,
+        resolver
+      });
+      const warning = createPayloadWarning(limitation, dataSpan);
+      warnings.push(warning);
+
+      return {
+        shape: {
+          kind: "object",
+          properties: formAnalysis.fields,
+          additionalProperties: "unknown"
+        },
+        completeness: "partial",
+        evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+      };
+    }
+
+    const limitation = classifyPayloadLimitation(dataNode, {
+      isMultipart: true,
+      formDataAnalysis: formAnalysis,
+      parsed,
+      documentUri,
+      mapper,
+      resolver
+    });
+    const warning = createPayloadWarning(limitation, dataSpan);
+    warnings.push(warning);
+
+    const evidence: EvidenceRef = {
+      id: `ev-body-${dataNode.range.start}`,
+      kind: "literal-syntax",
+      strength: "inferred",
+      source: dataSpan,
+      description: limitation.evidenceDescription
+    };
+
+    return {
+      shape: {
+        kind: "unknown",
+        reason: limitation.evidenceReason
+      },
+      completeness: "partial",
+      evidence: [evidence]
+    };
+  }
+
+  // 5. Parameter type annotation or wrapper callsites for identifiers
+  let callRes: WrapperCallsitesResult | undefined;
+  if (dataNode.kind === "identifier") {
+    const refName = dataNode.text();
+
+    // 5a. Enclosing function parameter type annotation (inline object_type or type_identifier)
+    const paramInfo = findEnclosingParameter(dataNode, refName);
+    if (paramInfo?.innerTypeNode) {
+      const innerNode = paramInfo.innerTypeNode;
+      if (innerNode.kind === "object_type") {
+        const properties = extractTypeFields(innerNode, documentUri, mapper);
+        const evidence: EvidenceRef = {
+          id: `ev-body-${dataNode.range.start}`,
+          kind: "explicit-annotation",
+          strength: "direct",
+          source: mapper.toSourceSpanFromUtf16(
+            paramInfo.paramNode.range.start,
+            paramInfo.paramNode.range.end,
+            documentUri
+          ),
+          description: `Request payload typed with inline object type for parameter '${refName}'`
+        };
+        return {
+          shape: {
+            kind: "object",
+            properties,
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: [evidence]
+        };
+      }
+
+      if (innerNode.kind === "type_identifier") {
+        const typeName = innerNode.text();
+        let typeRes = resolver?.resolveObjectLiteral(typeName, documentUri);
+        if ((!typeRes || typeRes.state !== "resolved") && parsed && document) {
+          try {
+            const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+            const localResolver = createLocalReferenceResolver(localIndex);
+            typeRes = localResolver.resolveObjectLiteral(typeName, documentUri);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (typeRes && typeRes.state === "resolved" && typeRes.value) {
+          return {
+            shape: {
+              kind: "object",
+              properties: [...typeRes.value],
+              additionalProperties: "unknown"
+            },
+            completeness: "complete",
+            evidence: typeRes.evidence
+          };
+        }
+      }
+    }
+
+    // 4c. Local API wrapper callsites
+    if (paramInfo?.fnName && parsed) {
+      callRes = analyzeWrapperCallsites(
+        parsed.root,
+        paramInfo.fnName,
+        paramInfo.paramIndex,
+        documentUri,
+        mapper,
+        resolver
+      );
+      if (callRes.status === "resolved" && callRes.properties) {
+        return {
+          shape: {
+            kind: "object",
+            properties: callRes.properties,
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: callRes.evidence ?? [
+            {
+              id: `ev-body-${dataNode.range.start}`,
+              kind: "local-declaration",
+              strength: "inferred",
+              source: dataSpan,
+              description: `Resolved wrapper payload from consistent callsites for '${refName}'`
+            }
+          ]
+        };
+      }
+    }
+
+    // 4d. Cross-module dataflow resolution (for unannotated parameters)
+    const isExplicitUnknownOrAny =
+      paramInfo?.innerTypeNode &&
+      (paramInfo.innerTypeNode.text().trim() === "unknown" ||
+        paramInfo.innerTypeNode.text().trim() === "any");
+
+    if (!isExplicitUnknownOrAny && paramInfo?.fnName && resolver?.index) {
+      const crossFlow = new CrossModuleFlowResolver(resolver.index);
+      const flowRes = crossFlow.resolvePayloadFlow(
+        paramInfo.fnName,
+        paramInfo.paramIndex,
+        documentUri
+      );
+      if (flowRes.status === "resolved" && flowRes.properties && flowRes.properties.length > 0) {
+        return {
+          shape: {
+            kind: "object",
+            properties: [...flowRes.properties],
+            additionalProperties: "unknown"
+          },
+          completeness: "complete",
+          evidence: flowRes.evidence
+            ? [...flowRes.evidence]
+            : [
+                {
+                  id: `ev-body-${dataNode.range.start}`,
+                  kind: "local-declaration",
+                  strength: "inferred",
+                  source: dataSpan,
+                  description: `Resolved payload from cross-module dataflow for '${refName}'`
+                }
+              ]
+        };
+      }
+    }
+  }
+
+  // 5. Dynamic variable or unresolved expression e.g. axios.post("/api", payload)
+  const limitation = classifyPayloadLimitation(dataNode, {
+    isMultipart: false,
+    parsed,
+    documentUri,
+    mapper,
+    resolver,
+    wrapperCallsites: callRes
+  });
+  const warning = createPayloadWarning(limitation, dataSpan);
   warnings.push(warning);
 
   const evidence: EvidenceRef = {
@@ -576,102 +998,16 @@ function extractRequestBody(
     kind: "literal-syntax",
     strength: "inferred",
     source: dataSpan,
-    description: "Unresolved payload expression in Axios call"
+    description: limitation.evidenceDescription
   };
 
   return {
     shape: {
       kind: "unknown",
-      reason: "unresolved-reference"
+      reason: limitation.evidenceReason
     },
     completeness: "partial",
     evidence: [evidence]
-  };
-}
-
-/**
- * Parses a TypeScript type syntax node into a normalized TypeShape.
- */
-function parseTypeNode(node: SyntaxNode): TypeShape {
-  // Predefined primitive types: string, number, boolean, void, etc.
-  if (node.kind === "predefined_type") {
-    const text = node.text();
-    const primitiveNames: ReadonlySet<string> = new Set([
-      "string",
-      "number",
-      "boolean",
-      "bigint",
-      "symbol",
-      "null",
-      "undefined",
-      "void",
-      "unknown",
-      "never"
-    ]);
-
-    if (primitiveNames.has(text)) {
-      return { kind: "primitive", name: text as PrimitiveTypeName };
-    }
-    return { kind: "unknown", reason: "complex-type" };
-  }
-
-  // Identifier reference: User, Post, Account
-  if (node.kind === "type_identifier") {
-    return {
-      kind: "reference",
-      displayName: node.text(),
-      resolution: "unresolved"
-    };
-  }
-
-  // Array type: User[], string[]
-  if (node.kind === "array_type") {
-    const elemNode = node.namedChildren()[0];
-    const elementShape = elemNode
-      ? parseTypeNode(elemNode)
-      : { kind: "unknown" as const, reason: "not-observed" as const };
-    return {
-      kind: "array",
-      element: elementShape
-    };
-  }
-
-  // Generic type: Array<User>, Promise<User>, ApiResponse<T>
-  if (node.kind === "generic_type") {
-    const typeNameNode = node.childForField("name") ?? node.namedChildren()[0];
-    const typeArgs = node.childForField("type_arguments") ?? node.namedChildren()[1];
-
-    if (typeNameNode?.text() === "Array" && typeArgs) {
-      const firstArg = typeArgs.namedChildren()[0];
-      const elementShape = firstArg
-        ? parseTypeNode(firstArg)
-        : { kind: "unknown" as const, reason: "not-observed" as const };
-      return {
-        kind: "array",
-        element: elementShape
-      };
-    }
-
-    return {
-      kind: "reference",
-      displayName: node.text(),
-      resolution: "unresolved"
-    };
-  }
-
-  // Union type: User | null, string | number
-  if (node.kind === "union_type") {
-    const members = node.namedChildren().map((child) => parseTypeNode(child));
-    return {
-      kind: "union",
-      members
-    };
-  }
-
-  // Complex or unsupported type
-  return {
-    kind: "unknown",
-    reason: "complex-type"
   };
 }
 
@@ -699,7 +1035,7 @@ function extractResponseType(
 
   // First type argument is the response payload type T in Axios
   const respTypeNode = typeArgs[0];
-  const typeShape = parseTypeNode(respTypeNode);
+  const typeShape = parseTypeNode(respTypeNode, documentUri, mapper);
 
   const typeSpan = mapper.toSourceSpanFromUtf16(
     typeArgsNode.range.start,
@@ -848,7 +1184,16 @@ export function extractAxiosObservations(
     }
 
     // 2. URL Path
-    let path = extractPath(args[0], document.uri, mapper, localWarnings, actualResolver);
+    const pathResult = extractPath(
+      args[0],
+      document.uri,
+      mapper,
+      localWarnings,
+      actualResolver,
+      parsed.root
+    );
+    let path = pathResult.routeValue;
+    const helperResolution = pathResult.helperResolution;
 
     // Apply client baseURL prefix if configured on this Axios instance
     const clientBasePath = clients.get(match.receiver);
@@ -865,6 +1210,21 @@ export function extractAxiosObservations(
     // 3. Request body (for POST, PUT, PATCH: arg 1 is payload data)
     let request: RequestShapeObservation | undefined;
     if (match.httpMethod && BODY_METHODS.has(match.httpMethod) && args.length > 1) {
+      let isMultipartHint = false;
+      if (args.length > 2 && args[2].kind === "object") {
+        for (const child of args[2].namedChildren()) {
+          if (child.kind === "pair") {
+            const k = child.childForField("key") ?? child.namedChildren()[0];
+            const v = child.childForField("value") ?? child.namedChildren()[1];
+            if (k && v && (k.text() === "headers" || k.text() === "'headers'")) {
+              if (isMultipartHeaders(v)) {
+                isMultipartHint = true;
+              }
+            }
+          }
+        }
+      }
+
       const bodyShape = extractRequestBody(
         args[1],
         document.uri,
@@ -872,7 +1232,8 @@ export function extractAxiosObservations(
         localWarnings,
         actualResolver,
         parsed,
-        document
+        document,
+        isMultipartHint
       );
       if (bodyShape) {
         request = { body: bodyShape };
@@ -884,6 +1245,121 @@ export function extractAxiosObservations(
 
     // Collect local warnings to document-level warnings
     warnings.push(...localWarnings);
+
+    // Phase 6.3 Task 3: If helper resolution resolved one or more static callsites:
+    if (helperResolution && helperResolution.status === "resolved") {
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        let routeVal = resRoute.routeValue;
+        if (
+          clientBasePath &&
+          clientBasePath !== "/" &&
+          routeVal.state === "known" &&
+          routeVal.value
+        ) {
+          const composedRaw = combineRoutePaths(clientBasePath, routeVal.value.rawPath);
+          if (composedRaw !== routeVal.value.rawPath) {
+            routeVal = {
+              ...routeVal,
+              value: parseRoutePattern(composedRaw)
+            };
+          }
+        }
+
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "axios",
+          extractorId: "axios-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method: methodValue,
+            path: routeVal,
+            request,
+            responses
+          },
+          limitations: localWarnings
+        };
+        observations.push(observation);
+      }
+      return;
+    }
+
+    if (helperResolution && helperResolution.status === "mixed") {
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        let routeVal = resRoute.routeValue;
+        if (
+          clientBasePath &&
+          clientBasePath !== "/" &&
+          routeVal.state === "known" &&
+          routeVal.value
+        ) {
+          const composedRaw = combineRoutePaths(clientBasePath, routeVal.value.rawPath);
+          if (composedRaw !== routeVal.value.rawPath) {
+            routeVal = {
+              ...routeVal,
+              value: parseRoutePattern(composedRaw)
+            };
+          }
+        }
+
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "axios",
+          extractorId: "axios-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method: methodValue,
+            path: routeVal,
+            request,
+            responses
+          },
+          limitations: localWarnings
+        };
+        observations.push(observation);
+      }
+
+      for (const dynRoute of helperResolution.dynamicRoutes) {
+        const dynCallSpan = dynRoute.callSpan ?? callSpan;
+        const dynId: ObservationId = dynRoute.callNode
+          ? `obs:${document.uri}:${dynRoute.callNode.range.start}-${dynRoute.callNode.range.end}`
+          : `obs:${document.uri}:${node.range.start}-${node.range.end}`;
+        const dynObs: ApiObservation = {
+          id: dynId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "axios",
+          extractorId: "axios-extractor",
+          source: [dynCallSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method: methodValue,
+            path: dynRoute.routeValue,
+            request,
+            responses
+          },
+          limitations: [...localWarnings, dynRoute.warning]
+        };
+        observations.push(dynObs);
+        warnings.push(dynRoute.warning);
+      }
+      return;
+    }
 
     // 5. Build ApiObservation
     const observationId: ObservationId = `obs:${document.uri}:${node.range.start}-${node.range.end}`;

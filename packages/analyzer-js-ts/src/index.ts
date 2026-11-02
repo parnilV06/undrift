@@ -54,3 +54,9 @@ export {
   type LocalResolutionState,
   type LocalReferenceResult
 } from "./project-index/local-reference-resolver";
+export {
+  CrossModuleFlowResolver,
+  matchesModuleSpecifier,
+  type CrossModuleFlowResolutionResult,
+  type FlowResolutionOptions
+} from "./shapes/cross-module-flow-resolver";

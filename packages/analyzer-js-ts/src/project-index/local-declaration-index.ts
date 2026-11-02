@@ -14,7 +14,7 @@ import type {
   SyntaxNode
 } from "@undrift/core";
 import { PositionMapper } from "@undrift/parser-tree-sitter";
-import { extractObjectFields } from "../shapes/shape-extractor";
+import { extractObjectFields, extractTypeFields } from "../shapes/shape-extractor";
 
 /**
  * Kind of local declaration indexed in source documents.
@@ -57,6 +57,8 @@ export interface LocalVariableDeclaration extends LocalDeclarationBase {
   readonly objectFields?: readonly FieldShape[];
   /** Source text of initializer expression, if present. */
   readonly initializerText?: string;
+  /** AST syntax node of initializer expression, if present. */
+  readonly initializerNode?: SyntaxNode;
 }
 
 /**
@@ -77,6 +79,8 @@ export interface LocalTypeAliasDeclaration extends LocalDeclarationBase {
   readonly kind: "type-alias";
   /** Text representation of the aliased type expression. */
   readonly typeText?: string;
+  /** Extracted object properties if aliased to an object type. */
+  readonly objectFields?: readonly FieldShape[];
 }
 
 /**
@@ -84,6 +88,8 @@ export interface LocalTypeAliasDeclaration extends LocalDeclarationBase {
  */
 export interface LocalInterfaceDeclaration extends LocalDeclarationBase {
   readonly kind: "interface";
+  /** Extracted object properties from interface body. */
+  readonly objectFields?: readonly FieldShape[];
 }
 
 /**
@@ -252,7 +258,8 @@ export function indexLocalDeclarations(
         isConstant: declType === "const",
         literalValue,
         objectFields,
-        initializerText
+        initializerText,
+        initializerNode: valNode
       });
       return;
     }
@@ -350,6 +357,48 @@ export function indexLocalDeclarations(
         }
       }
     }
+
+    // Destructured array pattern e.g. const [formData, setFormData] = useState({ ... });
+    if (nameNode.kind === "array_pattern") {
+      const firstElem = nameNode.namedChildren()[0];
+      if (firstElem && firstElem.kind === "identifier") {
+        const boundName = firstElem.text();
+        let objectFields: readonly FieldShape[] | undefined;
+
+        if (valNode && valNode.kind === "call_expression") {
+          const callee = valNode.childForField("function") ?? valNode.namedChildren()[0];
+          const calleeText = callee?.text();
+          if (calleeText === "useState" || calleeText === "React.useState") {
+            const args = valNode.childForField("arguments")?.namedChildren() ?? [];
+            if (args.length > 0 && args[0].kind === "object") {
+              objectFields = extractObjectFields(args[0], document.uri, mapper);
+            }
+          }
+        }
+
+        const evidence = makeEvidence(
+          firstElem,
+          boundName,
+          false,
+          `Array destructured state variable '${boundName}'`
+        );
+
+        declarations.push({
+          name: boundName,
+          kind: "variable",
+          source: makeSpan(firstElem),
+          documentUri: document.uri,
+          snapshotHash: document.contentHash,
+          evidence,
+          exported,
+          declarationType: declType,
+          isConstant: true,
+          objectFields,
+          initializerText: valNode?.text(),
+          initializerNode: valNode
+        });
+      }
+    }
   }
 
   function processDeclarationList(
@@ -398,6 +447,10 @@ export function indexLocalDeclarations(
     const name = nameNode.text();
     const valueNode = node.childForField("value") ?? node.childForField("type");
     const typeText = valueNode?.text();
+    let objectFields: readonly FieldShape[] | undefined;
+    if (valueNode && valueNode.kind === "object_type") {
+      objectFields = extractTypeFields(valueNode, document.uri, mapper);
+    }
 
     const evidence = makeEvidence(node, name, false, `TypeScript type alias '${name}'`);
 
@@ -409,7 +462,8 @@ export function indexLocalDeclarations(
       snapshotHash: document.contentHash,
       evidence,
       exported,
-      typeText
+      typeText,
+      objectFields
     });
   }
 
@@ -420,6 +474,10 @@ export function indexLocalDeclarations(
     }
 
     const name = nameNode.text();
+    const bodyNode =
+      node.childForField("body") ?? node.namedChildren().find((c) => c.kind === "interface_body");
+    const objectFields = bodyNode ? extractTypeFields(bodyNode, document.uri, mapper) : undefined;
+
     const evidence = makeEvidence(node, name, false, `TypeScript interface '${name}'`);
 
     declarations.push({
@@ -429,7 +487,8 @@ export function indexLocalDeclarations(
       documentUri: document.uri,
       snapshotHash: document.contentHash,
       evidence,
-      exported
+      exported,
+      objectFields
     });
   }
 
@@ -692,6 +751,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
   readonly [key: string]: unknown;
   readonly isLocalDeclarationIndex = true;
   private readonly documents = new Map<DocumentUri, SourceDocument>();
+  private readonly parsedDocuments = new Map<DocumentUri, ParsedDocument>();
   private readonly declarationsByDoc = new Map<DocumentUri, LocalDeclaration[]>();
   private readonly declarationsByName = new Map<string, LocalDeclaration[]>();
 
@@ -713,6 +773,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
     }
 
     this.documents.set(document.uri, document);
+    this.parsedDocuments.set(document.uri, parsed);
     const decls = indexLocalDeclarations(document, parsed);
     this.declarationsByDoc.set(document.uri, decls);
 
@@ -731,6 +792,7 @@ export class LocalDeclarationIndex implements ProjectIndexView {
    */
   removeDocument(uri: DocumentUri): void {
     this.documents.delete(uri);
+    this.parsedDocuments.delete(uri);
     const oldDecls = this.declarationsByDoc.get(uri);
     if (!oldDecls) {
       return;
@@ -758,10 +820,31 @@ export class LocalDeclarationIndex implements ProjectIndexView {
   }
 
   /**
+   * Retrieves all document URIs tracked in the index.
+   */
+  getAllTrackedUris(): readonly DocumentUri[] {
+    return [...this.documents.keys()];
+  }
+
+  /**
    * Retrieves an indexed source document snapshot by URI (ProjectIndexView requirement).
    */
   getDocument(uri: DocumentUri): SourceDocument | undefined {
     return this.documents.get(uri);
+  }
+
+  /**
+   * Retrieves a parsed document snapshot by URI.
+   */
+  getParsedDocument(uri: DocumentUri): ParsedDocument | undefined {
+    return this.parsedDocuments.get(uri);
+  }
+
+  /**
+   * Retrieves all parsed documents currently tracked in the index.
+   */
+  getAllParsedDocuments(): readonly ParsedDocument[] {
+    return [...this.parsedDocuments.values()];
   }
 
   /**

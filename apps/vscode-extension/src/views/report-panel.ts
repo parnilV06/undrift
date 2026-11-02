@@ -163,6 +163,8 @@ export function generateNonce(): string {
  */
 export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()): string {
   const activeFindings = model.findings.filter((f) => f.state !== "resolved");
+  const activeDriftFindings = activeFindings.filter((f) => f.ruleId !== "UND110");
+  const unmappedProviderFindings = activeFindings.filter((f) => f.ruleId === "UND110");
   const errorCount = activeFindings.filter((f) => f.severity === "error").length;
   const warningCount = activeFindings.filter((f) => f.severity === "warning").length;
   const infoCount = activeFindings.filter((f) => f.severity === "info").length;
@@ -929,7 +931,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
         .map(
           (w) => `
         <tr>
-          <td><code>${escapeHtml(w.code)}</code></td>
+          <td><code>${escapeHtml(w.code)}</code>${w.reasonCode ? `<br/><span style="font-size: 11px; opacity: 0.8;"><code>${escapeHtml(w.reasonCode)}</code></span>` : ""}</td>
           <td>${escapeHtml(w.message)}</td>
           <td>${w.source ? `<code>${escapeHtml(w.source.uri)}:${w.source.start ? w.source.start.line + 1 : 1}:${w.source.start ? w.source.start.character + 1 : 1}</code>` : "—"}</td>
           <td><code>${escapeHtml(w.scope ?? "workspace")}</code></td>
@@ -944,13 +946,38 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
   }
 
   ${
-    activeFindings.length > 0
+    activeDriftFindings.length > 0
       ? `
   <div class="section-title">
-    <span>Detected Drift Findings (${activeFindings.length})</span>
+    <span>Detected Drift Findings (${activeDriftFindings.length})</span>
   </div>
   <div class="findings-list">
-    ${activeFindings
+    ${activeDriftFindings
+      .map((finding) =>
+        renderFindingCard(
+          finding,
+          historyByFinding.get(finding.id) ?? [],
+          model.targetFindingId === finding.id,
+          model.proposalsByFinding?.get(finding.id) ?? [],
+          model.targetProposalId
+        )
+      )
+      .join("")}
+  </div>`
+      : ""
+  }
+
+  ${
+    unmappedProviderFindings.length > 0
+      ? `
+  <div class="section-title">
+    <span>Unmapped Provider Endpoints (${unmappedProviderFindings.length})</span>
+  </div>
+  <div style="margin-bottom: 12px; font-size: 13px; color: var(--vscode-descriptionForeground);">
+    These backend endpoints have no known in-workspace consumer. External consumers, dynamic callers, generated clients, or third parties may consume them.
+  </div>
+  <div class="findings-list">
+    ${unmappedProviderFindings
       .map((finding) =>
         renderFindingCard(
           finding,
@@ -1267,7 +1294,7 @@ function renderFindingCard(
     <div class="finding-explanation" style="border-left-color: var(--color-warning);">
       <strong>Known Limitations:</strong>
       <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-        ${finding.limitations.map((lim) => `<li>[${escapeHtml(lim.code)}] ${escapeHtml(lim.message)}</li>`).join("")}
+        ${finding.limitations.map((lim) => `<li>[${escapeHtml(lim.code)}${lim.reasonCode ? ` / ${escapeHtml(lim.reasonCode)}` : ""}] ${escapeHtml(lim.message)}</li>`).join("")}
       </ul>
     </div>`
         : ""

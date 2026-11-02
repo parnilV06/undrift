@@ -52,7 +52,7 @@ export function areRouteShapesEqual(
       }
       // Note: Parameter variable names (segA.name vs segB.name) do not need to match per LLD 10.3
     } else if (segA.kind === "wildcard") {
-      if (segB.kind !== "wildcard") {
+      if (segB.kind !== "wildcard" || Boolean(segA.optional) !== Boolean(segB.optional)) {
         return false;
       }
     }

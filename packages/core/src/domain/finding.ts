@@ -42,6 +42,21 @@ export type WarningTargetDimension =
   "route" | "method" | "request-shape" | "response-shape" | "all";
 
 /**
+ * Specific reason code explaining why static request payload inference was limited.
+ */
+export type PartialShapeReasonCode =
+  | "explicit-unknown-type"
+  | "explicit-any-type"
+  | "unannotated-parameter"
+  | "cross-module-forwarding"
+  | "no-caller-evidence"
+  | "multipart-no-construction-evidence"
+  | "multipart-partial-field-evidence"
+  | "dynamic-property"
+  | "unsupported-expression"
+  | "unresolved-reference";
+
+/**
  * Analysis warning indicating a limitation or failure during extraction.
  * Analysis warnings are NOT automatically drift findings and must not all
  * become error-level diagnostics.
@@ -54,6 +69,7 @@ export interface AnalysisWarning {
   affectsCompleteness: boolean;
   scope?: WarningScope;
   targetDimension?: WarningTargetDimension;
+  reasonCode?: PartialShapeReasonCode | (string & {});
 }
 
 /**

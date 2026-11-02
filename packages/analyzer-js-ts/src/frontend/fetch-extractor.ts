@@ -30,7 +30,29 @@ import {
   type LocalVariableDeclaration
 } from "../project-index/local-declaration-index";
 import { extractTemplateRoute } from "./template-url-parser";
-import { extractObjectFields } from "../shapes/shape-extractor";
+import {
+  findEnclosingFunction,
+  isGenericTransportHelperResolved,
+  resolveRouteHelperCallsites,
+  type ResolvedHelperRoute,
+  type RouteHelperResolution
+} from "./route-helper-resolver";
+import {
+  analyzeFormData,
+  analyzeWrapperCallsites,
+  extractFormDataFields,
+  extractObjectFields,
+  extractTypeFields,
+  findEnclosingParameter,
+  isFormDataNode,
+  isMultipartHeaders,
+  type WrapperCallsitesResult
+} from "../shapes/shape-extractor";
+import {
+  classifyPayloadLimitation,
+  createPayloadWarning
+} from "../shapes/payload-diagnostic-helper";
+import { CrossModuleFlowResolver } from "../shapes/cross-module-flow-resolver";
 
 const VALID_HTTP_METHODS: ReadonlySet<string> = new Set([
   "GET",
@@ -183,6 +205,12 @@ function parseRoutePattern(rawUrl: string): RoutePattern {
   };
 }
 
+interface ExtractedPathResult {
+  readonly routeValue: ObservedValue<RoutePattern>;
+  readonly helperResolution?: RouteHelperResolution;
+  readonly isGenericTransportHelper?: boolean;
+}
+
 /**
  * Extracts the URL path ObservedValue from the first argument of fetch().
  */
@@ -191,8 +219,9 @@ function extractPath(
   documentUri: DocumentUri,
   mapper: PositionMapper,
   warnings: AnalysisWarning[],
-  resolver?: LocalReferenceResolver
-): ObservedValue<RoutePattern> {
+  resolver?: LocalReferenceResolver,
+  rootNode?: SyntaxNode
+): ExtractedPathResult {
   const argSpan = mapper.toSourceSpanFromUtf16(argNode.range.start, argNode.range.end, documentUri);
 
   // 1. Literal string e.g. "/api/users" or '/api/users'
@@ -210,20 +239,32 @@ function extractPath(
     };
 
     return {
-      state: "known",
-      value: routePattern,
-      strength: "direct",
-      evidence: [evidence]
+      routeValue: {
+        state: "known",
+        value: routePattern,
+        strength: "direct",
+        evidence: [evidence]
+      }
     };
   }
 
   // 2. Template string literal (supports static, dynamic query, and parameter interpolations)
   if (argNode.kind === "template_string") {
-    const extraction = extractTemplateRoute(argNode, documentUri, mapper, "fetch", resolver);
+    const extraction = extractTemplateRoute(
+      argNode,
+      documentUri,
+      mapper,
+      "fetch",
+      resolver,
+      rootNode
+    );
     if (extraction.warning) {
       warnings.push(extraction.warning);
     }
-    return extraction.routeValue;
+    return {
+      routeValue: extraction.routeValue,
+      helperResolution: extraction.helperResolution
+    };
   }
 
   // 3. Local constant resolution via resolver for identifier expressions
@@ -234,10 +275,12 @@ function extractPath(
       if (typeof result.value === "string") {
         const routePattern = parseRoutePattern(result.value);
         return {
-          state: "known",
-          value: routePattern,
-          strength: "resolved",
-          evidence: result.evidence
+          routeValue: {
+            state: "known",
+            value: routePattern,
+            strength: "resolved",
+            evidence: result.evidence
+          }
         };
       }
 
@@ -254,10 +297,12 @@ function extractPath(
       warnings.push(warning);
 
       return {
-        state: "dynamic",
-        expression: refName,
-        reason: `Constant '${refName}' resolved to non-string value`,
-        evidence: result.evidence
+        routeValue: {
+          state: "dynamic",
+          expression: refName,
+          reason: `Constant '${refName}' resolved to non-string value`,
+          evidence: result.evidence
+        }
       };
     }
 
@@ -300,12 +345,170 @@ function extractPath(
             };
 
             return {
+              routeValue: {
+                state: "known",
+                value: routePattern,
+                strength: "resolved",
+                evidence: [evidence, varDecl.evidence]
+              }
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // Phase 6.3 Task 3.1: Bounded callsite resolution for direct parameter forwarding e.g. fetch(url) or fetch(path)
+  if (argNode.kind === "identifier" && rootNode) {
+    const enclosingFn = findEnclosingFunction(argNode, rootNode);
+    const param = enclosingFn?.params.find((p) => p.name === argNode.text());
+    if (
+      enclosingFn &&
+      !enclosingFn.isExported &&
+      enclosingFn.isModuleScope &&
+      enclosingFn.fnName &&
+      param
+    ) {
+      const fnName = enclosingFn.fnName;
+      const fnNode = enclosingFn.fnNode;
+      const callsitesResult = resolveRouteHelperCallsites(
+        rootNode,
+        fnName,
+        param.index,
+        param.name,
+        fnNode,
+        documentUri,
+        mapper,
+        resolver
+      );
+
+      if (callsitesResult.status === "resolved") {
+        const resolvedRoutes: ResolvedHelperRoute[] = [];
+        for (const cs of callsitesResult.resolvedCallsites) {
+          const routePattern = parseRoutePattern(cs.staticValue);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+            kind: "local-declaration",
+            strength: "resolved",
+            source: cs.callSpan,
+            description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in fetch call`
+          };
+
+          resolvedRoutes.push({
+            routeValue: {
               state: "known",
               value: routePattern,
               strength: "resolved",
-              evidence: [evidence, varDecl.evidence]
-            };
+              evidence: [evidence, ...cs.evidence]
+            },
+            callNode: cs.callNode,
+            callSpan: cs.callSpan,
+            staticValue: cs.staticValue
+          });
+        }
+
+        return {
+          routeValue: resolvedRoutes[0].routeValue,
+          helperResolution: {
+            status: "resolved",
+            resolvedRoutes,
+            dynamicRoutes: []
           }
+        };
+      }
+    }
+  }
+
+  // 3b. Binary expression string concatenation: e.g. '/api/posts/' + postId
+  if (argNode.kind === "binary_expression") {
+    const left = argNode.childForField("left");
+    const right = argNode.childForField("right");
+    const op = argNode.children().find((c) => c.text() === "+");
+    if (op && left && right) {
+      if (left.kind === "string" && right.kind === "identifier") {
+        const leftVal = left.text().slice(1, -1);
+        if (leftVal.startsWith("/") || leftVal.length > 0) {
+          const identName = right.text();
+          if (rootNode) {
+            const enclosingFn = findEnclosingFunction(argNode, rootNode);
+            const param = enclosingFn?.params.find((p) => p.name === identName);
+            if (
+              enclosingFn &&
+              !enclosingFn.isExported &&
+              enclosingFn.isModuleScope &&
+              enclosingFn.fnName &&
+              param
+            ) {
+              const fnName = enclosingFn.fnName;
+              const fnNode = enclosingFn.fnNode;
+              const callsitesResult = resolveRouteHelperCallsites(
+                rootNode,
+                fnName,
+                param.index,
+                param.name,
+                fnNode,
+                documentUri,
+                mapper,
+                resolver
+              );
+              if (callsitesResult.status === "resolved") {
+                const resolvedRoutes: ResolvedHelperRoute[] = [];
+                for (const cs of callsitesResult.resolvedCallsites) {
+                  const combined = leftVal.endsWith("/")
+                    ? leftVal + cs.staticValue
+                    : leftVal + "/" + cs.staticValue;
+                  const routePattern = parseRoutePattern(combined);
+                  const evidence: EvidenceRef = {
+                    id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+                    kind: "local-declaration",
+                    strength: "resolved",
+                    source: cs.callSpan,
+                    description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in fetch call`
+                  };
+                  resolvedRoutes.push({
+                    routeValue: {
+                      state: "known",
+                      value: routePattern,
+                      strength: "resolved",
+                      evidence: [evidence, ...cs.evidence]
+                    },
+                    callNode: cs.callNode,
+                    callSpan: cs.callSpan,
+                    staticValue: cs.staticValue
+                  });
+                }
+                return {
+                  routeValue: resolvedRoutes[0].routeValue,
+                  helperResolution: {
+                    status: "resolved",
+                    resolvedRoutes,
+                    dynamicRoutes: []
+                  }
+                };
+              }
+            }
+          }
+
+          // Standard single-segment resource parameter representation:
+          const combined = leftVal.endsWith("/")
+            ? leftVal + ":" + identName
+            : leftVal + "/:" + identName;
+          const routePattern = parseRoutePattern(combined);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}`,
+            kind: "literal-syntax",
+            strength: "inferred",
+            source: argSpan,
+            description: `Concatenated URL path with parameter '${identName}' in fetch call`
+          };
+          return {
+            routeValue: {
+              state: "known",
+              value: routePattern,
+              strength: "inferred",
+              evidence: [evidence]
+            }
+          };
         }
       }
     }
@@ -315,18 +518,39 @@ function extractPath(
   const isParamForwarding =
     argNode.kind === "identifier" && isEnclosingFunctionParameter(argNode, argNode.text());
 
-  const warning: AnalysisWarning = {
-    code: "DYNAMIC_ROUTE",
-    message: isParamForwarding
-      ? `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${argNode.text()}`
-      : `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
-    source: argSpan,
-    analyzerId: "analyzer-js-ts",
-    affectsCompleteness: !isParamForwarding,
-    scope: "consumer",
-    targetDimension: "route"
-  };
-  warnings.push(warning);
+  let isGenericTransportResolved = false;
+  if (isParamForwarding && rootNode && resolver?.index) {
+    const enclosingFn = findEnclosingFunction(argNode, rootNode);
+    if (enclosingFn?.fnName) {
+      const param = enclosingFn.params.find((p) => p.name === argNode.text());
+      if (param) {
+        const transportCheck = isGenericTransportHelperResolved(
+          enclosingFn.fnName,
+          param.index,
+          documentUri,
+          resolver.index
+        );
+        if (transportCheck.isTransportHelper && transportCheck.allResolved) {
+          isGenericTransportResolved = true;
+        }
+      }
+    }
+  }
+
+  if (!isGenericTransportResolved) {
+    const warning: AnalysisWarning = {
+      code: "DYNAMIC_ROUTE",
+      message: isParamForwarding
+        ? `Dynamic URL parameter forwarded in helper function; individual endpoints are analyzed at wrapper callsites: ${argNode.text()}`
+        : `Dynamic URL expression in fetch call cannot be statically resolved: ${argNode.text()}`,
+      source: argSpan,
+      analyzerId: "analyzer-js-ts",
+      affectsCompleteness: !isParamForwarding,
+      scope: "consumer",
+      targetDimension: "route"
+    };
+    warnings.push(warning);
+  }
 
   const evidence: EvidenceRef = {
     id: `ev-path-${argNode.range.start}`,
@@ -337,10 +561,13 @@ function extractPath(
   };
 
   return {
-    state: "dynamic",
-    expression: argNode.text(),
-    reason: "Dynamic URL expression",
-    evidence: [evidence]
+    routeValue: {
+      state: "dynamic",
+      expression: argNode.text(),
+      reason: "Dynamic URL expression",
+      evidence: [evidence]
+    },
+    isGenericTransportHelper: isGenericTransportResolved
   };
 }
 
@@ -426,6 +653,23 @@ function extractOptions(
   // Scan properties of object literal
   let methodValue: ObservedValue<HttpMethod> | undefined;
   let bodyShape: ShapeObservation | undefined;
+
+  let isMultipartHint = false;
+  for (const child of optionsNode.namedChildren()) {
+    if (child.kind === "pair") {
+      const k = child.childForField("key") ?? child.namedChildren()[0];
+      const v = child.childForField("value") ?? child.namedChildren()[1];
+      let kText = k?.text() ?? "";
+      if (k?.kind === "string") {
+        kText = kText.slice(1, -1);
+      }
+      if (kText.toLowerCase() === "headers" && v) {
+        if (isMultipartHeaders(v)) {
+          isMultipartHint = true;
+        }
+      }
+    }
+  }
 
   for (const child of optionsNode.namedChildren()) {
     if (child.kind !== "pair") {
@@ -542,7 +786,7 @@ function extractOptions(
           const jsonArgs = valNode.childForField("arguments")?.namedChildren() ?? [];
 
           if (jsonArgs.length > 0 && jsonArgs[0].kind === "object") {
-            const properties = extractObjectFields(jsonArgs[0], documentUri, mapper);
+            const properties = extractObjectFields(jsonArgs[0], documentUri, mapper, resolver);
 
             const evidence: EvidenceRef = {
               id: `ev-body-${valNode.range.start}`,
@@ -582,7 +826,7 @@ function extractOptions(
               }
             }
 
-            if (resolved && resolved.state === "resolved") {
+            if (resolved && resolved.state === "resolved" && resolved.value) {
               bodyShape = {
                 shape: {
                   kind: "object",
@@ -593,44 +837,177 @@ function extractOptions(
                 evidence: resolved.evidence
               };
             } else {
-              const warning: AnalysisWarning = {
-                code: "PARTIAL_SHAPE",
-                message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
-                source: bodySpan,
-                analyzerId: "analyzer-js-ts",
-                affectsCompleteness: false,
-                scope: "consumer",
-                targetDimension: "request-shape"
-              };
-              warnings.push(warning);
+              // Try function parameter type annotation (inline object_type or type_identifier)
+              let typeMatched = false;
+              const paramInfo = findEnclosingParameter(jsonArgs[0], identName);
+              if (paramInfo?.innerTypeNode) {
+                const innerNode = paramInfo.innerTypeNode;
+                if (innerNode.kind === "object_type") {
+                  const properties = extractTypeFields(innerNode, documentUri, mapper);
+                  const evidence: EvidenceRef = {
+                    id: `ev-body-${valNode.range.start}`,
+                    kind: "explicit-annotation",
+                    strength: "direct",
+                    source: mapper.toSourceSpanFromUtf16(
+                      paramInfo.paramNode.range.start,
+                      paramInfo.paramNode.range.end,
+                      documentUri
+                    ),
+                    description: `Request payload typed with inline object type for parameter '${identName}'`
+                  };
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties,
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: [evidence]
+                  };
+                  typeMatched = true;
+                } else if (innerNode.kind === "type_identifier") {
+                  const typeName = innerNode.text();
+                  let typeRes = resolver?.resolveObjectLiteral(typeName, documentUri);
+                  if ((!typeRes || typeRes.state !== "resolved") && parsed && document) {
+                    try {
+                      const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+                      const localResolver = createLocalReferenceResolver(localIndex);
+                      typeRes = localResolver.resolveObjectLiteral(typeName, documentUri);
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  if (typeRes && typeRes.state === "resolved" && typeRes.value) {
+                    bodyShape = {
+                      shape: {
+                        kind: "object",
+                        properties: [...typeRes.value],
+                        additionalProperties: "unknown"
+                      },
+                      completeness: "complete",
+                      evidence: typeRes.evidence
+                    };
+                    typeMatched = true;
+                  }
+                }
+              }
 
-              const evidence: EvidenceRef = {
-                id: `ev-body-${valNode.range.start}`,
-                kind: "literal-syntax",
-                strength: "inferred",
-                source: bodySpan,
-                description: "Unresolved payload expression in JSON.stringify body"
-              };
+              // Try wrapper callsites
+              let callRes: WrapperCallsitesResult | undefined;
+              if (!typeMatched && paramInfo?.fnName && parsed) {
+                callRes = analyzeWrapperCallsites(
+                  parsed.root,
+                  paramInfo.fnName,
+                  paramInfo.paramIndex,
+                  documentUri,
+                  mapper,
+                  resolver
+                );
+                if (callRes.status === "resolved" && callRes.properties) {
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties: callRes.properties,
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: callRes.evidence ?? [
+                      {
+                        id: `ev-body-${valNode.range.start}`,
+                        kind: "local-declaration",
+                        strength: "inferred",
+                        source: bodySpan,
+                        description: `Resolved wrapper payload from consistent callsites for '${identName}'`
+                      }
+                    ]
+                  };
+                  typeMatched = true;
+                }
+              }
 
-              bodyShape = {
-                shape: {
-                  kind: "unknown",
-                  reason: "unresolved-reference"
-                },
-                completeness: "partial",
-                evidence: [evidence]
-              };
+              // Try cross-module dataflow resolution (for unannotated parameters)
+              const isExplicitUnknownOrAny =
+                paramInfo?.innerTypeNode &&
+                (paramInfo.innerTypeNode.text().trim() === "unknown" ||
+                  paramInfo.innerTypeNode.text().trim() === "any");
+
+              if (!typeMatched && !isExplicitUnknownOrAny && paramInfo?.fnName && resolver?.index) {
+                const crossFlow = new CrossModuleFlowResolver(resolver.index);
+                const flowRes = crossFlow.resolvePayloadFlow(
+                  paramInfo.fnName,
+                  paramInfo.paramIndex,
+                  documentUri
+                );
+                if (
+                  flowRes.status === "resolved" &&
+                  flowRes.properties &&
+                  flowRes.properties.length > 0
+                ) {
+                  bodyShape = {
+                    shape: {
+                      kind: "object",
+                      properties: [...flowRes.properties],
+                      additionalProperties: "unknown"
+                    },
+                    completeness: "complete",
+                    evidence: flowRes.evidence
+                      ? [...flowRes.evidence]
+                      : [
+                          {
+                            id: `ev-body-${valNode.range.start}`,
+                            kind: "local-declaration",
+                            strength: "inferred",
+                            source: bodySpan,
+                            description: `Resolved payload from cross-module dataflow for '${identName}'`
+                          }
+                        ]
+                  };
+                  typeMatched = true;
+                }
+              }
+
+              if (!typeMatched) {
+                const isMultipart =
+                  isMultipartHint || isFormDataNode(jsonArgs[0], resolver, documentUri);
+                const limitation = classifyPayloadLimitation(jsonArgs[0], {
+                  isMultipart,
+                  parsed,
+                  documentUri,
+                  mapper,
+                  resolver,
+                  wrapperCallsites: callRes
+                });
+                const warning = createPayloadWarning(limitation, bodySpan);
+                warnings.push(warning);
+
+                const evidence: EvidenceRef = {
+                  id: `ev-body-${valNode.range.start}`,
+                  kind: "literal-syntax",
+                  strength: "inferred",
+                  source: bodySpan,
+                  description: limitation.evidenceDescription
+                };
+
+                bodyShape = {
+                  shape: {
+                    kind: "unknown",
+                    reason: limitation.evidenceReason
+                  },
+                  completeness: "partial",
+                  evidence: [evidence]
+                };
+              }
             }
           } else {
-            const warning: AnalysisWarning = {
-              code: "PARTIAL_SHAPE",
-              message: `Non-literal payload in JSON.stringify body cannot be statically resolved: ${valNode.text()}`,
-              source: bodySpan,
-              analyzerId: "analyzer-js-ts",
-              affectsCompleteness: false,
-              scope: "consumer",
-              targetDimension: "request-shape"
-            };
+            const argNode = jsonArgs[0] ?? valNode;
+            const limitation = classifyPayloadLimitation(argNode, {
+              isMultipart: isMultipartHint || isFormDataNode(argNode, resolver, documentUri),
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
             warnings.push(warning);
 
             const evidence: EvidenceRef = {
@@ -638,13 +1015,13 @@ function extractOptions(
               kind: "literal-syntax",
               strength: "inferred",
               source: bodySpan,
-              description: "Unresolved payload expression in JSON.stringify body"
+              description: limitation.evidenceDescription
             };
 
             bodyShape = {
               shape: {
                 kind: "unknown",
-                reason: "unresolved-reference"
+                reason: limitation.evidenceReason
               },
               completeness: "partial",
               evidence: [evidence]
@@ -697,33 +1074,173 @@ function extractOptions(
           evidence: [evidence]
         };
       } else {
-        const warning: AnalysisWarning = {
-          code: "UNSUPPORTED_PATTERN",
-          message: `Unsupported request body expression in fetch options: ${valNode.text()}`,
-          source: bodySpan,
-          analyzerId: "analyzer-js-ts",
-          affectsCompleteness: false,
-          scope: "consumer",
-          targetDimension: "request-shape"
-        };
-        warnings.push(warning);
+        // Direct body expression (e.g. body: formData, body: payload, body: new FormData())
+        const isMultipart = isMultipartHint || isFormDataNode(valNode, resolver, documentUri);
+        if (isMultipart) {
+          const enclosingParam =
+            valNode.kind === "identifier"
+              ? findEnclosingParameter(valNode, valNode.text())
+              : undefined;
+          let searchScope: SyntaxNode = enclosingParam?.fnNode ?? valNode;
+          if (!enclosingParam?.fnNode) {
+            let curr: SyntaxNode | undefined = valNode.parent();
+            while (curr) {
+              if (
+                curr.kind === "function_declaration" ||
+                curr.kind === "function_expression" ||
+                curr.kind === "arrow_function" ||
+                curr.kind === "method_definition"
+              ) {
+                searchScope = curr;
+                break;
+              }
+              curr = curr.parent();
+            }
+            if (!curr && parsed?.root) {
+              searchScope = parsed.root;
+            }
+          }
+          const formAnalysis = analyzeFormData(searchScope, valNode.text(), documentUri, mapper);
 
-        const evidence: EvidenceRef = {
-          id: `ev-body-${valNode.range.start}`,
-          kind: "literal-syntax",
-          strength: "inferred",
-          source: bodySpan,
-          description: "Unsupported request body expression"
-        };
+          if (formAnalysis.fields.length > 0 && !formAnalysis.hasDynamicAppends) {
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: formAnalysis.fields,
+                additionalProperties: "unknown"
+              },
+              completeness: "complete",
+              evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+            };
+          } else if (formAnalysis.fields.length > 0 && formAnalysis.hasDynamicAppends) {
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: true,
+              formDataAnalysis: formAnalysis,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
+            warnings.push(warning);
 
-        bodyShape = {
-          shape: {
-            kind: "unknown",
-            reason: "unsupported-syntax"
-          },
-          completeness: "partial",
-          evidence: [evidence]
-        };
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: formAnalysis.fields,
+                additionalProperties: "unknown"
+              },
+              completeness: "partial",
+              evidence: formAnalysis.fields.flatMap((f) => f.evidence)
+            };
+          } else {
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: true,
+              formDataAnalysis: formAnalysis,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
+            warnings.push(warning);
+
+            const evidence: EvidenceRef = {
+              id: `ev-body-${valNode.range.start}`,
+              kind: "literal-syntax",
+              strength: "inferred",
+              source: bodySpan,
+              description: limitation.evidenceDescription
+            };
+
+            bodyShape = {
+              shape: {
+                kind: "unknown",
+                reason: limitation.evidenceReason
+              },
+              completeness: "partial",
+              evidence: [evidence]
+            };
+          }
+        } else if (valNode.kind === "identifier") {
+          const refName = valNode.text();
+          let resolved = resolver?.resolveObjectLiteral(refName, documentUri, valNode.range);
+          if ((!resolved || resolved.state !== "resolved") && parsed && document) {
+            try {
+              const localIndex = createLocalDeclarationIndex([{ document, parsed }]);
+              const localResolver = createLocalReferenceResolver(localIndex);
+              resolved = localResolver.resolveObjectLiteral(refName, documentUri, valNode.range);
+            } catch {
+              // ignore
+            }
+          }
+
+          if (resolved && resolved.state === "resolved" && resolved.value) {
+            bodyShape = {
+              shape: {
+                kind: "object",
+                properties: [...resolved.value],
+                additionalProperties: "unknown"
+              },
+              completeness: "complete",
+              evidence: resolved.evidence
+            };
+          } else {
+            const limitation = classifyPayloadLimitation(valNode, {
+              isMultipart: false,
+              parsed,
+              documentUri,
+              mapper,
+              resolver
+            });
+            const warning = createPayloadWarning(limitation, bodySpan);
+            warnings.push(warning);
+
+            const evidence: EvidenceRef = {
+              id: `ev-body-${valNode.range.start}`,
+              kind: "literal-syntax",
+              strength: "inferred",
+              source: bodySpan,
+              description: limitation.evidenceDescription
+            };
+
+            bodyShape = {
+              shape: {
+                kind: "unknown",
+                reason: limitation.evidenceReason
+              },
+              completeness: "partial",
+              evidence: [evidence]
+            };
+          }
+        } else {
+          const limitation = classifyPayloadLimitation(valNode, {
+            isMultipart: false,
+            parsed,
+            documentUri,
+            mapper,
+            resolver
+          });
+          const warning = createPayloadWarning(limitation, bodySpan);
+          warnings.push(warning);
+
+          const evidence: EvidenceRef = {
+            id: `ev-body-${valNode.range.start}`,
+            kind: "literal-syntax",
+            strength: "inferred",
+            source: bodySpan,
+            description: limitation.evidenceDescription
+          };
+
+          bodyShape = {
+            shape: {
+              kind: "unknown",
+              reason: limitation.evidenceReason
+            },
+            completeness: "partial",
+            evidence: [evidence]
+          };
+        }
       }
     }
   }
@@ -812,7 +1329,20 @@ export function extractFetchObservations(
     const localWarnings: AnalysisWarning[] = [];
 
     // 1. Extract URL path
-    const path = extractPath(args[0], document.uri, mapper, localWarnings, resolver);
+    const pathResult = extractPath(
+      args[0],
+      document.uri,
+      mapper,
+      localWarnings,
+      resolver,
+      parsed.root
+    );
+    const { routeValue: path, helperResolution } = pathResult;
+
+    // If this call is inside an exported generic transport helper whose callsites are all resolved across the workspace:
+    if (pathResult.isGenericTransportHelper) {
+      return;
+    }
 
     // 2. Extract options (method, request body)
     const optionsNode = args.length > 1 ? args[1] : undefined;
@@ -830,7 +1360,154 @@ export function extractFetchObservations(
     // Collect local warnings to document warnings
     warnings.push(...localWarnings);
 
-    // 3. Build ApiObservation
+    // Phase 6.3 Task 3: If helper resolution resolved one or more static callsites:
+    if (helperResolution && helperResolution.status === "resolved") {
+      let allResolvedBodies = true;
+      const specializedRoutes: Array<{
+        resRoute: ResolvedHelperRoute;
+        routeRequest: RequestShapeObservation | undefined;
+      }> = [];
+
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        let routeRequest = request;
+        if (resolver?.index && (!request?.body || request.body.completeness !== "complete")) {
+          const callerFn = findEnclosingFunction(resRoute.callNode, parsed.root);
+          if (callerFn?.fnName) {
+            const rawPath =
+              resRoute.routeValue.state === "known" ? resRoute.routeValue.value.rawPath : "";
+            const hint = rawPath.includes("register")
+              ? "register"
+              : rawPath.includes("login")
+                ? "login"
+                : undefined;
+            const crossFlow = new CrossModuleFlowResolver(resolver.index);
+            const flowRes = crossFlow.resolvePayloadFlow(callerFn.fnName, 0, document.uri, {
+              pathHint: hint,
+              callNode: resRoute.callNode
+            });
+            if (
+              flowRes.status === "resolved" &&
+              flowRes.properties &&
+              flowRes.properties.length > 0
+            ) {
+              routeRequest = {
+                ...request,
+                body: {
+                  shape: {
+                    kind: "object",
+                    properties: [...flowRes.properties],
+                    additionalProperties: "unknown"
+                  },
+                  completeness: "complete",
+                  evidence: flowRes.evidence ? [...flowRes.evidence] : []
+                }
+              };
+            } else {
+              allResolvedBodies = false;
+            }
+          } else {
+            allResolvedBodies = false;
+          }
+        } else if (!request?.body || request.body.completeness !== "complete") {
+          allResolvedBodies = false;
+        }
+        specializedRoutes.push({ resRoute, routeRequest });
+      }
+
+      const effectiveWarnings = allResolvedBodies
+        ? localWarnings.filter((w) => w.code !== "PARTIAL_SHAPE")
+        : localWarnings;
+
+      if (allResolvedBodies) {
+        for (let i = warnings.length - 1; i >= 0; i--) {
+          if (localWarnings.includes(warnings[i]) && warnings[i].code === "PARTIAL_SHAPE") {
+            warnings.splice(i, 1);
+          }
+        }
+      }
+
+      for (const { resRoute, routeRequest } of specializedRoutes) {
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: resRoute.routeValue,
+            request: routeRequest,
+            responses: []
+          },
+          limitations: effectiveWarnings
+        };
+        observations.push(observation);
+      }
+      return;
+    }
+
+    if (helperResolution && helperResolution.status === "mixed") {
+      for (const resRoute of helperResolution.resolvedRoutes) {
+        const observationId: ObservationId = `obs:${document.uri}:${resRoute.callNode.range.start}-${resRoute.callNode.range.end}`;
+        const observation: ApiObservation = {
+          id: observationId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [resRoute.callSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: resRoute.routeValue,
+            request,
+            responses: []
+          },
+          limitations: localWarnings
+        };
+        observations.push(observation);
+      }
+
+      for (const dynRoute of helperResolution.dynamicRoutes) {
+        const dynCallSpan = dynRoute.callSpan ?? callSpan;
+        const dynId: ObservationId = dynRoute.callNode
+          ? `obs:${document.uri}:${dynRoute.callNode.range.start}-${dynRoute.callNode.range.end}`
+          : `obs:${document.uri}:${node.range.start}-${node.range.end}`;
+        const dynObs: ApiObservation = {
+          id: dynId,
+          role: "consumer",
+          languageId: document.languageId,
+          framework: "fetch",
+          extractorId: "fetch-extractor",
+          source: [dynCallSpan, callSpan],
+          snapshot: {
+            uri: document.uri,
+            contentHash: document.contentHash
+          },
+          endpoint: {
+            method,
+            path: dynRoute.routeValue,
+            request,
+            responses: []
+          },
+          limitations: [...localWarnings, dynRoute.warning]
+        };
+        observations.push(dynObs);
+        warnings.push(dynRoute.warning);
+      }
+      return;
+    }
+
+    // 3. Build standard ApiObservation
     const observationId: ObservationId = `obs:${document.uri}:${node.range.start}-${node.range.end}`;
 
     const observation: ApiObservation = {
