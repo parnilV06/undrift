@@ -349,11 +349,17 @@ function extractPath(
     }
   }
 
-  // Phase 6.3 Task 3: Bounded callsite resolution for direct parameter forwarding e.g. fetch(url) or fetch(path)
+  // Phase 6.3 Task 3.1: Bounded callsite resolution for direct parameter forwarding e.g. fetch(url) or fetch(path)
   if (argNode.kind === "identifier" && rootNode) {
     const enclosingFn = findEnclosingFunction(argNode, rootNode);
     const param = enclosingFn?.params.find((p) => p.name === argNode.text());
-    if (enclosingFn && !enclosingFn.isExported && enclosingFn.fnName && param) {
+    if (
+      enclosingFn &&
+      !enclosingFn.isExported &&
+      enclosingFn.isModuleScope &&
+      enclosingFn.fnName &&
+      param
+    ) {
       const fnName = enclosingFn.fnName;
       const fnNode = enclosingFn.fnNode;
       const callsitesResult = resolveRouteHelperCallsites(
@@ -400,6 +406,101 @@ function extractPath(
             dynamicRoutes: []
           }
         };
+      }
+    }
+  }
+
+  // 3b. Binary expression string concatenation: e.g. '/api/posts/' + postId
+  if (argNode.kind === "binary_expression") {
+    const left = argNode.childForField("left");
+    const right = argNode.childForField("right");
+    const op = argNode.children().find((c) => c.text() === "+");
+    if (op && left && right) {
+      if (left.kind === "string" && right.kind === "identifier") {
+        const leftVal = left.text().slice(1, -1);
+        if (leftVal.startsWith("/") || leftVal.length > 0) {
+          const identName = right.text();
+          if (rootNode) {
+            const enclosingFn = findEnclosingFunction(argNode, rootNode);
+            const param = enclosingFn?.params.find((p) => p.name === identName);
+            if (
+              enclosingFn &&
+              !enclosingFn.isExported &&
+              enclosingFn.isModuleScope &&
+              enclosingFn.fnName &&
+              param
+            ) {
+              const fnName = enclosingFn.fnName;
+              const fnNode = enclosingFn.fnNode;
+              const callsitesResult = resolveRouteHelperCallsites(
+                rootNode,
+                fnName,
+                param.index,
+                param.name,
+                fnNode,
+                documentUri,
+                mapper,
+                resolver
+              );
+              if (callsitesResult.status === "resolved") {
+                const resolvedRoutes: ResolvedHelperRoute[] = [];
+                for (const cs of callsitesResult.resolvedCallsites) {
+                  const combined = leftVal.endsWith("/")
+                    ? leftVal + cs.staticValue
+                    : leftVal + "/" + cs.staticValue;
+                  const routePattern = parseRoutePattern(combined);
+                  const evidence: EvidenceRef = {
+                    id: `ev-path-${argNode.range.start}-${cs.callNode.range.start}`,
+                    kind: "local-declaration",
+                    strength: "resolved",
+                    source: cs.callSpan,
+                    description: `Resolved URL '${routePattern.rawPath}' from helper call to '${fnName}' in fetch call`
+                  };
+                  resolvedRoutes.push({
+                    routeValue: {
+                      state: "known",
+                      value: routePattern,
+                      strength: "resolved",
+                      evidence: [evidence, ...cs.evidence]
+                    },
+                    callNode: cs.callNode,
+                    callSpan: cs.callSpan,
+                    staticValue: cs.staticValue
+                  });
+                }
+                return {
+                  routeValue: resolvedRoutes[0].routeValue,
+                  helperResolution: {
+                    status: "resolved",
+                    resolvedRoutes,
+                    dynamicRoutes: []
+                  }
+                };
+              }
+            }
+          }
+
+          // Standard single-segment resource parameter representation:
+          const combined = leftVal.endsWith("/")
+            ? leftVal + ":" + identName
+            : leftVal + "/:" + identName;
+          const routePattern = parseRoutePattern(combined);
+          const evidence: EvidenceRef = {
+            id: `ev-path-${argNode.range.start}`,
+            kind: "literal-syntax",
+            strength: "inferred",
+            source: argSpan,
+            description: `Concatenated URL path with parameter '${identName}' in fetch call`
+          };
+          return {
+            routeValue: {
+              state: "known",
+              value: routePattern,
+              strength: "inferred",
+              evidence: [evidence]
+            }
+          };
+        }
       }
     }
   }

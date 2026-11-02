@@ -307,7 +307,14 @@ export function extractTemplateRoute(
       if (rootNode) {
         const enclosingFn = findEnclosingFunction(argNode, rootNode);
         const param = enclosingFn?.params.find((p) => p.name === identName);
-        if (enclosingFn && !enclosingFn.isExported && enclosingFn.fnName && param) {
+        // Phase 6.3 Task 3.1: Check if identName is a formal parameter of an unexported module-scope helper function
+        if (
+          enclosingFn &&
+          !enclosingFn.isExported &&
+          enclosingFn.isModuleScope &&
+          enclosingFn.fnName &&
+          param
+        ) {
           const fnName = enclosingFn.fnName;
           const fnNode = enclosingFn.fnNode;
           const callsitesResult = resolveRouteHelperCallsites(

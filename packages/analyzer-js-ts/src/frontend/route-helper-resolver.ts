@@ -23,6 +23,7 @@ export interface EnclosingFunctionInfo {
   readonly fnNode: SyntaxNode;
   readonly fnName?: string;
   readonly isExported: boolean;
+  readonly isModuleScope: boolean;
   readonly params: readonly EnclosingParameterInfo[];
 }
 
@@ -166,6 +167,101 @@ export function isSymbolExported(root: SyntaxNode, symbolName: string): boolean 
 }
 
 /**
+ * Checks whether a function syntax node is declared directly at module/file scope
+ * rather than being nested inside another function, method, or class body.
+ */
+export function isFunctionAtModuleScope(fnNode: SyntaxNode, root?: SyntaxNode): boolean {
+  let p: SyntaxNode | undefined = fnNode.parent();
+  while (p) {
+    if (root && p.range.start === root.range.start && p.range.end === root.range.end) {
+      return true;
+    }
+    if (p.kind === "program") {
+      return true;
+    }
+    // If the function is declared inside another function, method, or class body, it is NOT at module scope
+    if (
+      p.kind === "function_declaration" ||
+      p.kind === "function_expression" ||
+      p.kind === "arrow_function" ||
+      p.kind === "method_definition" ||
+      p.kind === "generator_function" ||
+      p.kind === "generator_function_declaration" ||
+      p.kind === "class_declaration" ||
+      p.kind === "class_expression" ||
+      p.kind === "class_body"
+    ) {
+      return false;
+    }
+    p = p.parent();
+  }
+  return true;
+}
+
+/**
+ * Checks whether an occurrence of an identifier is shadowed by an intervening parameter or local declaration.
+ */
+export function isIdentifierShadowed(
+  node: SyntaxNode,
+  symbolName: string,
+  declNode: SyntaxNode
+): boolean {
+  let curr: SyntaxNode | undefined = node.parent();
+  while (curr) {
+    if (curr.range.start === declNode.range.start && curr.range.end === declNode.range.end) {
+      break;
+    }
+    if (
+      curr.kind === "function_declaration" ||
+      curr.kind === "function_expression" ||
+      curr.kind === "arrow_function" ||
+      curr.kind === "method_definition"
+    ) {
+      const paramsNode =
+        curr.childForField("parameters") ??
+        curr.namedChildren().find((c) => c.kind === "formal_parameters");
+      if (paramsNode) {
+        for (const p of paramsNode.namedChildren()) {
+          let paramName: string | undefined;
+          if (p.kind === "identifier") {
+            paramName = p.text();
+          } else if (p.kind === "required_parameter" || p.kind === "optional_parameter") {
+            const pat = p.childForField("pattern") ?? p.namedChildren()[0];
+            if (pat?.kind === "identifier") paramName = pat.text();
+          }
+          if (paramName === symbolName) {
+            return true;
+          }
+        }
+      }
+    }
+
+    if (curr.kind === "statement_block") {
+      for (const stmt of curr.namedChildren()) {
+        if (stmt.range.start === declNode.range.start && stmt.range.end === declNode.range.end) {
+          continue;
+        }
+        if (stmt.kind === "lexical_declaration" || stmt.kind === "variable_declaration") {
+          for (const declarator of stmt.namedChildren()) {
+            if (declarator.kind === "variable_declarator") {
+              const nameNode = declarator.childForField("name") ?? declarator.namedChildren()[0];
+              if (nameNode?.kind === "identifier" && nameNode.text() === symbolName) {
+                if (declarator.range.start < node.range.start) {
+                  return true;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    curr = curr.parent();
+  }
+  return false;
+}
+
+/**
  * Finds the immediate enclosing function node, its name, export status, and formal parameters.
  */
 export function findEnclosingFunction(
@@ -211,6 +307,9 @@ export function findEnclosingFunction(
         isExported = isSymbolExported(root, fnName);
       }
 
+      // Check module-level declaration context
+      const isModuleScope = isFunctionAtModuleScope(curr, root);
+
       // Extract formal parameters
       const paramsNode =
         curr.childForField("parameters") ??
@@ -240,6 +339,7 @@ export function findEnclosingFunction(
         fnNode: curr,
         fnName,
         isExported,
+        isModuleScope,
         params
       };
     }
@@ -272,6 +372,11 @@ export function resolveRouteHelperCallsites(
     if (n.kind === "identifier" && n.text() === fnName) {
       // 1. Inside declaration itself?
       if (n.range.start >= declNode.range.start && n.range.end <= declNode.range.end) {
+        return;
+      }
+
+      // Check if this reference is shadowed by an intervening lexical parameter or variable
+      if (isIdentifierShadowed(n, fnName, declNode)) {
         return;
       }
 
