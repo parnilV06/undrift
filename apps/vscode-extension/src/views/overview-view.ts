@@ -96,6 +96,8 @@ function renderSidebarStatusBadge(status: VerificationState): string {
   switch (status) {
     case "freshly-verified":
       return '<span class="status-badge status-fresh">Verified</span>';
+    case "analyzing":
+      return '<span class="status-badge status-neutral">Scanning…</span>';
     case "last-known":
       return '<span class="status-badge status-last-known">Last Known</span>';
     case "analysis-incomplete":
@@ -712,6 +714,7 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
   private view?: vscode.WebviewView;
   private readonly coordinator?: AnalysisCoordinator;
   private coordinatorSubscription?: { dispose(): void };
+  private coordinatorStartedSubscription?: { dispose(): void };
   private readonly vscodeModule?: typeof vscode;
   private readonly logger?: ExtensionLogger;
   private readonly extensionUri?: vscode.Uri;
@@ -728,6 +731,12 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
       this.coordinatorSubscription = this.coordinator.onAnalysisCompleted((outcome) => {
         this.handleAnalysisOutcome(outcome);
       });
+
+      if (typeof this.coordinator.onAnalysisStarted === "function") {
+        this.coordinatorStartedSubscription = this.coordinator.onAnalysisStarted((evt) => {
+          this.handleAnalysisStarted(evt);
+        });
+      }
 
       const wsId = this.coordinator.getActiveWorkspaceId();
       if (wsId) {
@@ -791,6 +800,10 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
   }
 
   public getCurrentModel(): OverviewViewModel | undefined {
+    return this.currentModel;
+  }
+
+  public getModel(): OverviewViewModel | undefined {
     return this.currentModel;
   }
 
@@ -987,6 +1000,29 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
     }
   }
 
+  /**
+   * Handles notification when analysis begins in the coordinator.
+   */
+  public handleAnalysisStarted(event?: { workspaceId: WorkspaceId; generation: number }): void {
+    if (this.disposed) return;
+    const wsId =
+      event?.workspaceId ??
+      this.currentModel?.workspaceId ??
+      this.coordinator?.getActiveWorkspaceId();
+    const wsLabel = wsId ? (wsId.replace(/\\/g, "/").split("/").pop() ?? wsId) : "Workspace";
+    this.currentModel = {
+      workspaceId: wsId,
+      workspaceLabel: wsLabel,
+      status: "analyzing",
+      timestamp: this.currentModel?.timestamp,
+      statusMessage: this.currentModel?.statusMessage,
+      findings: this.currentModel?.findings ?? [],
+      warnings: this.currentModel?.warnings ?? [],
+      coverage: this.currentModel?.coverage
+    };
+    this.render();
+  }
+
   public updateBadge(): void {
     if (!this.currentModel) return;
     const activeFindingsCount = this.currentModel.findings.filter(
@@ -1015,6 +1051,10 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
     if (this.coordinatorSubscription) {
       this.coordinatorSubscription.dispose();
       this.coordinatorSubscription = undefined;
+    }
+    if (this.coordinatorStartedSubscription) {
+      this.coordinatorStartedSubscription.dispose();
+      this.coordinatorStartedSubscription = undefined;
     }
     this.view = undefined;
   }

@@ -29,6 +29,7 @@ import type { ExtensionLogger } from "../logging/output-channel";
  */
 export type VerificationState =
   | "freshly-verified"
+  | "analyzing"
   | "last-known"
   | "analysis-incomplete"
   | "analysis-failed"
@@ -331,6 +332,7 @@ export class FindingsTreeDataProvider
   private activeWorkspaceId?: WorkspaceId;
 
   private coordinatorSubscription?: { dispose(): void };
+  private coordinatorStartedSubscription?: { dispose(): void };
   private coordinator?: AnalysisCoordinator;
   private disposed = false;
 
@@ -367,6 +369,10 @@ export class FindingsTreeDataProvider
       this.coordinatorSubscription.dispose();
       this.coordinatorSubscription = undefined;
     }
+    if (this.coordinatorStartedSubscription) {
+      this.coordinatorStartedSubscription.dispose();
+      this.coordinatorStartedSubscription = undefined;
+    }
 
     this.coordinator = coordinator;
 
@@ -374,6 +380,13 @@ export class FindingsTreeDataProvider
     this.coordinatorSubscription = coordinator.onAnalysisCompleted((outcome) => {
       this.handleAnalysisOutcome(outcome);
     });
+
+    // Subscribe to coordinator analysis started events
+    if (typeof coordinator.onAnalysisStarted === "function") {
+      this.coordinatorStartedSubscription = coordinator.onAnalysisStarted((evt) => {
+        this.handleAnalysisStarted(evt);
+      });
+    }
 
     // Populate initial state from coordinator if a restored snapshot or active workspace is present
     const wsId = coordinator.getActiveWorkspaceId();
@@ -857,6 +870,27 @@ export class FindingsTreeDataProvider
     this.workspaceStates.set(state.workspaceId, state);
   }
 
+  /**
+   * Handles notification when analysis begins in the coordinator.
+   */
+  public handleAnalysisStarted(event?: { workspaceId: WorkspaceId; generation: number }): void {
+    if (this.disposed) return;
+    const wsId =
+      event?.workspaceId ?? this.activeWorkspaceId ?? this.coordinator?.getActiveWorkspaceId();
+    if (!wsId) return;
+    this.activeWorkspaceId = wsId;
+    const prior = this.workspaceStates.get(wsId);
+    this.setWorkspaceState({
+      workspaceId: wsId,
+      status: "analyzing",
+      findings: prior?.findings ?? [],
+      history: prior?.history ?? [],
+      timestamp: prior?.timestamp,
+      message: prior?.message
+    });
+    this.refresh();
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -864,6 +898,10 @@ export class FindingsTreeDataProvider
     if (this.coordinatorSubscription) {
       this.coordinatorSubscription.dispose();
       this.coordinatorSubscription = undefined;
+    }
+    if (this.coordinatorStartedSubscription) {
+      this.coordinatorStartedSubscription.dispose();
+      this.coordinatorStartedSubscription = undefined;
     }
 
     this._onDidChangeTreeData.dispose();
@@ -883,6 +921,8 @@ function formatStatusLabel(state: VerificationState): string {
   switch (state) {
     case "freshly-verified":
       return "Freshly Verified Current Source";
+    case "analyzing":
+      return "Scanning Workspace…";
     case "last-known":
       return "Last Known Analyzed State";
     case "analysis-incomplete":
@@ -902,6 +942,9 @@ function formatStatusLabel(state: VerificationState): string {
  * Formats user-facing status description.
  */
 function formatStatusDescription(status: TreeViewStatus): string | undefined {
+  if (status.state === "analyzing") {
+    return "Continuous analysis in progress…";
+  }
   if (status.state === "freshly-verified" && status.timestamp) {
     return formatTimestamp(status.timestamp);
   }
@@ -929,6 +972,8 @@ function formatStatusTooltip(status: TreeViewStatus): string {
   switch (status.state) {
     case "freshly-verified":
       return `Freshly verified from current source code at ${formatTimestamp(status.timestamp)}.`;
+    case "analyzing":
+      return "UNDRIFT continuous workspace analysis is actively scanning source files.";
     case "last-known":
       return `Showing last known analyzed state from ${formatTimestamp(status.timestamp)}. Source code may have changed since last analysis.`;
     case "analysis-incomplete":
@@ -948,6 +993,8 @@ function getStatusThemeIcon(state: VerificationState): vscode.ThemeIcon {
   switch (state) {
     case "freshly-verified":
       return new ThemeIconClass("check", new ThemeColorClass("testing.iconPassed"));
+    case "analyzing":
+      return new ThemeIconClass("sync~spin");
     case "last-known":
       return new ThemeIconClass("history");
     case "analysis-incomplete":

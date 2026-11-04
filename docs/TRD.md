@@ -596,9 +596,17 @@ By default, exclude or ignore generated/dependency/build folders such as `node_m
 
 For an open document, the current in-memory VS Code document text takes precedence over the on-disk version. The analysis revision must track document versions so a late-running analysis cannot overwrite newer results with stale results.
 
-### 11.3 Initial and changed-file analysis
+### 11.3 Initial and changed-file analysis (Continuous Workspace Analysis)
 
-The first scan may analyze the relevant workspace scope. Subsequent edits SHOULD:
+The extension provides fully continuous background analysis:
+1. **Startup Analysis:** If `undrift.analysis.runOnStartup` is enabled (default `true`) and `autoRun` is enabled (default `true`), restoring session state is immediately followed by an initial background scan of current source files, transitioning the workspace from "Last Known" to "Freshly Verified".
+2. **Live Debounced Event Coalescing:** Editor text modifications (`onDidChangeTextDocument`), file open/save/close, and external filesystem events (`FileSystemWatcher`) are debounced using a configurable window (default `800ms`, configurable via `undrift.analysis.debounceMs`). Rapid bursts of typing reset the debounce timer and coalesce into a single execution.
+3. **In-Memory Editor Buffer Precedence:** Dirty editor buffers are captured in-memory via `OpenDocumentAccessor.getOpenDocuments()`, allowing live drift detection while typing before files are saved.
+4. **Closing Dirty Documents:** Document close events re-evaluate on-disk source to immediately revert any unsaved draft edits.
+5. **Dynamic Configuration:** Toggling `undrift.analysis.autoRun` or adjusting `debounceMs` takes effect dynamically without reloading the IDE window.
+6. **Obsolete Scan Superseding:** If an edit occurs while a scan is in progress, the active scan is marked obsolete and its results are discarded at the race-safe acceptance boundary.
+
+Subsequent edits:
 
 - debounce bursts of editor events;
 - cancel obsolete jobs where cancellation is practical;

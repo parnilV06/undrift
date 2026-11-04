@@ -1265,6 +1265,18 @@ export function renderReportHtml(
         }
       });
 
+      // Preserve scroll position during continuous background updates
+      const priorState = vscode ? vscode.getState() : null;
+      const hasExplicitTarget = Boolean(document.querySelector('.target-highlight, .proposal-target-highlight'));
+      if (priorState && typeof priorState.scrollY === 'number' && !hasExplicitTarget) {
+        window.scrollTo(0, priorState.scrollY);
+      }
+      window.addEventListener('scroll', function() {
+        if (vscode) {
+          vscode.setState({ scrollY: window.scrollY });
+        }
+      });
+
       // Target scrolling
       const targetProposal = document.querySelector('.proposal-card.proposal-target-highlight');
       if (targetProposal) {
@@ -1285,6 +1297,8 @@ function renderStatusBadge(status: VerificationState): string {
   switch (status) {
     case "freshly-verified":
       return '<span class="badge-status badge-fresh">Freshly Verified Current Source</span>';
+    case "analyzing":
+      return '<span class="badge-status badge-neutral">Continuous Analysis in Progress…</span>';
     case "last-known":
       return '<span class="badge-status badge-last-known">Last Known Analyzed State</span>';
     case "analysis-incomplete":

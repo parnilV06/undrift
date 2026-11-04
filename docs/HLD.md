@@ -204,7 +204,9 @@ This component coordinates the phases and controls lifecycle behavior.
 **Responsibilities**
 
 - receive initial-workspace and changed-file analysis requests;
-- debounce bursts of edits;
+- continuous workspace analysis: execute startup scan on workspace open (`runOnStartup`) and monitor live source changes;
+- debounce bursts of editor and filesystem edits via `AnalysisScheduler` (default 800ms debounce window);
+- support dynamic configuration controls (`undrift.analysis.autoRun`, `debounceMs`, `runOnStartup`);
 - assign analysis revision/generation identifiers;
 - cancel or supersede obsolete work when practical;
 - ensure current editor buffers take priority over stale disk contents;

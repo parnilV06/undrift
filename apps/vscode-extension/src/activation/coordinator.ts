@@ -302,6 +302,11 @@ export class AnalysisCoordinator {
   /** Listeners notified of accepted or finalized analysis outcomes. */
   private readonly analysisResultListeners = new Set<(result: CoordinatorAnalysisResult) => void>();
 
+  /** Listeners notified when an analysis run begins. */
+  private readonly analysisStartedListeners = new Set<
+    (event: { workspaceId: WorkspaceId; generation: number }) => void
+  >();
+
   private disposed = false;
 
   constructor(options: AnalysisCoordinatorOptions = {}) {
@@ -367,6 +372,36 @@ export class AnalysisCoordinator {
         this.analysisResultListeners.delete(listener);
       }
     };
+  }
+
+  /**
+   * Registers a listener notified when a workspace analysis scan begins.
+   */
+  public onAnalysisStarted(
+    listener: (event: { workspaceId: WorkspaceId; generation: number }) => void
+  ): { dispose(): void } {
+    this.analysisStartedListeners.add(listener);
+    return {
+      dispose: () => {
+        this.analysisStartedListeners.delete(listener);
+      }
+    };
+  }
+
+  /**
+   * Emits analysis started notification to registered listeners.
+   */
+  private emitAnalysisStarted(event: { workspaceId: WorkspaceId; generation: number }): void {
+    if (this.disposed) {
+      return;
+    }
+    for (const listener of Array.from(this.analysisStartedListeners)) {
+      try {
+        listener(event);
+      } catch (err) {
+        this.logger?.error("Analysis started listener failed", err);
+      }
+    }
   }
 
   /**
@@ -920,6 +955,7 @@ export class AnalysisCoordinator {
             isObsolete: false
           };
           this.activeScans.set(workspaceId, scanContext);
+          this.emitAnalysisStarted({ workspaceId, generation });
 
           const request: AnalysisRequest = {
             workspaceId,

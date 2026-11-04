@@ -335,7 +335,11 @@ V1 should harden the prototype into a tool another developer can install and eva
 - meaningful explanations with evidence and uncertainty;
 - safe/reviewable Quick Fixes for supported cases;
 - manual-resolution flow;
-- incremental re-analysis;
+- continuous background workspace analysis on startup and live debounced editor modifications;
+- memory-first analysis evaluating unsaved dirty editor buffers prior to saving;
+- dynamic Activity Bar badge counters and persistent sidebar overview synchronization;
+- configurable automation controls (`undrift.analysis.autoRun`, `debounceMs`, `runOnStartup`);
+- incremental re-analysis and generation-tracked obsolete scan cancellation;
 - persistent workspace-scoped analysis state (retaining the latest complete analysis snapshot);
 - finding lifecycle history tracking (detected, changed, resolved, reintroduced);
 - reliable session reconciliation when reopening previously analyzed workspaces;
