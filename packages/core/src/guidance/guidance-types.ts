@@ -62,4 +62,3 @@ export interface ContextualGuidanceInput {
   /** Optional source finding reference. */
   readonly finding?: Finding;
 }
-
