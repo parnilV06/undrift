@@ -532,6 +532,26 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("Response Shape:");
       expect(html).toContain("Route Parameter:");
       expect(html).toContain("Type Mismatch:");
+      expect(html).not.toContain("Missing Endpoint:");
+    });
+
+    it("renders unmapped provider endpoint summary pill and does not use missing endpoint label", () => {
+      const findings = [
+        createSampleFinding("1", { severity: "info", ruleId: "UND110", category: "existence" })
+      ];
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        timestamp: "2026-10-23T04:15:00.000Z",
+        findings,
+        history: [],
+        warnings: []
+      });
+
+      expect(html).toContain("Unmapped Provider Endpoints:");
+      expect(html).toContain('<span class="category-pill-count">1</span>');
+      expect(html).not.toContain("Missing Endpoint:");
     });
 
     it("renders full finding details honestly without fabricating missing fields", () => {
@@ -569,12 +589,12 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("request-shape");
       expect(html).toContain("Evidence: exact");
       expect(html).toContain("Consumer sends id as string but provider requires number");
-      expect(html).toContain(
-        "The query parameter &#39;id&#39; type diverges between fetch call and Express validator."
-      );
-      expect(html).toContain(
-        "Impact:</strong> Request rejected at runtime with validation HTTP 400 error."
-      );
+      // Redundant legacy explanation and impact are not rendered outside Resolution Guidance
+      expect(html).not.toContain('<div class="finding-explanation">The query parameter');
+      expect(html).not.toContain('<div class="finding-impact">');
+      // Full authoritative explanation and impact reside inside Resolution Guidance
+      expect(html).toContain("Resolution Guidance: Missing Required Request Field");
+      expect(html).toContain("Request rejected at runtime with validation HTTP 400 error.");
       expect(html).toContain("Expected Contract");
       expect(html).toContain("Observed Contract");
       expect(html).toContain("Known Limitations:");
@@ -770,10 +790,8 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("&lt;b&gt;malicious summary&lt;/b&gt;");
 
       expect(html).not.toContain("<style>body{display:none}</style>");
-      expect(html).toContain("&lt;style&gt;body{display:none}&lt;/style&gt;");
 
       expect(html).not.toContain("<svg onload=alert(2)>");
-      expect(html).toContain("&lt;svg onload=alert(2)&gt;");
 
       expect(html).not.toContain("<iframe src='evil.com'></iframe>");
       expect(html).toContain("&lt;iframe src=&#39;evil.com&#39;&gt;&lt;/iframe&gt;");
@@ -1383,11 +1401,9 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
         ])
       });
 
-      expect(html).toContain(
-        "No automated safe repair proposals are available for this finding. Method evidence could not be determined conservatively without ambiguity. Manual inspection and repair is required."
-      );
-      expect(html).toContain(
-        "Automated repair proposals are not supported for rule <code>UND200</code>. Manual resolution is required."
+      expect(html).toContain("No deterministic code modification is available for this finding.");
+      expect(html).not.toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>."
       );
     });
 
@@ -1469,6 +1485,81 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(mockVsCodeModule.commands.executeCommand).not.toHaveBeenCalled();
 
       manager.dispose();
+    });
+  });
+
+  describe("Resolution Guidance in ReportPanel", () => {
+    it("renders expandable Resolution Guidance section with structured sections in finding cards", () => {
+      const und110Finding = createSampleFinding("und110:card", {
+        ruleId: "UND110",
+        title: "Unmapped Provider Route"
+      });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [und110Finding],
+        history: [],
+        warnings: []
+      });
+
+      expect(html).toContain("Resolution Guidance: Provider has no known consumer");
+      expect(html).toContain('<details class="guidance-details">');
+      expect(html).not.toContain('<details class="guidance-details" open>');
+      expect(html).toContain('<div class="guidance-heading">What this means</div>');
+      expect(html).toContain('<div class="guidance-heading">Why it matters</div>');
+      expect(html).toContain(
+        '<div class="guidance-heading">Why automated repair is unavailable</div>'
+      );
+      expect(html).toContain('<div class="guidance-heading">Suggested Resolution Steps</div>');
+      expect(html).toContain("Verify whether internal or external consumers rely on this endpoint");
+      expect(html).toContain("dynamic route invocations");
+      expect(html).toContain("work-in-progress or planned endpoint");
+      expect(html).toContain("decommissioning or archiving");
+      expect(html).toContain("frontend API client call");
+      expect(html).toContain("frontend client services or wrappers");
+      expect(html).toContain("path and method spelling");
+    });
+
+    it("renders concise status in proposals section and Resolution Guidance column in warnings table", () => {
+      const und200Finding = createSampleFinding("und200:card", {
+        ruleId: "UND200",
+        targetKey: "price"
+      });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [und200Finding],
+        history: [],
+        warnings: [
+          {
+            code: "DYNAMIC_ROUTE",
+            message: "Dynamic path parameter forwarded",
+            affectsCompleteness: false,
+            scope: "consumer"
+          },
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: "explicit-any-type",
+            message: "Request payload uses any",
+            affectsCompleteness: false,
+            scope: "consumer"
+          }
+        ],
+        proposalsByFinding: new Map([[und200Finding.id, []]])
+      });
+
+      // Proposals section has concise status, no duplicate whyNoAutomatedFix
+      expect(html).toContain("No deterministic code modification is available for this finding.");
+      expect(html).not.toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>."
+      );
+
+      // Warnings table Resolution Guidance column
+      expect(html).toContain("<th>Resolution Guidance</th>");
+      expect(html).toContain("Dynamic Route Parameter");
+      expect(html).toContain("Explicit Any Type");
     });
   });
 });

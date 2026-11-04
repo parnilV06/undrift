@@ -245,3 +245,12 @@ export type { FixGenerationContext, FixGeneratorPort } from "./ports/fix-generat
 export { FixGeneratorRegistry, createDefaultFixGeneratorRegistry } from "./fixes/fix-registry";
 
 export { MethodMismatchFixGenerator } from "./fixes/method-mismatch-generator";
+
+export type { ResolutionMode, DiagnosticGuidance, ContextualGuidanceInput } from "./guidance";
+
+export {
+  UND110_REFERENCE_GUIDANCE,
+  getDiagnosticGuidance,
+  getWarningGuidance,
+  getAllRuleGuidances
+} from "./guidance";

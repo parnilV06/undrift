@@ -546,7 +546,11 @@ export class FindingsTreeDataProvider
     for (const cat of categoryOrder) {
       const list = catMap.get(cat);
       if (list && list.length > 0) {
-        groups.push(new GroupTreeItem(cat, categoryLabels[cat], list));
+        let label = categoryLabels[cat];
+        if (cat === "existence" && list.every((f) => f.ruleId === "UND110")) {
+          label = "Unmapped Provider Endpoints";
+        }
+        groups.push(new GroupTreeItem(cat, label, list));
       }
     }
 
