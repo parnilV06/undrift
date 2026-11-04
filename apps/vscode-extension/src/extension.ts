@@ -24,6 +24,14 @@ import { WorkspaceManager } from "./workspace";
 
 export { formatIncompleteScanMessage };
 
+function getVsCodeWorkspace(): typeof vscode.workspace | undefined {
+  try {
+    return vscode.workspace;
+  } catch {
+    return undefined;
+  }
+}
+
 let logger: OutputChannelLogger | undefined;
 let workspaceManager: WorkspaceManager | undefined;
 let parser: TreeSitterParserAdapter | undefined;
@@ -96,6 +104,16 @@ export function activate(context: vscode.ExtensionContext): void {
   diagnosticProvider = new DriftDiagnosticProvider({ logger });
   context.subscriptions.push(diagnosticProvider);
 
+  // 9b. Read undrift.analysis configuration
+  const ws = getVsCodeWorkspace();
+  const analysisConfig =
+    typeof ws?.getConfiguration === "function"
+      ? ws.getConfiguration("undrift.analysis")
+      : undefined;
+  const autoRun = analysisConfig?.get<boolean>("autoRun", true) ?? true;
+  const debounceMs = analysisConfig?.get<number>("debounceMs", 800) ?? 800;
+  const runOnStartup = analysisConfig?.get<boolean>("runOnStartup", true) ?? true;
+
   // 10. Instantiate AnalysisCoordinator
   coordinator = new AnalysisCoordinator({
     workspaceManager,
@@ -104,8 +122,10 @@ export function activate(context: vscode.ExtensionContext): void {
     persistence,
     reconciler,
     diagnosticProvider,
+    debounceDelayMs: debounceMs,
     logger
   });
+  coordinator.getScheduler().setAutoRun(autoRun);
 
   // 10b. Instantiate FixProposalService
   fixService = new FixProposalService(coordinator);
@@ -227,10 +247,10 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(statusBar);
 
-  // 14. Restore persisted session state for current workspace if available
+  // 14. Restore persisted session state for current workspace and run startup analysis if enabled
   void coordinator
     .restoreSession()
-    .then((restored) => {
+    .then(async (restored) => {
       treeProvider?.handleSessionRestored(restored);
       reportPanelManager?.handleSessionRestored(restored);
       overviewProvider?.handleSessionRestored(restored);
@@ -239,14 +259,58 @@ export function activate(context: vscode.ExtensionContext): void {
       const activeCount =
         restored.snapshot?.findings.filter((f) => f.state !== "resolved").length ?? 0;
       syncActivityBarBadge(activeCount);
+
+      // Chunk 6.6: Continuous workspace analysis on startup
+      if (autoRun && runOnStartup) {
+        logger?.info("Triggering continuous workspace analysis on startup...");
+        try {
+          await coordinator?.runWorkspaceScan();
+        } catch (err) {
+          logger?.warn("Startup workspace scan encountered an error", err);
+        }
+      }
     })
     .catch((err) => {
-      logger?.warn("Session restoration encountered an error during activation", err);
+      logger?.warn(
+        "Session restoration or startup scan encountered an error during activation",
+        err
+      );
     });
 
   // 15. Register workspace change events with the analysis scheduler
   const eventDisposables = coordinator.getScheduler().registerWorkspaceEvents();
   context.subscriptions.push(eventDisposables);
+
+  // 15b. Register dynamic configuration and workspace folder change handlers
+  if (typeof ws?.onDidChangeConfiguration === "function") {
+    context.subscriptions.push(
+      ws.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("undrift.analysis") && coordinator) {
+          const updatedConfig = ws.getConfiguration("undrift.analysis");
+          const newAutoRun = updatedConfig.get<boolean>("autoRun", true);
+          const newDebounce = updatedConfig.get<number>("debounceMs", 800);
+          coordinator.getScheduler().setAutoRun(newAutoRun);
+          coordinator.getScheduler().setDebounceDelay(newDebounce);
+          logger?.info(
+            `Updated UNDRIFT analysis configuration: autoRun=${newAutoRun}, debounceMs=${newDebounce}`
+          );
+        }
+      })
+    );
+  }
+
+  if (typeof ws?.onDidChangeWorkspaceFolders === "function") {
+    context.subscriptions.push(
+      ws.onDidChangeWorkspaceFolders((e) => {
+        logger?.info(
+          `Workspace folders changed (+${e.added.length}, -${e.removed.length}); scheduling analysis.`
+        );
+        if (coordinator?.getScheduler().isAutoRunEnabled()) {
+          void coordinator.getScheduler().scheduleScan({ delayMs: 100 });
+        }
+      })
+    );
+  }
 
   // 16. Register all extension commands
   const commandDisposables = registerCommands({

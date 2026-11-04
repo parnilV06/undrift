@@ -1736,7 +1736,13 @@ Analysis MUST not execute the repository's code, `npm` scripts, or framework ser
 The extension-side coordinator owns:
 
 - per-workspace generation counters;
-- debounce/cancellation;
+- debounced scheduling and continuous workspace monitoring via `AnalysisScheduler` (default 800ms debounce window, configurable via `undrift.analysis.debounceMs`);
+- automatic startup scan execution (`undrift.analysis.runOnStartup`) and live background analysis toggle (`undrift.analysis.autoRun`);
+- in-memory dirty editor buffer monitoring with precedence over disk (`captureOpenDocument`);
+- document close event handling to revert draft unsaved edits;
+- external file monitoring via VS Code `FileSystemWatcher`;
+- event emission for scan start (`onAnalysisStarted`) and completion (`onAnalysisCompleted`) driving live UI updates;
+- cancellation of obsolete in-progress scans upon newer edits (`supersedeActiveScan`);
 - snapshot creation;
 - current-analysis status/progress;
 - session restoration on workspace open:

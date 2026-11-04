@@ -62,3 +62,12 @@ npm test
 2. Select **Run and Debug** (`Ctrl+Shift+D` or `Cmd+Shift+D`).
 3. Select **Launch Extension**.
 4. Press `F5`. An Extension Development Host window will launch with the bundled extension loaded.
+
+## Continuous Workspace Analysis & Live Testing
+
+UNDRIFT continuously analyses the workspace in the background:
+- **Startup Scan:** Automatically scans the workspace upon opening (`undrift.analysis.runOnStartup: true`).
+- **Live Debounced Monitoring:** Listens to document edits, file creation, renaming, and deletion, coalescing bursts of edits into a single scan after an 800ms debounce quiet period (`undrift.analysis.debounceMs: 800`).
+- **In-Memory Editor Buffers:** Analyzes dirty in-memory editor buffers directly, surfacing drift diagnostics and badge count updates before the developer saves the file.
+- **Dynamic Configuration:** Toggling `undrift.analysis.autoRun` or adjusting `debounceMs` in Settings takes effect immediately without reloading the IDE window.
+- **Manual Scanning:** Explicit scan commands (`undrift.scanWorkspace` and `undrift.refresh`) remain available even when `autoRun` is disabled.

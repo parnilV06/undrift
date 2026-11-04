@@ -5,9 +5,9 @@
 [![Language](https://img.shields.io/badge/Language-TypeScript_5.9-blue.svg)](packages/core)
 [![Runtime](https://img.shields.io/badge/Runtime-Node.js_%3E%3D_18.0.0-green.svg)](package.json)
 [![Parser](https://img.shields.io/badge/Parser-Web--Tree--sitter_WASM-orange.svg)](packages/parser-tree-sitter)
-[![Tests](https://img.shields.io/badge/Tests-279_passed-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/Tests-1058_passed-brightgreen.svg)](tests)
 [![Architecture](https://img.shields.io/badge/Architecture-Local--First_Monorepo-purple.svg)](docs/HLD.md)
-[![Status](https://img.shields.io/badge/Status-Phase_2_Completed-teal.svg)](docs/LLD.md)
+[![Status](https://img.shields.io/badge/Status-Phase_6_Completed_V1_Ready-brightgreen.svg)](docs/LLD.md)
 
 UNDRIFT is an IDE-first developer tool engineered to discover integration contracts between connected parts of an application, detect when those contracts drift, explain discrepancies using source-linked evidence, and prepare reviewable repairs directly where developers write code.
 
@@ -58,9 +58,8 @@ UNDRIFT bridges this gap directly inside the developer's local development envir
 3. **Evidence-Backed Modeling:** Every extracted HTTP method, route pattern, status code, and payload shape is anchored to exact UTF-16 source spans and qualitative evidence classifications (`direct`, `resolved`, `inferred`, or `unknown`).
 4. **Uncertainty Preservation:** When dynamic initializers, complex expressions, or unresolved imports prevent exact deduction, UNDRIFT explicitly records uncertainty rather than guessing or generating false-positive warnings.
 
-> **Current Implementation Boundary:**  
-> UNDRIFT has completed **Phase 1** (Workspace Discovery and Parser Foundation) and **Phase 2** (Analyzer Contracts, Registry, JS/TS API Extraction, Local Declaration Indexing, and Same-Document Constant Resolution).  
-> Downstream capabilities—including automated consumer-provider candidate matching, drift detection rules, fix generation, session persistence, and full VS Code diagnostics UI—are scheduled for **Phase 3 and subsequent releases**.
+> **V1 Production Ready:**  
+> UNDRIFT has completed **Phases 1 through 6**: Workspace Discovery & WASM Parsing (Phase 1), Analyzer Contracts & Extractors (Phase 2), Route & Shape Normalization and Candidate Matching (Phase 3), Deterministic Drift Rules & Explanations (Phase 4), Crash-Safe State Persistence & Session Reconciliation (Phase 5), and Workbench Integration, Diagnostic Guidance, Activity Bar & Sidebar Overview, Theme-Aware Integration Report, and Continuous Workspace Analysis with Live In-Memory Buffer Monitoring (Phase 6).
 
 ---
 
@@ -127,11 +126,12 @@ The following table reflects the verified status of the codebase across automate
 | **Express Route Extraction**          | **Implemented** | `app.<method>` and `router.<method>` declarations for `get`, `post`, `put`, `delete`, `patch`; path literals and parameter segments (`:id`); chained `res.status().json()` and direct `res.json()`; inline response object shapes.                                         | Router mount prefixes (`app.use('/api', router)`) require cross-file resolution; regex routes and dynamic route factories emit `DYNAMIC_ROUTE` warnings. |
 | **Local Declaration Indexing**        | **Implemented** | Single-document indexing of variable declarations (`const`, `let`, `var`), functions, type aliases, interfaces, and imports (`import`, `require`).                                                                                                                         | Symbol indexing is scoped per-document snapshot; project-wide cross-file symbol indexing is a Phase 3 gate.                                              |
 | **Same-Document Constant Resolution** | **Implemented** | Evaluates identifier references to same-document `const` declarations (strings, numbers, booleans, null); attaches `resolved` evidence; marks mutable (`let`/`var`), dynamic, or ambiguous bindings as `unresolved`/`unknown`.                                             | Import declarations and cross-file references are identified and explicitly classified as `unsupported` (deferred POC Gates).                            |
-| **Consumer-Provider Matching**        | **Planned**     | Algorithmic candidate matching (Exact route/method, Method conflict, Suspected route mismatch) designed in LLD Section 10.                                                                                                                                                 | No matching engine executed in current pipeline.                                                                                                         |
-| **Deterministic Drift Rules**         | **Planned**     | Rule catalog defined in LLD Section 11 (`UND100`–`UND920` / `DRIFT-001`–`DRIFT-008`).                                                                                                                                                                                      | Core rules directory contains specifications and stubs (`packages/core/src/rules/`).                                                                     |
-| **Explanation & Repair Proposals**    | **Planned**     | Multi-level repair semantics (Mechanical, Reviewed, Manual) designed in PRD Section 13 and LLD Section 12–13.                                                                                                                                                              | Core explanation and fix proposal packages are scaffolded for Phase 4.                                                                                   |
-| **Session State Persistence**         | **Planned**     | Crash-safe workspace storage persistence (`storageUri` / `workspaceState`) and finding lifecycle tracking (`detected`, `changed`, `resolved`, `reintroduced`) designed in HLD/LLD.                                                                                         | Persistence layer not active in current build; no state is written to disk across runs.                                                                  |
-| **VS Code User Interface**            | **Partial**     | `undrift.scanWorkspace` command registered and functional; extension bundles cleanly with all WASM assets.                                                                                                                                                                 | Diagnostic collections, findings sidebar tree view, and webview integration reports are scaffolded for Phase 6.                                          |
+| **Consumer-Provider Matching**        | **Implemented** | Algorithmic candidate matching (Exact route/method, Method conflict, Suspected route mismatch) with static route helpers and cross-module tracking.                                                                                                                        | Deterministic heuristic matching across frontend consumers and backend route providers.                                                                  |
+| **Deterministic Drift Rules**         | **Implemented** | Rule catalog covering protocol and shape drift (`UND100`, `UND110`, `UND120`, `UND130`, `UND200`, `UND210`, `UND300`, `UND310`, `UND400`).                                                                                                                                 | Conservative coverage gating ensures incomplete scans withhold absence findings rather than producing false positives.                                   |
+| **Explanation & Repair Proposals**    | **Implemented** | Rule-aware diagnostic guidance with "What this means", "Why it matters", and suggested steps; reviewable Quick Fix proposals with post-edit re-analysis.                                                                                                                   | Multi-role repairs for consumer and provider sides; mechanical fixes require freshness verification.                                                     |
+| **Session State Persistence**         | **Implemented** | Crash-safe workspace storage persistence (`storageUri` / `workspaceState`) and finding lifecycle tracking (`detected`, `changed`, `resolved`, `reintroduced`).                                                                                                             | Atomic write-replace semantics; corrupted snapshots are quarantined with clean baselines.                                                                |
+| **Workbench UI & Brand Integration**  | **Implemented** | Dedicated UNDRIFT Activity Bar item, persistent sidebar overview, findings tree view, theme-aware Integration Report webview, and official brand logo.                                                                                                                     | Dynamic active-finding badge count on extension icon; theme-adaptive light and dark visual styling.                                                      |
+| **Continuous Workspace Analysis**     | **Implemented** | Automatic background analysis on workspace open; live debounced monitoring of in-memory editor buffers; automatic drift detection and resolution.                                                                                                                          | Unsaved editor buffers take precedence over disk; configurable `autoRun`, `debounceMs` (default 800ms), and `runOnStartup`.                              |
 
 ---
 
@@ -601,10 +601,22 @@ export interface ResolvedUndriftConfig {
 }
 ```
 
-### Current Status of Configuration
+### VS Code Extension Configuration
+
+UNDRIFT contributes standard settings under the `undrift.analysis` namespace in VS Code Settings (`settings.json`):
+
+| Setting Key                     | Type      | Default | Description                                                                                                          |
+| ------------------------------- | --------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `undrift.analysis.autoRun`      | `boolean` | `true`  | Automatically run background drift analysis when files are edited, created, or deleted.                              |
+| `undrift.analysis.debounceMs`   | `number`  | `800`   | Debounce delay in milliseconds (min 100, max 5000) before triggering background analysis following document changes. |
+| `undrift.analysis.runOnStartup` | `boolean` | `true`  | Automatically run an initial drift analysis when a workspace is opened.                                              |
+
+Changes to these settings take effect dynamically without requiring an IDE window reload.
+
+### Workspace Exclusion Defaults
 
 - **Built-in Workspace Exclusion Defaults:** In the current phase, [`source-snapshot-provider.ts`](apps/vscode-extension/src/workspace/source-snapshot-provider.ts) enforces standard exclusion globs (`DEFAULT_EXCLUDE_GLOBS`) covering `node_modules`, `.git`, `dist`, `build`, `out`, `coverage`, `.turbo`, `.next`, `.nuxt`, `.cache`, and minified files (`*.min.js`).
-- **Custom Configuration Files:** A versioned `.undrift/` project configuration format is planned for Phase 5 to support custom include/exclude globs, rule toggles, and intentional mapping definitions. In the current Phase 2 codebase, default exclusions and programmatic options are utilized.
+- **Configurable Analysis Policies:** Programmatic configuration via `ResolvedUndriftConfig` supports additional glob exclusions, analyzer enable/disable toggles, and coverage thresholds.
 
 ---
 
@@ -652,32 +664,34 @@ Phase 2: Analyzer Contracts, Registry & Extractors (COMPLETED)
 ├── LocalDeclarationIndex (single-document variable, function, type, and import indexing)
 └── LocalReferenceResolver (same-document const literal resolution with resolved evidence)
 
-Phase 3: Route Normalization & Candidate Matching (PLANNED)
+Phase 3: Route Normalization & Candidate Matching (COMPLETED)
 ├── RouteNormalizer (path separators, trailing slashes, parameter segment alignment)
 ├── TypeNormalizer (structural primitive and field mapping)
 ├── CandidateMatcher (Exact route/method, Method conflict, Suspected route mismatch heuristics)
 └── AnalysisCoverageSummary calculation and unmapped provider classification
 
-Phase 4: Deterministic Drift Engine & Explanation (PLANNED)
+Phase 4: Deterministic Drift Engine & Explanation (COMPLETED)
 ├── Drift rule engine implementing catalog rules UND100 through UND920
 ├── Request shape comparator (directional provider-requirement vs consumer-payload)
 ├── Response shape comparator (directional consumer-expectation vs provider-output)
 ├── ExplanationEngine generating evidence-linked, human-readable diagnoses
 └── FixProposal generator with mechanical Level 1 workspace edits
 
-Phase 5: State Persistence & Session Reconciliation (PLANNED)
+Phase 5: State Persistence & Session Reconciliation (COMPLETED)
 ├── VS Code workspace-scoped storage adapter (storageUri & workspaceState)
 ├── Snapshot-to-snapshot reconciliation algorithm
 ├── Finding lifecycle state transitions (detected, changed, resolved, reintroduced)
 ├── Retention pruning and crash-safe atomic persistence
 └── Analysis result re-verification after source code modifications
 
-Phase 6: Editor Presentation & Workflow Polish (PLANNED)
+Phase 6: Workbench Integration, Diagnostic Guidance & Continuous Analysis (COMPLETED)
 ├── VS Code DiagnosticCollection mapping drift findings to in-editor squiggles
 ├── Findings tree view in the VS Code Explorer sidebar
 ├── Webview integration report panel
 ├── CodeActionProvider exposing Quick Fixes directly on drifted lines
-└── End-to-end integration test scenarios across simulated projects
+├── Dedicated UNDRIFT Activity Bar item, persistent sidebar overview & badge count
+├── Theme-aware Integration Report webview with official UNDRIFT brand identity
+└── Continuous Workspace Analysis (startup scan, live debouncing, unsaved buffer monitoring)
 ```
 
 ---

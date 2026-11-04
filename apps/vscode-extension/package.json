@@ -139,6 +139,28 @@
           "name": "Findings"
         }
       ]
+    },
+    "configuration": {
+      "title": "UNDRIFT",
+      "properties": {
+        "undrift.analysis.autoRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run background drift analysis when files are edited, created, or deleted."
+        },
+        "undrift.analysis.debounceMs": {
+          "type": "number",
+          "default": 800,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Debounce delay in milliseconds before triggering background analysis following document changes."
+        },
+        "undrift.analysis.runOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run an initial drift analysis when a workspace is opened."
+        }
+      }
     }
   },
   "scripts": {

@@ -40,6 +40,15 @@ export interface WorkspaceEventSource {
   onDidRenameFiles(
     listener: (e: { files: readonly { oldUri: UriLike; newUri: UriLike }[] }) => void
   ): { dispose(): void };
+  onDidCloseTextDocument?(listener: (doc: { uri: UriLike; languageId?: string }) => void): {
+    dispose(): void;
+  };
+  createFileSystemWatcher?(globPattern: string | unknown): {
+    onDidChange?(listener: (uri: UriLike) => void): { dispose(): void };
+    onDidCreate?(listener: (uri: UriLike) => void): { dispose(): void };
+    onDidDelete?(listener: (uri: UriLike) => void): { dispose(): void };
+    dispose(): void;
+  };
 }
 
 /**
@@ -52,9 +61,14 @@ export interface AnalysisSchedulerOptions {
   readonly workspaceManager?: WorkspaceManager;
   /**
    * Debounce delay window in milliseconds for coalescing rapid keystrokes/edits.
-   * Default: 300ms.
+   * Default: 800ms.
    */
   readonly debounceDelayMs?: number;
+  /**
+   * Whether continuous background analysis is automatically triggered on file/buffer events.
+   * Default: true.
+   */
+  readonly autoRun?: boolean;
   /** Additional glob exclusion patterns beyond defaults. */
   readonly additionalExcludeGlobs?: readonly string[];
   /** Optional diagnostic logger. */
@@ -69,7 +83,7 @@ interface PendingDeferred {
 /**
  * Default debounce delay window for coalescing rapid keystrokes/edits.
  */
-export const DEFAULT_DEBOUNCE_DELAY_MS = 300;
+export const DEFAULT_DEBOUNCE_DELAY_MS = 800;
 
 /**
  * Manages debounced analysis scheduling for workspace source changes.
@@ -79,7 +93,8 @@ export const DEFAULT_DEBOUNCE_DELAY_MS = 300;
 export class AnalysisScheduler {
   private readonly coordinator: AnalysisCoordinator;
   private readonly workspaceManager: WorkspaceManager;
-  private readonly debounceDelayMs: number;
+  private debounceDelayMs: number;
+  private autoRun: boolean;
   private readonly excludePatterns: readonly string[];
   private readonly logger?: ExtensionLogger;
 
@@ -98,9 +113,46 @@ export class AnalysisScheduler {
     this.coordinator = options.coordinator;
     this.workspaceManager = options.workspaceManager ?? new WorkspaceManager();
     this.debounceDelayMs = options.debounceDelayMs ?? DEFAULT_DEBOUNCE_DELAY_MS;
+    this.autoRun = options.autoRun ?? true;
     this.logger = options.logger;
 
     this.excludePatterns = [...DEFAULT_EXCLUDE_GLOBS, ...(options.additionalExcludeGlobs ?? [])];
+  }
+
+  /**
+   * Returns whether continuous background analysis is automatically triggered on workspace events.
+   */
+  public isAutoRunEnabled(): boolean {
+    return this.autoRun;
+  }
+
+  /**
+   * Enables or disables automatic continuous analysis.
+   * If disabled, any active debounce timer is cancelled immediately.
+   */
+  public setAutoRun(enabled: boolean): void {
+    this.autoRun = enabled;
+    if (!enabled) {
+      for (const workspaceId of Array.from(this.timers.keys())) {
+        this.cancelPendingScan(workspaceId);
+      }
+    }
+  }
+
+  /**
+   * Returns the current debounce delay in milliseconds.
+   */
+  public getDebounceDelay(): number {
+    return this.debounceDelayMs;
+  }
+
+  /**
+   * Sets the debounce delay in milliseconds, clamped between 100ms and 5000ms.
+   */
+  public setDebounceDelay(delayMs: number): void {
+    if (typeof delayMs === "number" && !isNaN(delayMs)) {
+      this.debounceDelayMs = Math.max(100, Math.min(5000, delayMs));
+    }
   }
 
   /**
@@ -288,7 +340,7 @@ export class AnalysisScheduler {
     param: UriLike | string | { uri?: UriLike | string; document?: { uri?: UriLike | string } },
     contentChangesLength?: number
   ): Promise<CoordinatorAnalysisResult> | undefined {
-    if (contentChangesLength === 0) {
+    if (!this.autoRun || contentChangesLength === 0) {
       return undefined;
     }
     const uriStr = this.extractUriString(param);
@@ -305,6 +357,27 @@ export class AnalysisScheduler {
   public handleDocumentOpen(
     param: UriLike | string | { uri?: UriLike | string; document?: { uri?: UriLike | string } }
   ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
+    const uriStr = this.extractUriString(param);
+    if (!uriStr || !this.isRelevantUri(uriStr)) {
+      return undefined;
+    }
+    const wsId = this.resolveWorkspaceForUri(uriStr);
+    return this.scheduleScan({ targetWorkspaceId: wsId });
+  }
+
+  /**
+   * Handles document close events.
+   * Discarding unsaved changes in a dirty buffer reverts to disk content and requires a re-scan.
+   */
+  public handleDocumentClose(
+    param: UriLike | string | { uri?: UriLike | string; document?: { uri?: UriLike | string } }
+  ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
     const uriStr = this.extractUriString(param);
     if (!uriStr || !this.isRelevantUri(uriStr)) {
       return undefined;
@@ -319,6 +392,26 @@ export class AnalysisScheduler {
   public handleDocumentSave(
     param: UriLike | string | { uri?: UriLike | string; document?: { uri?: UriLike | string } }
   ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
+    const uriStr = this.extractUriString(param);
+    if (!uriStr || !this.isRelevantUri(uriStr)) {
+      return undefined;
+    }
+    const wsId = this.resolveWorkspaceForUri(uriStr);
+    return this.scheduleScan({ targetWorkspaceId: wsId });
+  }
+
+  /**
+   * Handles external file change notifications (e.g. from FileSystemWatcher).
+   */
+  public handleExternalFileChange(
+    param: UriLike | string | { uri?: UriLike | string; document?: { uri?: UriLike | string } }
+  ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
     const uriStr = this.extractUriString(param);
     if (!uriStr || !this.isRelevantUri(uriStr)) {
       return undefined;
@@ -333,6 +426,9 @@ export class AnalysisScheduler {
   public handleFilesCreated(
     files: readonly (UriLike | string | { uri?: UriLike | string })[]
   ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
     for (const file of files) {
       const uriStr = this.extractUriString(file);
       if (uriStr && this.isRelevantUri(uriStr)) {
@@ -349,6 +445,9 @@ export class AnalysisScheduler {
   public handleFilesDeleted(
     files: readonly (UriLike | string | { uri?: UriLike | string })[]
   ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
     for (const file of files) {
       const uriStr = this.extractUriString(file);
       if (uriStr && this.isRelevantUri(uriStr)) {
@@ -365,6 +464,9 @@ export class AnalysisScheduler {
   public handleFilesRenamed(
     files: readonly { oldUri: UriLike | string; newUri: UriLike | string }[]
   ): Promise<CoordinatorAnalysisResult> | undefined {
+    if (!this.autoRun) {
+      return undefined;
+    }
     for (const item of files) {
       const oldStr = this.extractUriString(item.oldUri);
       const newStr = this.extractUriString(item.newUri);
@@ -434,6 +536,14 @@ export class AnalysisScheduler {
       })
     );
 
+    if (typeof source.onDidCloseTextDocument === "function") {
+      subs.push(
+        source.onDidCloseTextDocument((doc) => {
+          this.handleDocumentClose(doc.uri);
+        })
+      );
+    }
+
     subs.push(
       source.onDidCreateFiles((e) => {
         this.handleFilesCreated(e.files);
@@ -451,6 +561,26 @@ export class AnalysisScheduler {
         this.handleFilesRenamed(e.files);
       })
     );
+
+    if (typeof source.createFileSystemWatcher === "function") {
+      try {
+        const watcher = source.createFileSystemWatcher("**/*.{js,jsx,ts,tsx,mjs,cjs}");
+        if (watcher) {
+          if (typeof watcher.onDidChange === "function") {
+            subs.push(watcher.onDidChange((uri) => this.handleExternalFileChange(uri)));
+          }
+          if (typeof watcher.onDidCreate === "function") {
+            subs.push(watcher.onDidCreate((uri) => this.handleExternalFileChange(uri)));
+          }
+          if (typeof watcher.onDidDelete === "function") {
+            subs.push(watcher.onDidDelete((uri) => this.handleExternalFileChange(uri)));
+          }
+          subs.push(watcher);
+        }
+      } catch (err) {
+        this.logger?.warn("Failed to register FileSystemWatcher in AnalysisScheduler", err);
+      }
+    }
 
     for (const s of subs) {
       this.subscriptions.push(s);
