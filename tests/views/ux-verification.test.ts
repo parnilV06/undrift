@@ -195,20 +195,20 @@ describe("Extension Development Host & UX Manual Verification", () => {
       expect(hover).toBeDefined();
 
       const md = hover.contents[0].value;
-      // 1. Canonical rule title and code
-      expect(md).toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
+      // 1. Complementary to native diagnostic header: does not duplicate title or message
+      expect(md).not.toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
 
-      // 2. Explanation of what was detected (does NOT confirm dead code)
-      expect(md).toContain("This does not necessarily indicate dead code");
+      // 2. Why this matters (does NOT confirm dead code)
+      expect(md).toContain("**Why this matters**");
       expect(md).toContain("external applications, services or scheduled jobs");
 
       // 3. Concise reason no automatic repair is available
       expect(md).toContain("**Why no automatic fix?**");
-      expect(md).toContain("cannot determine whether this endpoint should be deleted");
+      expect(md).toContain("cannot determine whether the endpoint should be retained");
 
       // 4. Actionable next step (only one recommended action, not all 7)
       expect(md).toContain(
-        "**Recommended Action:** Verify whether internal or external consumers rely on this endpoint before making changes."
+        "**Recommended action:** Verify whether internal or external consumers rely on this endpoint"
       );
       expect(md).not.toContain("7.");
 
@@ -247,6 +247,10 @@ describe("Extension Development Host & UX Manual Verification", () => {
         "No known consumer found in the analyzed scope for POST &#39;/api/auth/register&#39;."
       );
 
+      // Legacy explanation and impact sections are removed outside resolution guidance
+      expect(html).not.toContain('<div class="finding-explanation">');
+      expect(html).not.toContain('<div class="finding-impact">');
+
       // Complete explanation and suggested steps are present inside the details element
       expect(html).toContain('<div class="guidance-heading">What this means</div>');
       expect(html).toContain("This does NOT confirm dead code");
@@ -260,7 +264,8 @@ describe("Extension Development Host & UX Manual Verification", () => {
       expect(html).toContain("work-in-progress or planned endpoint");
       expect(html).toContain("decommissioning or archiving");
       expect(html).toContain("frontend API client call");
-      expect(html).toContain("unsupported client library");
+      expect(html).toContain("frontend client services or wrappers");
+      expect(html).not.toContain("unsupported client library");
       expect(html).toContain("path and method spelling");
 
       // Candidate repair proposals section displays short status without duplicate explanation

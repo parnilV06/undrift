@@ -35,14 +35,16 @@ export const UND110_REFERENCE_GUIDANCE: DiagnosticGuidance = {
     "If it is a work-in-progress or planned endpoint, document it or leave it as intended.",
     "If it is an internal-only or deprecated route no longer used by any client, consider decommissioning or archiving it after verifying telemetry and access logs.",
     "If the route was intended to be called by a frontend view but is missing, implement the frontend API client call.",
-    "If the route is invoked via an unsupported client library or custom wrapper, configure or annotate the call if supported.",
+    "Inspect frontend client services or wrappers to verify whether dynamic URL construction or custom transport abstractions dispatch requests to this endpoint.",
     "Review route path and method spelling to ensure no slight path mismatch caused it to be treated as unmapped."
   ],
   resolutionMode: "investigation",
   conciseExplanation:
     "No matching frontend request was identified for this endpoint in the analyzed workspace.\n\nThis does not necessarily indicate dead code. The endpoint may be consumed by external applications, services or scheduled jobs.",
   conciseFixUnavailableReason:
-    "UNDRIFT cannot determine whether this endpoint should be deleted, retained or connected to a frontend feature without knowing its intended consumers."
+    "UNDRIFT cannot determine whether the endpoint should be retained, removed or connected to a frontend feature without knowing its intended consumers.",
+  hoverWhyThisMatters:
+    "This endpoint may still be used by external applications, services or scheduled jobs. Its absence from the analyzed frontend does not establish that it is unused."
 };
 
 interface StaticRuleTemplate {
@@ -53,6 +55,7 @@ interface StaticRuleTemplate {
   readonly whyNoAutomatedFix: (hasAutomatedFix?: boolean) => string;
   readonly conciseExplanation?: (input: ContextualGuidanceInput) => string;
   readonly conciseFixUnavailableReason?: (hasAutomatedFix?: boolean) => string;
+  readonly hoverWhyThisMatters?: (input: ContextualGuidanceInput) => string;
   readonly suggestedSteps: (input: ContextualGuidanceInput) => readonly string[];
   readonly defaultResolutionMode: ResolutionMode;
 }
@@ -102,6 +105,7 @@ const RULE_TEMPLATES: Record<RuleId, StaticRuleTemplate> = {
     whyItMatters: UND110_REFERENCE_GUIDANCE.whyItMatters,
     whyNoAutomatedFix: () => UND110_REFERENCE_GUIDANCE.whyNoAutomatedFix!,
     conciseFixUnavailableReason: () => UND110_REFERENCE_GUIDANCE.conciseFixUnavailableReason!,
+    hoverWhyThisMatters: () => UND110_REFERENCE_GUIDANCE.hoverWhyThisMatters!,
     suggestedSteps: () => UND110_REFERENCE_GUIDANCE.suggestedSteps,
     defaultResolutionMode: "investigation"
   },
@@ -706,6 +710,8 @@ export function getDiagnosticGuidance(input: ContextualGuidanceInput): Diagnosti
     whyNoAutomatedFix: template.whyNoAutomatedFix(hasFix),
     conciseExplanation: template.conciseExplanation?.(input),
     conciseFixUnavailableReason: template.conciseFixUnavailableReason?.(hasFix),
+    hoverWhyThisMatters:
+      template.hoverWhyThisMatters?.(input) ?? input.possibleImpact ?? template.whyItMatters,
     suggestedSteps: template.suggestedSteps(input),
     resolutionMode
   };

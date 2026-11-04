@@ -589,12 +589,12 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("request-shape");
       expect(html).toContain("Evidence: exact");
       expect(html).toContain("Consumer sends id as string but provider requires number");
-      expect(html).toContain(
-        "The query parameter &#39;id&#39; type diverges between fetch call and Express validator."
-      );
-      expect(html).toContain(
-        "Impact:</strong> Request rejected at runtime with validation HTTP 400 error."
-      );
+      // Redundant legacy explanation and impact are not rendered outside Resolution Guidance
+      expect(html).not.toContain('<div class="finding-explanation">The query parameter');
+      expect(html).not.toContain('<div class="finding-impact">');
+      // Full authoritative explanation and impact reside inside Resolution Guidance
+      expect(html).toContain("Resolution Guidance: Missing Required Request Field");
+      expect(html).toContain("Request rejected at runtime with validation HTTP 400 error.");
       expect(html).toContain("Expected Contract");
       expect(html).toContain("Observed Contract");
       expect(html).toContain("Known Limitations:");
@@ -790,10 +790,8 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("&lt;b&gt;malicious summary&lt;/b&gt;");
 
       expect(html).not.toContain("<style>body{display:none}</style>");
-      expect(html).toContain("&lt;style&gt;body{display:none}&lt;/style&gt;");
 
       expect(html).not.toContain("<svg onload=alert(2)>");
-      expect(html).toContain("&lt;svg onload=alert(2)&gt;");
 
       expect(html).not.toContain("<iframe src='evil.com'></iframe>");
       expect(html).toContain("&lt;iframe src=&#39;evil.com&#39;&gt;&lt;/iframe&gt;");
@@ -1519,7 +1517,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("work-in-progress or planned endpoint");
       expect(html).toContain("decommissioning or archiving");
       expect(html).toContain("frontend API client call");
-      expect(html).toContain("unsupported client library");
+      expect(html).toContain("frontend client services or wrappers");
       expect(html).toContain("path and method spelling");
     });
 

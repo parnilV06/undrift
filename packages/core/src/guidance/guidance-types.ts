@@ -35,6 +35,8 @@ export interface DiagnosticGuidance {
   readonly conciseExplanation?: string;
   /** Optional concise rationale why automated fix is unavailable (for compact hovers). */
   readonly conciseFixUnavailableReason?: string;
+  /** Specific complementary explanation for custom hover presentation. */
+  readonly hoverWhyThisMatters?: string;
 }
 
 /**

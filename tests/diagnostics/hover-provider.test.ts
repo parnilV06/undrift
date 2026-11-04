@@ -244,11 +244,17 @@ describe("DriftHoverProvider", () => {
       expect(hover.contents).toHaveLength(1);
 
       const md = hover.contents[0].value;
-      expect(md).toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
-      expect(md).toContain("This does not necessarily indicate dead code");
+      // Complementary to native diagnostic header: does not duplicate title or message
+      expect(md).not.toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
+      expect(md).toContain("**Why this matters**");
+      expect(md).toContain(
+        "This endpoint may still be used by external applications, services or scheduled jobs"
+      );
       expect(md).toContain("**Why no automatic fix?**");
-      expect(md).toContain("cannot determine whether this endpoint should be deleted");
-      expect(md).toContain("**Recommended Action:**");
+      expect(md).toContain("cannot determine whether the endpoint should be retained");
+      expect(md).toContain(
+        "**Recommended action:** Verify whether internal or external consumers rely on this endpoint"
+      );
       expect(md).toContain("command:undrift.showReport");
       expect(md).toContain("Open full Resolution Guidance in Integration Report");
       expect(hover.contents[0].isTrusted).toBe(true);
@@ -291,7 +297,7 @@ describe("DriftHoverProvider", () => {
       const hover = provider.provideHover(document, position) as any;
       expect(hover).toBeDefined();
       const md = hover.contents[0].value;
-      expect(md).toContain("**UNDRIFT: UND120 — HTTP Method Conflict**");
+      expect(md).toContain("**Why this matters**");
       expect(md).toContain("**Automatic Fix:** Candidate repair proposals available");
     });
 
@@ -361,9 +367,8 @@ describe("DriftHoverProvider", () => {
 
       const hover = provider.provideHover(document, position) as any;
       expect(hover).toBeDefined();
-      expect(hover.contents[0].value).toContain(
-        "**UNDRIFT: UND200 — Missing Required Request Field**"
-      );
+      expect(hover.contents[0].value).toContain("**Why this matters**");
+      expect(hover.contents[0].value).toContain("command:undrift.showReport");
     });
   });
 });

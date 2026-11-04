@@ -57,17 +57,20 @@ describe("Diagnostic Explanation & Resolution Guidance Registry", () => {
       // Concise fields for compact presentation
       expect(guidance.conciseExplanation).toContain("This does not necessarily indicate dead code");
       expect(guidance.conciseFixUnavailableReason).toContain(
-        "cannot determine whether this endpoint should be deleted"
+        "cannot determine whether the endpoint should be retained"
+      );
+      expect(guidance.hoverWhyThisMatters).toContain(
+        "This endpoint may still be used by external applications"
       );
 
-      // Exact 7 actionable resolution steps
+      // Exact 7 actionable resolution steps without unsupported feature assumptions
       expect(guidance.suggestedSteps).toHaveLength(7);
       expect(guidance.suggestedSteps[0]).toContain("internal or external consumers");
       expect(guidance.suggestedSteps[1]).toContain("dynamic route invocations");
       expect(guidance.suggestedSteps[2]).toContain("work-in-progress or planned endpoint");
       expect(guidance.suggestedSteps[3]).toContain("decommissioning or archiving");
       expect(guidance.suggestedSteps[4]).toContain("frontend API client call");
-      expect(guidance.suggestedSteps[5]).toContain("unsupported client library");
+      expect(guidance.suggestedSteps[5]).toContain("frontend client services or wrappers");
       expect(guidance.suggestedSteps[6]).toContain("path and method spelling");
     });
 

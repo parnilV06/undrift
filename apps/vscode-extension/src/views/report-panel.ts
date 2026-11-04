@@ -1340,19 +1340,6 @@ function renderFindingCard(
     ${finding.summary ? `<div class="finding-summary">${escapeHtml(finding.summary)}</div>` : ""}
 
     ${
-      "explanation" in finding && typeof finding.explanation === "string" && finding.explanation
-        ? `<div class="finding-explanation">${escapeHtml(finding.explanation)}</div>`
-        : ""
-    }
-    ${
-      "impactStatement" in finding &&
-      typeof finding.impactStatement === "string" &&
-      finding.impactStatement
-        ? `<div class="finding-impact" style="margin-top: 6px; font-size: 12px; color: var(--color-foreground-muted);"><strong>Impact:</strong> ${escapeHtml(finding.impactStatement)}</div>`
-        : ""
-    }
-
-    ${
       hasExpected || hasObserved
         ? `
     <div class="comparison-grid">

@@ -199,14 +199,11 @@ export class DriftHoverProvider implements vscode.HoverProvider {
       md.isTrusted = true;
       md.supportHtml = true;
 
-      // 1. Canonical rule title and code
-      md.appendMarkdown(`**UNDRIFT: ${finding.ruleId} — ${guidance.title}**\n\n`);
+      // 1. Why this matters (complementary to native diagnostic header)
+      const whyThisMatters = guidance.hoverWhyThisMatters ?? guidance.whyItMatters;
+      md.appendMarkdown(`**Why this matters**\n\n${whyThisMatters}\n\n`);
 
-      // 2. Short explanation of what was detected
-      const explanation = guidance.conciseExplanation ?? guidance.whatDetected;
-      md.appendMarkdown(`${explanation}\n\n`);
-
-      // 3. Concise explanation of why an automatic fix is unavailable
+      // 2. Why no automatic fix? (or proposal status when available)
       if (hasProposals) {
         md.appendMarkdown(
           `**Automatic Fix:** Candidate repair proposals available via Quick Fix (\`Ctrl+.\` / \`Cmd+.\`) or Integration Report.\n\n`
@@ -219,12 +216,12 @@ export class DriftHoverProvider implements vscode.HoverProvider {
         md.appendMarkdown(`**Why no automatic fix?**\n\n${noFixReason}\n\n`);
       }
 
-      // 4. One recommended next action
+      // 3. One recommended next action
       if (guidance.suggestedSteps.length > 0) {
-        md.appendMarkdown(`**Recommended Action:** ${guidance.suggestedSteps[0]}\n\n`);
+        md.appendMarkdown(`**Recommended action:** ${guidance.suggestedSteps[0]}\n\n`);
       }
 
-      // 5. Link to the full Resolution Guidance in the Integration Report
+      // 4. Link to the full Resolution Guidance in the Integration Report
       const reportArgs = encodeURIComponent(JSON.stringify([finding.id]));
       md.appendMarkdown(
         `[Open full Resolution Guidance in Integration Report](command:undrift.showReport?${reportArgs})`
