@@ -39,6 +39,19 @@ async function build() {
     console.log(`Copied WASM asset: ${item.dest}`);
   }
 
+  // 1b. Copy extension resources into dist/resources/
+  const resDir = path.join(__dirname, "resources");
+  const outResDir = path.join(outDir, "resources");
+  if (fs.existsSync(resDir)) {
+    if (!fs.existsSync(outResDir)) {
+      fs.mkdirSync(outResDir, { recursive: true });
+    }
+    for (const f of fs.readdirSync(resDir)) {
+      fs.copyFileSync(path.join(resDir, f), path.join(outResDir, f));
+      console.log(`Copied resource: ${f}`);
+    }
+  }
+
   // 2. Bundle extension
   console.log("Bundling VS Code extension...");
   await esbuild.build({

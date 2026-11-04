@@ -28,3 +28,12 @@ export {
   type OpenLocationMessage,
   type TriggerScanMessage
 } from "./report-panel";
+
+export {
+  OverviewViewProvider,
+  renderOverviewHtml,
+  formatLocationShort,
+  type OverviewViewModel,
+  type OverviewViewProviderOptions,
+  type OverviewWebviewMessage
+} from "./overview-view";

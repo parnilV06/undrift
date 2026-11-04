@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <!-- Top track: Consumer API contract -->
+  <circle cx="4.5" cy="6.5" r="2" fill="currentColor" />
+  <path d="M6.5 6.5h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+  <circle cx="19.5" cy="6.5" r="2" fill="currentColor" />
+
+  <!-- Center alignment probe & contract bridge -->
+  <path d="M12 6.5v4M12 13.5v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="1.5 2" />
+  <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+
+  <!-- Bottom track: Provider API contract with drift divergence -->
+  <circle cx="4.5" cy="17.5" r="2" fill="currentColor" />
+  <path d="M6.5 17.5h4.5l6 1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="19.5" cy="19.3" r="2" fill="currentColor" />
+</svg>
