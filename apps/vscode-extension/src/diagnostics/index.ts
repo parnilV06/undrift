@@ -13,3 +13,9 @@ export {
   parseDocumentUri,
   sourceSpanToVsCodeRange
 } from "./diagnostic-provider";
+
+export {
+  DriftHoverProvider,
+  type DriftHoverProviderOptions,
+  isPositionInSpan
+} from "./hover-provider";

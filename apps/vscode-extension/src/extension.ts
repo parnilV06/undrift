@@ -9,7 +9,7 @@ import { AnalysisEngine, type SourceSpan, StateReconciler } from "@undrift/core"
 import { TreeSitterParserAdapter } from "@undrift/parser-tree-sitter";
 import { AnalysisCoordinator } from "./activation";
 import { registerCommands, formatIncompleteScanMessage } from "./commands";
-import { DriftDiagnosticProvider } from "./diagnostics";
+import { DriftDiagnosticProvider, DriftHoverProvider } from "./diagnostics";
 import { DriftCodeActionProvider, FixProposalService, FixVerificationCoordinator } from "./fixes";
 import { OutputChannelLogger } from "./logging";
 import { DriftStatusBar } from "./status";
@@ -34,6 +34,7 @@ let coordinator: AnalysisCoordinator | undefined;
 let fixService: FixProposalService | undefined;
 let verificationCoordinator: FixVerificationCoordinator | undefined;
 let codeActionProvider: DriftCodeActionProvider | undefined;
+let hoverProvider: DriftHoverProvider | undefined;
 
 /**
  * Activates the UNDRIFT VS Code extension.
@@ -115,6 +116,18 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.languages.registerCodeActionsProvider(languageFilters, codeActionProvider, {
         providedCodeActionKinds: DriftCodeActionProvider.providedCodeActionKinds
       })
+    );
+  }
+
+  // 10d. Register HoverProvider for supported languages
+  hoverProvider = new DriftHoverProvider({
+    coordinator,
+    diagnosticProvider,
+    fixService
+  });
+  if (typeof vscode.languages?.registerHoverProvider === "function") {
+    context.subscriptions.push(
+      vscode.languages.registerHoverProvider(languageFilters, hoverProvider)
     );
   }
 
@@ -253,6 +266,7 @@ export async function deactivate(): Promise<void> {
   analyzer = undefined;
   workspaceManager = undefined;
   codeActionProvider = undefined;
+  hoverProvider = undefined;
   fixService = undefined;
 
   if (logger) {

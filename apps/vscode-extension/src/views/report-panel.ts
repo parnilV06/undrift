@@ -3,17 +3,19 @@
 
 import * as crypto from "crypto";
 import type * as vscode from "vscode";
-import type {
-  AnalysisCoverageSummary,
-  AnalysisWarning,
-  EvidenceStrength,
-  FindingCategory,
-  FindingLifecycleEvent,
-  FindingLifecycleTransition,
-  FindingSeverity,
-  FixProposal,
-  SourceSpan,
-  WorkspaceId
+import {
+  getDiagnosticGuidance,
+  getWarningGuidance,
+  type AnalysisCoverageSummary,
+  type AnalysisWarning,
+  type EvidenceStrength,
+  type FindingCategory,
+  type FindingLifecycleEvent,
+  type FindingLifecycleTransition,
+  type FindingSeverity,
+  type FixProposal,
+  type SourceSpan,
+  type WorkspaceId
 } from "@undrift/core";
 import type {
   AnalysisCoordinator,
@@ -844,6 +846,66 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       border-radius: 4px;
       margin-top: 10px;
     }
+    .manual-resolution-reason {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, #aaaaaa);
+      line-height: 1.4;
+    }
+    .guidance-details {
+      background: rgba(127, 127, 127, 0.04);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      margin-top: 14px;
+      overflow: hidden;
+    }
+    .guidance-summary {
+      padding: 10px 14px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      background: rgba(127, 127, 127, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .guidance-summary:hover {
+      background: rgba(127, 127, 127, 0.14);
+    }
+    .guidance-body {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .guidance-section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .guidance-heading {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--vscode-descriptionForeground, #888888);
+    }
+    .guidance-section p {
+      margin: 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--vscode-editor-foreground, #dddddd);
+    }
+    .guidance-steps {
+      margin: 4px 0 0 0;
+      padding-left: 20px;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--vscode-editor-foreground, #dddddd);
+    }
+    .guidance-steps li {
+      margin-bottom: 4px;
+    }
     footer {
       margin-top: 40px;
       padding-top: 16px;
@@ -920,6 +982,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       <tr>
         <th>Code</th>
         <th>Message</th>
+        <th>Resolution Guidance</th>
         <th>Source Location</th>
         <th>Scope</th>
         <th>Affects Completeness</th>
@@ -928,16 +991,21 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     <tbody>
       ${model.warnings
         .slice(0, 50)
-        .map(
-          (w) => `
+        .map((w) => {
+          const warnGuidance = getWarningGuidance(w.code, w.reasonCode);
+          return `
         <tr>
           <td><code>${escapeHtml(w.code)}</code>${w.reasonCode ? `<br/><span style="font-size: 11px; opacity: 0.8;"><code>${escapeHtml(w.reasonCode)}</code></span>` : ""}</td>
           <td>${escapeHtml(w.message)}</td>
+          <td>
+            <div style="font-weight: 600; font-size: 11.5px; margin-bottom: 2px;">${escapeHtml(warnGuidance.title)}</div>
+            <div style="font-size: 11px; color: var(--vscode-descriptionForeground);">${escapeHtml(warnGuidance.suggestedSteps[0] ?? warnGuidance.whatItMeans)}</div>
+          </td>
           <td>${w.source ? `<code>${escapeHtml(w.source.uri)}:${w.source.start ? w.source.start.line + 1 : 1}:${w.source.start ? w.source.start.character + 1 : 1}</code>` : "—"}</td>
           <td><code>${escapeHtml(w.scope ?? "workspace")}</code></td>
           <td>${w.affectsCompleteness ? "Yes (Limits conclusions)" : "No (Advisory)"}</td>
-        </tr>`
-        )
+        </tr>`;
+        })
         .join("")}
     </tbody>
   </table>
@@ -1301,6 +1369,7 @@ function renderFindingCard(
     }
 
     ${renderProposalsSection(proposals, finding, targetProposalId)}
+    ${renderResolutionGuidance(finding, proposals.length > 0)}
 
     ${
       history.length > 0
@@ -1334,11 +1403,34 @@ function renderProposalsSection(
       </div>
     </div>`;
     }
+
+    const guidance = getDiagnosticGuidance({
+      ruleId: finding.ruleId,
+      method:
+        "method" in finding && typeof finding.method === "string" ? finding.method : undefined,
+      route: "route" in finding && typeof finding.route === "string" ? finding.route : undefined,
+      targetKey:
+        "targetKey" in finding && typeof finding.targetKey === "string"
+          ? finding.targetKey
+          : undefined,
+      expectedDescription:
+        "expectedDescription" in finding && typeof finding.expectedDescription === "string"
+          ? finding.expectedDescription
+          : undefined,
+      observedDescription:
+        "observedDescription" in finding && typeof finding.observedDescription === "string"
+          ? finding.observedDescription
+          : undefined,
+      summary: finding.summary,
+      hasAutomatedFix: false
+    });
+
     return `
     <div class="proposals-section">
       <div class="proposals-title">Candidate Repair Proposals</div>
       <div class="manual-resolution-note">
         Automated repair proposals are not supported for rule <code>${escapeHtml(finding.ruleId)}</code>. Manual resolution is required.
+        ${guidance.whyNoAutomatedFix ? `<div class="manual-resolution-reason" style="margin-top: 6px; font-style: normal;">${escapeHtml(guidance.whyNoAutomatedFix)}</div>` : ""}
       </div>
     </div>`;
   }
@@ -1353,6 +1445,72 @@ function renderProposalsSection(
       ${proposals.map((p) => renderProposalCard(p, p.id === targetProposalId)).join("")}
     </div>
   </div>`;
+}
+
+function renderResolutionGuidance(finding: DiagnosticFindingSource, hasProposals: boolean): string {
+  const guidance = getDiagnosticGuidance({
+    ruleId: finding.ruleId,
+    method: "method" in finding && typeof finding.method === "string" ? finding.method : undefined,
+    route: "route" in finding && typeof finding.route === "string" ? finding.route : undefined,
+    targetKey:
+      "targetKey" in finding && typeof finding.targetKey === "string"
+        ? finding.targetKey
+        : undefined,
+    expectedDescription:
+      "expectedDescription" in finding && typeof finding.expectedDescription === "string"
+        ? finding.expectedDescription
+        : undefined,
+    observedDescription:
+      "observedDescription" in finding && typeof finding.observedDescription === "string"
+        ? finding.observedDescription
+        : undefined,
+    summary: finding.summary,
+    possibleImpact:
+      "impactStatement" in finding && typeof finding.impactStatement === "string"
+        ? finding.impactStatement
+        : undefined,
+    hasAutomatedFix: hasProposals
+  });
+
+  const modeBadgeClass =
+    guidance.resolutionMode === "automatic"
+      ? "badge-verified"
+      : guidance.resolutionMode === "guided"
+        ? "badge-pending"
+        : "badge-category";
+
+  return `
+  <details class="guidance-details" open>
+    <summary class="guidance-summary">
+      <span class="guidance-summary-title">Resolution Guidance: ${escapeHtml(guidance.title)}</span>
+      <span class="badge ${modeBadgeClass}">${escapeHtml(guidance.resolutionMode.toUpperCase())}</span>
+    </summary>
+    <div class="guidance-body">
+      <div class="guidance-section">
+        <div class="guidance-heading">What this means</div>
+        <p>${escapeHtml(guidance.whatItMeans)}</p>
+      </div>
+      <div class="guidance-section">
+        <div class="guidance-heading">Why it matters</div>
+        <p>${escapeHtml(guidance.whyItMatters)}</p>
+      </div>
+      ${
+        !hasProposals && guidance.whyNoAutomatedFix
+          ? `
+      <div class="guidance-section">
+        <div class="guidance-heading">Why automated repair is unavailable</div>
+        <p>${escapeHtml(guidance.whyNoAutomatedFix)}</p>
+      </div>`
+          : ""
+      }
+      <div class="guidance-section">
+        <div class="guidance-heading">Suggested Resolution Steps</div>
+        <ol class="guidance-steps">
+          ${guidance.suggestedSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+        </ol>
+      </div>
+    </div>
+  </details>`;
 }
 
 function renderProposalCard(proposal: FixProposal, isTarget: boolean): string {

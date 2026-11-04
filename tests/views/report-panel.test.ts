@@ -1471,4 +1471,79 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       manager.dispose();
     });
   });
+
+  describe("Resolution Guidance in ReportPanel", () => {
+    it("renders expandable Resolution Guidance section with structured sections in finding cards", () => {
+      const und110Finding = createSampleFinding("und110:card", {
+        ruleId: "UND110",
+        title: "Unmapped Provider Route"
+      });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [und110Finding],
+        history: [],
+        warnings: []
+      });
+
+      expect(html).toContain("Resolution Guidance: Unmapped Backend Route");
+      expect(html).toContain('<details class="guidance-details" open>');
+      expect(html).toContain('<div class="guidance-heading">What this means</div>');
+      expect(html).toContain('<div class="guidance-heading">Why it matters</div>');
+      expect(html).toContain(
+        '<div class="guidance-heading">Why automated repair is unavailable</div>'
+      );
+      expect(html).toContain('<div class="guidance-heading">Suggested Resolution Steps</div>');
+      expect(html).toContain("Check if an external consumer");
+      expect(html).toContain("dynamic route invocations");
+      expect(html).toContain("work-in-progress or planned endpoint");
+      expect(html).toContain("decommissioning or archiving");
+      expect(html).toContain("frontend API client call");
+      expect(html).toContain("unsupported client library");
+      expect(html).toContain("path and method spelling");
+    });
+
+    it("renders rich rationale in proposals section and Resolution Guidance column in warnings table", () => {
+      const und200Finding = createSampleFinding("und200:card", {
+        ruleId: "UND200",
+        targetKey: "price"
+      });
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        findings: [und200Finding],
+        history: [],
+        warnings: [
+          {
+            code: "DYNAMIC_ROUTE",
+            message: "Dynamic path parameter forwarded",
+            affectsCompleteness: false,
+            scope: "consumer"
+          },
+          {
+            code: "PARTIAL_SHAPE",
+            reasonCode: "explicit-any-type",
+            message: "Request payload uses any",
+            affectsCompleteness: false,
+            scope: "consumer"
+          }
+        ],
+        proposalsByFinding: new Map([[und200Finding.id, []]])
+      });
+
+      expect(html).toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>. Manual resolution is required."
+      );
+      expect(html).toContain(
+        "Automatically inserting a field into the frontend payload requires knowing the business domain value"
+      );
+
+      // Warnings table Resolution Guidance column
+      expect(html).toContain("<th>Resolution Guidance</th>");
+      expect(html).toContain("Dynamic Route Parameter");
+      expect(html).toContain("Explicit Any Type");
+    });
+  });
 });
