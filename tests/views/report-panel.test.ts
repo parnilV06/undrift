@@ -1488,7 +1488,8 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       });
 
       expect(html).toContain("Resolution Guidance: Unmapped Backend Route");
-      expect(html).toContain('<details class="guidance-details" open>');
+      expect(html).toContain('<details class="guidance-details">');
+      expect(html).not.toContain('<details class="guidance-details" open>');
       expect(html).toContain('<div class="guidance-heading">What this means</div>');
       expect(html).toContain('<div class="guidance-heading">Why it matters</div>');
       expect(html).toContain(

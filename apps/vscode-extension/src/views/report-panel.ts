@@ -1480,7 +1480,7 @@ function renderResolutionGuidance(finding: DiagnosticFindingSource, hasProposals
         : "badge-category";
 
   return `
-  <details class="guidance-details" open>
+  <details class="guidance-details">
     <summary class="guidance-summary">
       <span class="guidance-summary-title">Resolution Guidance: ${escapeHtml(guidance.title)}</span>
       <span class="badge ${modeBadgeClass}">${escapeHtml(guidance.resolutionMode.toUpperCase())}</span>
