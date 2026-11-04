@@ -3,6 +3,7 @@
   "displayName": "UNDRIFT",
   "description": "Live frontend-backend API contract drift detection inside VS Code.",
   "version": "0.1.0",
+  "icon": "resources/undrift-icon.png",
   "publisher": "undrift",
   "engines": {
     "vscode": ">=1.100.0"
@@ -80,17 +81,17 @@
       "view/title": [
         {
           "command": "undrift.scanWorkspace",
-          "when": "view == undrift.findingsView",
+          "when": "view == undrift.findingsView || view == undrift.overview",
           "group": "navigation@1"
         },
         {
           "command": "undrift.refresh",
-          "when": "view == undrift.findingsView",
+          "when": "view == undrift.findingsView || view == undrift.overview",
           "group": "navigation@2"
         },
         {
           "command": "undrift.showReport",
-          "when": "view == undrift.findingsView",
+          "when": "view == undrift.findingsView || view == undrift.overview",
           "group": "navigation@3"
         },
         {
@@ -117,11 +118,25 @@
         }
       ]
     },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "undrift",
+          "title": "UNDRIFT",
+          "icon": "resources/undrift.svg"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "undrift": [
+        {
+          "type": "webview",
+          "id": "undrift.overview",
+          "name": "Overview"
+        },
         {
           "id": "undrift.findingsView",
-          "name": "UNDRIFT Contract Drift"
+          "name": "Findings"
         }
       ]
     }

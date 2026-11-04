@@ -26,6 +26,9 @@ import type { DiagnosticFindingSource } from "../diagnostics";
 import type { FixProposalService } from "../fixes/fix-service";
 import type { ExtensionLogger } from "../logging/output-channel";
 import { openFindingLocation, type VerificationState } from "./findings-tree";
+import { type BrandLogoUris, DEFAULT_BRAND_LOGO_URIS } from "./overview-view";
+
+export { type BrandLogoUris, DEFAULT_BRAND_LOGO_URIS } from "./overview-view";
 
 /**
  * Presentation view model consumed by the Integration Report Webview.
@@ -73,6 +76,7 @@ export interface ReportPanelManagerOptions {
   fixService?: FixProposalService;
   vscodeModule?: typeof vscode;
   logger?: ExtensionLogger;
+  extensionUri?: vscode.Uri;
 }
 
 interface WorkspaceReportState {
@@ -163,7 +167,12 @@ export function generateNonce(): string {
  * Pure function rendering the complete, self-contained HTML for the Integration Report Webview.
  * Fully decoupled from VS Code APIs for fast, deterministic unit testing.
  */
-export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()): string {
+export function renderReportHtml(
+  model: ReportViewModel,
+  nonce = generateNonce(),
+  logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS,
+  cspSource = "'self' vscode-resource: https:"
+): string {
   const activeFindings = model.findings.filter((f) => f.state !== "resolved");
   const activeDriftFindings = activeFindings.filter((f) => f.ruleId !== "UND110");
   const unmappedProviderFindings = activeFindings.filter((f) => f.ruleId === "UND110");
@@ -262,7 +271,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UNDRIFT Integration Report</title>
   <style>
@@ -270,9 +279,33 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       --color-error: var(--vscode-errorForeground, #f14c4c);
       --color-warning: var(--vscode-editorWarning-foreground, #cca700);
       --color-info: var(--vscode-editorInfo-foreground, #3794ff);
-      --color-success: #89d185;
-      --card-bg: var(--vscode-editor-inactiveSelectionBackground, rgba(127, 127, 127, 0.08));
-      --border-color: var(--vscode-panel-border, rgba(127, 127, 127, 0.25));
+      --color-success: var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground, #89d185));
+
+      /* Neutral theme-aware surfaces derived from native IDE tokens */
+      --card-bg: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.05));
+      --card-bg-subtle: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.08));
+      --border-color: var(--vscode-panel-border, var(--vscode-widget-border, rgba(127, 127, 127, 0.2)));
+      --border-color-subtle: var(--vscode-panel-border, rgba(127, 127, 127, 0.12));
+      --hover-bg: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.08));
+      --code-bg: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.08));
+      --badge-bg: var(--vscode-badge-background, rgba(127, 127, 127, 0.2));
+      --badge-fg: var(--vscode-badge-foreground, var(--vscode-editor-foreground, #cccccc));
+    }
+    body.vscode-light {
+      --card-bg: var(--vscode-editorWidget-background, rgba(0, 0, 0, 0.02));
+      --card-bg-subtle: var(--vscode-textBlockQuote-background, rgba(0, 0, 0, 0.04));
+      --border-color: var(--vscode-panel-border, var(--vscode-widget-border, rgba(0, 0, 0, 0.12)));
+      --border-color-subtle: rgba(0, 0, 0, 0.07);
+      --hover-bg: var(--vscode-list-hoverBackground, rgba(0, 0, 0, 0.04));
+      --code-bg: var(--vscode-textCodeBlock-background, rgba(0, 0, 0, 0.05));
+    }
+    body.vscode-high-contrast {
+      --border-color: var(--vscode-contrastBorder, #ffffff);
+      --border-color-subtle: var(--vscode-contrastBorder, #ffffff);
+      --card-bg: transparent;
+      --card-bg-subtle: transparent;
+      --hover-bg: var(--vscode-list-hoverBackground, transparent);
+      --code-bg: transparent;
     }
     body {
       font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -304,6 +337,50 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       display: flex;
       align-items: center;
       gap: 10px;
+    }
+    .report-brand-logo-container {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .report-brand-logo {
+      height: 24px;
+      width: auto;
+      max-width: 30px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+    .brand-logo-light {
+      display: inline-block;
+    }
+    .brand-logo-dark {
+      display: none;
+    }
+    body.vscode-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-light .brand-logo-dark {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-high-contrast .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-dark {
+      display: inline-block !important;
     }
     .header-meta {
       display: flex;
@@ -348,7 +425,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     .badge {
       display: inline-block;
       padding: 2px 8px;
-      border-radius: 10px;
+      border-radius: 4px;
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
@@ -362,79 +439,80 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       text-transform: none;
     }
     .badge-fresh {
-      background: rgba(137, 209, 133, 0.15);
+      background: var(--card-bg-subtle);
       color: var(--color-success);
-      border: 1px solid rgba(137, 209, 133, 0.4);
+      border: 1px solid var(--color-success);
     }
     .badge-last-known {
-      background: rgba(55, 148, 255, 0.15);
+      background: var(--card-bg-subtle);
       color: var(--color-info);
-      border: 1px solid rgba(55, 148, 255, 0.4);
+      border: 1px solid var(--color-info);
     }
     .badge-incomplete {
-      background: rgba(204, 167, 0, 0.15);
+      background: var(--card-bg-subtle);
       color: var(--color-warning);
-      border: 1px solid rgba(204, 167, 0, 0.4);
+      border: 1px solid var(--color-warning);
     }
     .badge-failed {
-      background: rgba(241, 76, 76, 0.15);
+      background: var(--card-bg-subtle);
       color: var(--color-error);
-      border: 1px solid rgba(241, 76, 76, 0.4);
+      border: 1px solid var(--color-error);
     }
     .badge-cancelled, .badge-neutral {
-      background: rgba(127, 127, 127, 0.15);
-      color: var(--vscode-descriptionForeground, #888888);
-      border: 1px solid rgba(127, 127, 127, 0.3);
+      background: var(--badge-bg);
+      color: var(--badge-fg);
+      border: 1px solid var(--border-color);
     }
     .badge-error {
-      background: rgba(241, 76, 76, 0.2);
+      background: var(--card-bg-subtle);
       color: var(--color-error);
+      border: 1px solid var(--color-error);
     }
     .badge-warning {
-      background: rgba(204, 167, 0, 0.2);
+      background: var(--card-bg-subtle);
       color: var(--color-warning);
+      border: 1px solid var(--color-warning);
     }
     .badge-info {
-      background: rgba(55, 148, 255, 0.2);
+      background: var(--card-bg-subtle);
       color: var(--color-info);
+      border: 1px solid var(--color-info);
     }
     .badge-category {
-      background: rgba(127, 127, 127, 0.18);
+      background: var(--card-bg-subtle);
       color: var(--vscode-editor-foreground, #cccccc);
+      border: 1px solid var(--border-color);
     }
     .badge-evidence {
-      background: rgba(127, 127, 127, 0.15);
+      background: var(--card-bg-subtle);
       color: var(--vscode-descriptionForeground, #999999);
-      border: 1px solid rgba(127, 127, 127, 0.3);
+      border: 1px solid var(--border-color);
     }
     .banner {
-      padding: 14px 18px;
+      padding: 12px 16px;
       border-radius: 4px;
       margin-bottom: 24px;
       font-size: 13px;
       display: flex;
       align-items: flex-start;
       gap: 12px;
-      border: 1px solid transparent;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
     }
     .banner-incomplete {
-      background: rgba(204, 167, 0, 0.12);
-      border-color: rgba(204, 167, 0, 0.35);
+      border-left: 4px solid var(--color-warning);
       color: var(--vscode-editor-foreground, #eeeeee);
     }
     .banner-failed {
-      background: rgba(241, 76, 76, 0.12);
-      border-color: rgba(241, 76, 76, 0.35);
+      border-left: 4px solid var(--color-error);
       color: var(--vscode-editor-foreground, #eeeeee);
     }
     .banner-clean {
-      background: rgba(137, 209, 133, 0.12);
-      border-color: rgba(137, 209, 133, 0.35);
+      border-left: 4px solid var(--color-success);
       color: var(--vscode-editor-foreground, #eeeeee);
     }
     .banner-info {
-      background: rgba(55, 148, 255, 0.12);
-      border-color: rgba(55, 148, 255, 0.35);
+      border-left: 4px solid var(--color-info);
       color: var(--vscode-editor-foreground, #eeeeee);
     }
     .metrics-grid {
@@ -542,7 +620,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       margin: 16px 0;
     }
     .comparison-box {
-      background: rgba(0, 0, 0, 0.2);
+      background: var(--code-bg);
       border: 1px solid var(--border-color);
       border-radius: 4px;
       padding: 12px;
@@ -573,7 +651,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       justify-content: space-between;
       gap: 12px;
       padding: 8px 12px;
-      background: rgba(127, 127, 127, 0.05);
+      background: var(--card-bg);
       border: 1px solid var(--border-color);
       border-radius: 4px;
     }
@@ -625,16 +703,25 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       border-collapse: collapse;
       font-size: 12px;
       margin-top: 10px;
+      table-layout: fixed;
     }
     .warnings-table th, .warnings-table td {
       border: 1px solid var(--border-color);
-      padding: 8px 12px;
+      padding: 8px 10px;
       text-align: left;
+      overflow-wrap: break-word;
     }
     .warnings-table th {
-      background: rgba(127, 127, 127, 0.1);
+      background: var(--card-bg-subtle);
+      color: var(--vscode-editor-foreground);
       font-weight: 600;
     }
+    .warnings-table th:nth-child(1), .warnings-table td:nth-child(1) { width: 14%; word-break: break-all; }
+    .warnings-table th:nth-child(2), .warnings-table td:nth-child(2) { width: 27%; }
+    .warnings-table th:nth-child(3), .warnings-table td:nth-child(3) { width: 27%; }
+    .warnings-table th:nth-child(4), .warnings-table td:nth-child(4) { width: 18%; word-break: break-all; font-size: 11px; }
+    .warnings-table th:nth-child(5), .warnings-table td:nth-child(5) { width: 7%; }
+    .warnings-table th:nth-child(6), .warnings-table td:nth-child(6) { width: 7%; }
     .proposals-section {
       margin-top: 16px;
       padding-top: 14px;
@@ -659,7 +746,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       gap: 12px;
     }
     .proposal-card {
-      background: rgba(127, 127, 127, 0.04);
+      background: var(--card-bg);
       border: 1px solid var(--border-color);
       border-radius: 4px;
       padding: 14px 16px;
@@ -683,29 +770,29 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       font-weight: 600;
     }
     .badge-consumer {
-      background: rgba(55, 148, 255, 0.15);
-      color: #58a6ff;
-      border: 1px solid rgba(55, 148, 255, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-info);
+      border: 1px solid var(--color-info);
     }
     .badge-provider {
-      background: rgba(137, 209, 133, 0.15);
-      color: #89d185;
-      border: 1px solid rgba(137, 209, 133, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-success);
+      border: 1px solid var(--color-success);
     }
     .badge-risk-low {
-      background: rgba(137, 209, 133, 0.15);
-      color: #89d185;
-      border: 1px solid rgba(137, 209, 133, 0.3);
+      background: var(--card-bg-subtle);
+      color: var(--color-success);
+      border: 1px solid var(--color-success);
     }
     .badge-risk-medium {
-      background: rgba(204, 167, 0, 0.15);
-      color: #cca700;
-      border: 1px solid rgba(204, 167, 0, 0.3);
+      background: var(--card-bg-subtle);
+      color: var(--color-warning);
+      border: 1px solid var(--color-warning);
     }
     .badge-risk-high {
-      background: rgba(241, 76, 76, 0.15);
-      color: #f14c4c;
-      border: 1px solid rgba(241, 76, 76, 0.3);
+      background: var(--card-bg-subtle);
+      color: var(--color-error);
+      border: 1px solid var(--color-error);
     }
     .badge-verification {
       font-size: 11px;
@@ -717,29 +804,29 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       gap: 4px;
     }
     .badge-pending {
-      background: rgba(204, 167, 0, 0.15);
-      color: #cca700;
-      border: 1px solid rgba(204, 167, 0, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-warning);
+      border: 1px solid var(--color-warning);
     }
     .badge-verified {
-      background: rgba(137, 209, 133, 0.15);
-      color: #89d185;
-      border: 1px solid rgba(137, 209, 133, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-success);
+      border: 1px solid var(--color-success);
     }
     .badge-active {
-      background: rgba(241, 76, 76, 0.15);
-      color: #f14c4c;
-      border: 1px solid rgba(241, 76, 76, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-error);
+      border: 1px solid var(--color-error);
     }
     .badge-unresolved {
-      background: rgba(204, 167, 0, 0.15);
-      color: #cca700;
-      border: 1px solid rgba(204, 167, 0, 0.35);
+      background: var(--card-bg-subtle);
+      color: var(--color-warning);
+      border: 1px solid var(--color-warning);
     }
     .badge-stale {
-      background: rgba(127, 127, 127, 0.15);
-      color: #999999;
-      border: 1px solid rgba(127, 127, 127, 0.35);
+      background: var(--badge-bg);
+      color: var(--badge-fg);
+      border: 1px solid var(--border-color);
     }
     .verification-status-banner {
       font-size: 12px;
@@ -749,26 +836,24 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       display: flex;
       flex-direction: column;
       gap: 4px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
     }
     .verification-status-pending {
-      background: rgba(204, 167, 0, 0.08);
-      border: 1px solid rgba(204, 167, 0, 0.3);
-      color: #cca700;
+      border-left: 3px solid var(--color-warning);
+      color: var(--color-warning);
     }
     .verification-status-verified {
-      background: rgba(137, 209, 133, 0.08);
-      border: 1px solid rgba(137, 209, 133, 0.3);
-      color: #89d185;
+      border-left: 3px solid var(--color-success);
+      color: var(--color-success);
     }
     .verification-status-active {
-      background: rgba(241, 76, 76, 0.08);
-      border: 1px solid rgba(241, 76, 76, 0.3);
-      color: #f14c4c;
+      border-left: 3px solid var(--color-error);
+      color: var(--color-error);
     }
     .verification-status-unresolved {
-      background: rgba(204, 167, 0, 0.08);
-      border: 1px solid rgba(204, 167, 0, 0.3);
-      color: #cca700;
+      border-left: 3px solid var(--color-warning);
+      color: var(--color-warning);
     }
     .proposal-meta-grid {
       display: grid;
@@ -777,7 +862,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       margin: 10px 0;
       font-size: 11.5px;
       padding: 8px 10px;
-      background: rgba(127, 127, 127, 0.05);
+      background: var(--card-bg-subtle);
       border-radius: 4px;
     }
     .proposal-meta-item {
@@ -794,7 +879,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     }
     .proposal-diff {
       margin: 10px 0;
-      background: rgba(0, 0, 0, 0.25);
+      background: var(--code-bg);
       border: 1px solid var(--border-color);
       border-radius: 4px;
       overflow: hidden;
@@ -802,7 +887,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     .diff-header {
       font-size: 11px;
       padding: 4px 10px;
-      background: rgba(127, 127, 127, 0.1);
+      background: var(--card-bg-subtle);
       border-bottom: 1px solid var(--border-color);
       color: var(--vscode-descriptionForeground, #888888);
     }
@@ -822,12 +907,12 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       border-radius: 2px;
     }
     .diff-old {
-      background: rgba(241, 76, 76, 0.15);
-      color: #f88;
+      background: var(--vscode-diffEditor-removedTextBackground, rgba(241, 76, 76, 0.15));
+      color: var(--color-error);
     }
     .diff-new {
-      background: rgba(137, 209, 133, 0.15);
-      color: #8fd;
+      background: var(--vscode-diffEditor-insertedTextBackground, rgba(137, 209, 133, 0.15));
+      color: var(--color-success);
     }
     .diff-sign {
       font-weight: bold;
@@ -873,7 +958,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       color: var(--vscode-descriptionForeground, #888888);
       font-style: italic;
       padding: 8px 12px;
-      background: rgba(127, 127, 127, 0.04);
+      background: var(--card-bg);
       border: 1px dashed var(--border-color);
       border-radius: 4px;
       margin-top: 10px;
@@ -884,7 +969,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       line-height: 1.4;
     }
     .guidance-details {
-      background: rgba(127, 127, 127, 0.04);
+      background: var(--card-bg);
       border: 1px solid var(--border-color);
       border-radius: 6px;
       margin-top: 14px;
@@ -895,14 +980,14 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       font-weight: 600;
       font-size: 13px;
       cursor: pointer;
-      background: rgba(127, 127, 127, 0.08);
+      background: var(--card-bg-subtle);
       display: flex;
       align-items: center;
       justify-content: space-between;
       user-select: none;
     }
     .guidance-summary:hover {
-      background: rgba(127, 127, 127, 0.14);
+      background: var(--hover-bg);
     }
     .guidance-body {
       padding: 14px 16px;
@@ -951,7 +1036,13 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
 <body>
   <div class="header-bar">
     <div class="header-titles">
-      <h1>UNDRIFT Integration Report</h1>
+      <h1>
+        <span class="report-brand-logo-container" title="UNDRIFT">
+          <img class="report-brand-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+          <img class="report-brand-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+        </span>
+        <span>UNDRIFT Integration Report</span>
+      </h1>
       <div class="header-meta">
         <span>Workspace: <strong>${escapeHtml(model.workspaceLabel)}</strong></span>
         <span>•</span>
@@ -985,7 +1076,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       <span class="metric-label">Information</span>
     </div>
     <div class="metric-card">
-      <span class="metric-value" style="color: var(--color-warning)">${model.warnings ? model.warnings.length : 0}</span>
+      <span class="metric-value" style="color: var(--vscode-descriptionForeground)">${model.warnings ? model.warnings.length : 0}</span>
       <span class="metric-label">Coverage Limitations</span>
     </div>
   </div>
@@ -1324,7 +1415,7 @@ function renderFindingCard(
           <span class="badge badge-category">${escapeHtml(finding.category ?? "drift")}</span>
           ${
             isProvisional
-              ? '<span class="badge" style="background: rgba(204, 167, 0, 0.2); color: var(--color-warning); border: 1px solid rgba(204, 167, 0, 0.4);">Provisional — Incomplete Scan</span>'
+              ? '<span class="badge badge-warning">Provisional — Incomplete Scan</span>'
               : ""
           }
           ${
@@ -1766,6 +1857,7 @@ export class ReportPanelManager implements vscode.Disposable {
   private readonly workspaceStates = new Map<WorkspaceId, WorkspaceReportState>();
   private readonly vscodeModule?: typeof vscode;
   private readonly logger?: ExtensionLogger;
+  private readonly extensionUri?: vscode.Uri;
   private disposed = false;
 
   constructor(optionsOrCoordinator?: ReportPanelManagerOptions | AnalysisCoordinator) {
@@ -1779,6 +1871,7 @@ export class ReportPanelManager implements vscode.Disposable {
       this.vscodeModule = options.vscodeModule;
       this.logger = options.logger;
       this.fixService = options.fixService;
+      this.extensionUri = options.extensionUri;
 
       if (options.coordinator) {
         this.setCoordinator(options.coordinator);
@@ -1871,13 +1964,22 @@ export class ReportPanelManager implements vscode.Disposable {
       return;
     }
 
+    const localResourceRoots: vscode.Uri[] = [];
+    if (this.extensionUri && vs?.Uri?.joinPath) {
+      localResourceRoots.push(
+        vs.Uri.joinPath(this.extensionUri, "resources"),
+        vs.Uri.joinPath(this.extensionUri, "dist")
+      );
+    }
+
     const panel = vs.window.createWebviewPanel(
       "undrift.report",
       "UNDRIFT Integration Report",
       vs.ViewColumn?.One ?? 1,
       {
         enableScripts: true,
-        retainContextWhenHidden: true
+        retainContextWhenHidden: true,
+        localResourceRoots: localResourceRoots.length > 0 ? localResourceRoots : undefined
       }
     );
 
@@ -2199,7 +2301,29 @@ export class ReportPanelManager implements vscode.Disposable {
       proposalsByFinding
     };
 
-    this.currentPanel.webview.html = renderReportHtml(model);
+    let logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS;
+    const vs = this.getVsCode();
+    if (
+      this.extensionUri &&
+      vs?.Uri?.joinPath &&
+      typeof this.currentPanel.webview.asWebviewUri === "function"
+    ) {
+      logoUris = {
+        light: this.currentPanel.webview
+          .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-light.png"))
+          .toString(),
+        dark: this.currentPanel.webview
+          .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-dark.png"))
+          .toString()
+      };
+    }
+
+    this.currentPanel.webview.html = renderReportHtml(
+      model,
+      generateNonce(),
+      logoUris,
+      this.currentPanel.webview.cspSource
+    );
   }
 
   private getCurrentState(): WorkspaceReportState | undefined {

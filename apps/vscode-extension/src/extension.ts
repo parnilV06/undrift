@@ -14,7 +14,12 @@ import { DriftCodeActionProvider, FixProposalService, FixVerificationCoordinator
 import { OutputChannelLogger } from "./logging";
 import { DriftStatusBar } from "./status";
 import { WorkspaceStatePersistenceAdapter } from "./storage";
-import { FindingsTreeDataProvider, openFindingLocation, ReportPanelManager } from "./views";
+import {
+  FindingsTreeDataProvider,
+  openFindingLocation,
+  OverviewViewProvider,
+  ReportPanelManager
+} from "./views";
 import { WorkspaceManager } from "./workspace";
 
 export { formatIncompleteScanMessage };
@@ -28,6 +33,8 @@ let persistence: WorkspaceStatePersistenceAdapter | undefined;
 let reconciler: StateReconciler | undefined;
 let diagnosticProvider: DriftDiagnosticProvider | undefined;
 let treeProvider: FindingsTreeDataProvider | undefined;
+let treeView: vscode.TreeView<unknown> | undefined;
+let overviewProvider: OverviewViewProvider | undefined;
 let reportPanelManager: ReportPanelManager | undefined;
 let statusBar: DriftStatusBar | undefined;
 let coordinator: AnalysisCoordinator | undefined;
@@ -131,23 +138,75 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
+  // Helper to synchronize numeric badge across Activity Bar views
+  const syncActivityBarBadge = (count: number) => {
+    const badge =
+      count > 0
+        ? {
+            value: count,
+            tooltip: `${count} active drift finding${count === 1 ? "" : "s"} in the current workspace`
+          }
+        : undefined;
+
+    if (treeView) {
+      treeView.badge = badge;
+    }
+    const wv = overviewProvider?.getWebviewView();
+    if (wv) {
+      wv.badge = badge;
+    }
+  };
+
   // 11. Instantiate and register findings tree view provider
   treeProvider = new FindingsTreeDataProvider({
     coordinator,
     logger
   });
-  if (typeof vscode.window.registerTreeDataProvider === "function") {
+  if (typeof vscode.window.createTreeView === "function") {
+    treeView = vscode.window.createTreeView("undrift.findingsView", {
+      treeDataProvider: treeProvider
+    });
+    context.subscriptions.push(treeView);
+  } else if (typeof vscode.window.registerTreeDataProvider === "function") {
     context.subscriptions.push(
       vscode.window.registerTreeDataProvider("undrift.findingsView", treeProvider)
     );
   }
   context.subscriptions.push(treeProvider);
 
+  // 11b. Instantiate and register persistent sidebar overview provider
+  overviewProvider = new OverviewViewProvider({
+    coordinator,
+    logger,
+    extensionUri: context.extensionUri
+  });
+  if (typeof vscode.window.registerWebviewViewProvider === "function") {
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider("undrift.overview", overviewProvider)
+    );
+  }
+  context.subscriptions.push(overviewProvider);
+
+  // 11c. Subscribe to coordinator analysis completion for badge synchronization
+  context.subscriptions.push(
+    coordinator.onAnalysisCompleted((outcome) => {
+      const wsId = outcome.workspaceId ?? coordinator?.getActiveWorkspaceId();
+      if (wsId) {
+        const snap = coordinator?.getLastKnownSnapshot(wsId);
+        const activeCount = snap?.findings.filter((f) => f.state !== "resolved").length ?? 0;
+        syncActivityBarBadge(activeCount);
+      } else {
+        syncActivityBarBadge(0);
+      }
+    })
+  );
+
   // 12. Instantiate and register report panel manager
   reportPanelManager = new ReportPanelManager({
     coordinator,
     fixService,
-    logger
+    logger,
+    extensionUri: context.extensionUri
   });
   context.subscriptions.push(reportPanelManager);
 
@@ -174,7 +233,12 @@ export function activate(context: vscode.ExtensionContext): void {
     .then((restored) => {
       treeProvider?.handleSessionRestored(restored);
       reportPanelManager?.handleSessionRestored(restored);
+      overviewProvider?.handleSessionRestored(restored);
       statusBar?.handleSessionRestored(restored);
+
+      const activeCount =
+        restored.snapshot?.findings.filter((f) => f.state !== "resolved").length ?? 0;
+      syncActivityBarBadge(activeCount);
     })
     .catch((err) => {
       logger?.warn("Session restoration encountered an error during activation", err);
@@ -221,6 +285,24 @@ export async function deactivate(): Promise<void> {
       // Ignore cleanup error on deactivation
     }
     reportPanelManager = undefined;
+  }
+
+  if (overviewProvider) {
+    try {
+      overviewProvider.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    overviewProvider = undefined;
+  }
+
+  if (treeView) {
+    try {
+      treeView.dispose();
+    } catch {
+      // Ignore cleanup error on deactivation
+    }
+    treeView = undefined;
   }
 
   if (treeProvider) {
