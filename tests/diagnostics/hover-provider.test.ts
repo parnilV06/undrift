@@ -152,7 +152,7 @@ function createSampleFinding(id: string, overrides?: Partial<Finding>): Finding 
     category: "route",
     severity: "warning",
     state: "active",
-    title: "Unmapped Backend Route",
+    title: "Provider has no known consumer",
     summary: "Backend route has no matching consumer in workspace",
     explanation: "No client calls this route",
     evidenceStrength: "direct",
@@ -213,7 +213,7 @@ describe("DriftHoverProvider", () => {
     it("returns rich markdown hover for active finding at position", () => {
       const finding = createSampleFinding("find:und110:1", {
         ruleId: "UND110",
-        title: "Unmapped Backend Route",
+        title: "Provider has no known consumer",
         sourceLocations: [
           {
             uri: "file:///workspace/src/routes.ts",
@@ -244,11 +244,13 @@ describe("DriftHoverProvider", () => {
       expect(hover.contents).toHaveLength(1);
 
       const md = hover.contents[0].value;
-      expect(md).toContain("### UNDRIFT: [UND110] Unmapped Backend Route");
-      expect(md).toContain("This does NOT confirm dead code");
-      expect(md).toContain("**Automatic Fix:** Automatically deleting unmapped routes");
+      expect(md).toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
+      expect(md).toContain("This does not necessarily indicate dead code");
+      expect(md).toContain("**Why no automatic fix?**");
+      expect(md).toContain("cannot determine whether this endpoint should be deleted");
       expect(md).toContain("**Recommended Action:**");
       expect(md).toContain("command:undrift.showReport");
+      expect(md).toContain("Open full Resolution Guidance in Integration Report");
       expect(hover.contents[0].isTrusted).toBe(true);
     });
 
@@ -289,7 +291,7 @@ describe("DriftHoverProvider", () => {
       const hover = provider.provideHover(document, position) as any;
       expect(hover).toBeDefined();
       const md = hover.contents[0].value;
-      expect(md).toContain("### UNDRIFT: [UND120] HTTP Method Conflict");
+      expect(md).toContain("**UNDRIFT: UND120 — HTTP Method Conflict**");
       expect(md).toContain("**Automatic Fix:** Candidate repair proposals available");
     });
 
@@ -360,7 +362,7 @@ describe("DriftHoverProvider", () => {
       const hover = provider.provideHover(document, position) as any;
       expect(hover).toBeDefined();
       expect(hover.contents[0].value).toContain(
-        "### UNDRIFT: [UND200] Missing Required Request Field"
+        "**UNDRIFT: UND200 — Missing Required Request Field**"
       );
     });
   });

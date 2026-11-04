@@ -31,6 +31,10 @@ export interface DiagnosticGuidance {
   readonly suggestedSteps: readonly string[];
   /** Recommended resolution mode for this condition. */
   readonly resolutionMode: ResolutionMode;
+  /** Optional concise explanation for compact presentation (e.g. diagnostic hovers). */
+  readonly conciseExplanation?: string;
+  /** Optional concise rationale why automated fix is unavailable (for compact hovers). */
+  readonly conciseFixUnavailableReason?: string;
 }
 
 /**

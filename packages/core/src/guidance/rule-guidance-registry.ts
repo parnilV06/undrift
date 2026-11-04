@@ -14,7 +14,7 @@ import type { ContextualGuidanceInput, DiagnosticGuidance, ResolutionMode } from
  */
 export const UND110_REFERENCE_GUIDANCE: DiagnosticGuidance = {
   ruleCode: "UND110",
-  title: "Unmapped Backend Route",
+  title: "Provider has no known consumer",
   whatDetected:
     "A backend API route handler is declared and active, but no frontend consumer call in the analyzed workspace targets this endpoint.",
   whatItMeans:
@@ -30,7 +30,7 @@ export const UND110_REFERENCE_GUIDANCE: DiagnosticGuidance = {
     "rely on this endpoint, or if it is intentionally exposed for future features. Deleting backend routes can cause severe " +
     "breaking changes, while generating dummy client calls pollutes frontend code without business justification.",
   suggestedSteps: [
-    "Check if an external consumer (mobile client, public API caller, webhook caller, or microservice) consumes this endpoint.",
+    "Verify whether internal or external consumers rely on this endpoint before making changes.",
     "Search the frontend codebase for dynamic route invocations or string concatenations not captured by static analysis.",
     "If it is a work-in-progress or planned endpoint, document it or leave it as intended.",
     "If it is an internal-only or deprecated route no longer used by any client, consider decommissioning or archiving it after verifying telemetry and access logs.",
@@ -38,7 +38,11 @@ export const UND110_REFERENCE_GUIDANCE: DiagnosticGuidance = {
     "If the route is invoked via an unsupported client library or custom wrapper, configure or annotate the call if supported.",
     "Review route path and method spelling to ensure no slight path mismatch caused it to be treated as unmapped."
   ],
-  resolutionMode: "investigation"
+  resolutionMode: "investigation",
+  conciseExplanation:
+    "No matching frontend request was identified for this endpoint in the analyzed workspace.\n\nThis does not necessarily indicate dead code. The endpoint may be consumed by external applications, services or scheduled jobs.",
+  conciseFixUnavailableReason:
+    "UNDRIFT cannot determine whether this endpoint should be deleted, retained or connected to a frontend feature without knowing its intended consumers."
 };
 
 interface StaticRuleTemplate {
@@ -47,6 +51,8 @@ interface StaticRuleTemplate {
   readonly whatItMeans: string;
   readonly whyItMatters: string;
   readonly whyNoAutomatedFix: (hasAutomatedFix?: boolean) => string;
+  readonly conciseExplanation?: (input: ContextualGuidanceInput) => string;
+  readonly conciseFixUnavailableReason?: (hasAutomatedFix?: boolean) => string;
   readonly suggestedSteps: (input: ContextualGuidanceInput) => readonly string[];
   readonly defaultResolutionMode: ResolutionMode;
 }
@@ -86,9 +92,16 @@ const RULE_TEMPLATES: Record<RuleId, StaticRuleTemplate> = {
       }
       return UND110_REFERENCE_GUIDANCE.whatDetected;
     },
+    conciseExplanation: (input) => {
+      if (input.method && input.route) {
+        return `No matching frontend request was identified for \`${input.method} ${input.route}\` in the analyzed workspace.\n\nThis does not necessarily indicate dead code. The endpoint may be consumed by external applications, services or scheduled jobs.`;
+      }
+      return UND110_REFERENCE_GUIDANCE.conciseExplanation!;
+    },
     whatItMeans: UND110_REFERENCE_GUIDANCE.whatItMeans,
     whyItMatters: UND110_REFERENCE_GUIDANCE.whyItMatters,
     whyNoAutomatedFix: () => UND110_REFERENCE_GUIDANCE.whyNoAutomatedFix!,
+    conciseFixUnavailableReason: () => UND110_REFERENCE_GUIDANCE.conciseFixUnavailableReason!,
     suggestedSteps: () => UND110_REFERENCE_GUIDANCE.suggestedSteps,
     defaultResolutionMode: "investigation"
   },
@@ -586,15 +599,16 @@ const PARTIAL_SHAPE_REASON_TEMPLATES: Record<
   "multipart-no-construction-evidence": {
     title: "FormData Construction Not Found",
     whatDetected:
-      "FormData instance was passed without detectable field append mutations in the local scope.",
+      "FormData instance was passed without discoverable construction or field append mutations in the analyzed scope.",
     whatItMeans:
-      "A FormData object is sent, but `append()` or `set()` calls could not be bound to it locally.",
+      "A FormData parameter is passed to the request transport, but static analysis could not establish where the instance is created or populated from the available source evidence.",
     whyItMatters:
-      "Multipart request fields cannot be verified against the backend endpoint's file and text expectations.",
-    whyNoAutomatedFix: "Multipart field names and file keys cannot be guessed safely.",
+      "Multipart request fields and file uploads cannot be verified against backend route expectations without evidence of what is appended.",
+    whyNoAutomatedFix:
+      "Multipart field names and file keys cannot be determined without evidence of where FormData was populated.",
     suggestedSteps: [
-      "Ensure FormData mutations occur in the same scope or via supported builder methods.",
-      "Document multipart field expectations or use typed multipart helpers."
+      "Trace this FormData parameter through its callers and locate where the instance is created and populated. Verify which fields are appended or set. UNDRIFT could not establish the multipart payload from the available source evidence.",
+      "If caller evidence is unavailable or only partial across module boundaries, inspect call sites to confirm what form fields and file attachments are dispatched."
     ]
   },
   "multipart-partial-field-evidence": {
@@ -690,6 +704,8 @@ export function getDiagnosticGuidance(input: ContextualGuidanceInput): Diagnosti
     whatItMeans: template.whatItMeans,
     whyItMatters: input.possibleImpact ?? template.whyItMatters,
     whyNoAutomatedFix: template.whyNoAutomatedFix(hasFix),
+    conciseExplanation: template.conciseExplanation?.(input),
+    conciseFixUnavailableReason: template.conciseFixUnavailableReason?.(hasFix),
     suggestedSteps: template.suggestedSteps(input),
     resolutionMode
   };

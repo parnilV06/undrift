@@ -172,7 +172,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
   const infoCount = activeFindings.filter((f) => f.severity === "info").length;
 
   const categoryLabels: Record<FindingCategory, string> = {
-    existence: "Missing Endpoint",
+    existence: "Unmapped Provider Endpoints",
     route: "Route Parameter",
     "request-shape": "Request Shape",
     "response-shape": "Response Shape",
@@ -193,6 +193,38 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
     const cat = f.category ?? "existence";
     if (cat in categoryCounts) {
       categoryCounts[cat]++;
+    }
+  }
+
+  const unmappedProviderCount = activeFindings.filter((f) => f.ruleId === "UND110").length;
+  const missingProviderCount = activeFindings.filter(
+    (f) => f.ruleId === "UND100" || (f.category === "existence" && f.ruleId !== "UND110")
+  ).length;
+
+  interface SummaryPillItem {
+    label: string;
+    count: number;
+  }
+  const summaryPills: SummaryPillItem[] = [];
+
+  if (unmappedProviderCount > 0) {
+    summaryPills.push({ label: "Unmapped Provider Endpoints", count: unmappedProviderCount });
+  }
+  if (missingProviderCount > 0) {
+    summaryPills.push({ label: "Missing Provider Endpoints", count: missingProviderCount });
+  }
+
+  const otherCategories: FindingCategory[] = [
+    "route",
+    "request-shape",
+    "response-shape",
+    "type",
+    "analysis-limit"
+  ];
+  for (const cat of otherCategories) {
+    const count = categoryCounts[cat];
+    if (count > 0) {
+      summaryPills.push({ label: categoryLabels[cat], count });
     }
   }
 
@@ -959,13 +991,12 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
   </div>
 
   <div class="category-pills">
-    ${Object.entries(categoryCounts)
-      .filter(([_, count]) => count > 0)
+    ${summaryPills
       .map(
-        ([cat, count]) => `
+        (pill) => `
       <div class="category-pill">
-        <span>${escapeHtml(categoryLabels[cat as FindingCategory])}:</span>
-        <span class="category-pill-count">${count}</span>
+        <span>${escapeHtml(pill.label)}:</span>
+        <span class="category-pill-count">${pill.count}</span>
       </div>`
       )
       .join("")}
@@ -1394,43 +1425,11 @@ function renderProposalsSection(
   targetProposalId?: string
 ): string {
   if (proposals.length === 0) {
-    if (finding.ruleId === "UND120") {
-      return `
-    <div class="proposals-section">
-      <div class="proposals-title">Candidate Repair Proposals</div>
-      <div class="manual-resolution-note">
-        No automated safe repair proposals are available for this finding. Method evidence could not be determined conservatively without ambiguity. Manual inspection and repair is required.
-      </div>
-    </div>`;
-    }
-
-    const guidance = getDiagnosticGuidance({
-      ruleId: finding.ruleId,
-      method:
-        "method" in finding && typeof finding.method === "string" ? finding.method : undefined,
-      route: "route" in finding && typeof finding.route === "string" ? finding.route : undefined,
-      targetKey:
-        "targetKey" in finding && typeof finding.targetKey === "string"
-          ? finding.targetKey
-          : undefined,
-      expectedDescription:
-        "expectedDescription" in finding && typeof finding.expectedDescription === "string"
-          ? finding.expectedDescription
-          : undefined,
-      observedDescription:
-        "observedDescription" in finding && typeof finding.observedDescription === "string"
-          ? finding.observedDescription
-          : undefined,
-      summary: finding.summary,
-      hasAutomatedFix: false
-    });
-
     return `
     <div class="proposals-section">
       <div class="proposals-title">Candidate Repair Proposals</div>
       <div class="manual-resolution-note">
-        Automated repair proposals are not supported for rule <code>${escapeHtml(finding.ruleId)}</code>. Manual resolution is required.
-        ${guidance.whyNoAutomatedFix ? `<div class="manual-resolution-reason" style="margin-top: 6px; font-style: normal;">${escapeHtml(guidance.whyNoAutomatedFix)}</div>` : ""}
+        No deterministic code modification is available for this finding. See Resolution Guidance below for manual investigation steps.
       </div>
     </div>`;
   }

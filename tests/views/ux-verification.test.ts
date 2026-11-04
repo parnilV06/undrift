@@ -154,10 +154,10 @@ describe("Extension Development Host & UX Manual Verification", () => {
   const sampleUnd110: Finding = {
     id: "find:UND110:expense-tracker-unmapped" as FindingId,
     ruleId: "UND110",
-    category: "route",
+    category: "existence",
     severity: "info",
     state: "active",
-    title: "Unmapped Backend Route",
+    title: "Provider has no known consumer",
     summary: "No known consumer found in the analyzed scope for POST '/api/auth/register'.",
     explanation: "No in-workspace caller targets this backend endpoint.",
     evidenceStrength: "direct",
@@ -174,7 +174,7 @@ describe("Extension Development Host & UX Manual Verification", () => {
   };
 
   describe("UND110 diagnostic hover", () => {
-    it("displays rule title, explanation, no-auto-fix reason, recommended next action, and report navigation", () => {
+    it("displays compact hover with canonical title, concise detection, no-fix explanation, recommended next action, and report navigation", () => {
       const coordinator: any = {
         getActiveWorkspaceId: () => "/workspace",
         getLastKnownSnapshot: () => ({ findings: [sampleUnd110] }),
@@ -195,31 +195,32 @@ describe("Extension Development Host & UX Manual Verification", () => {
       expect(hover).toBeDefined();
 
       const md = hover.contents[0].value;
-      // 1. Human-readable rule title
-      expect(md).toContain("### UNDRIFT: [UND110] Unmapped Backend Route");
+      // 1. Canonical rule title and code
+      expect(md).toContain("**UNDRIFT: UND110 — Provider has no known consumer**");
 
-      // 2. Explanation of the finding (does NOT confirm dead code)
-      expect(md).toContain("This does NOT confirm dead code");
-      expect(md).toContain("external clients, mobile applications");
+      // 2. Explanation of what was detected (does NOT confirm dead code)
+      expect(md).toContain("This does not necessarily indicate dead code");
+      expect(md).toContain("external applications, services or scheduled jobs");
 
-      // 3. Reason no automatic repair is available
+      // 3. Concise reason no automatic repair is available
+      expect(md).toContain("**Why no automatic fix?**");
+      expect(md).toContain("cannot determine whether this endpoint should be deleted");
+
+      // 4. Actionable next step (only one recommended action, not all 7)
       expect(md).toContain(
-        "Automatically deleting unmapped routes or generating client requests is unsafe"
+        "**Recommended Action:** Verify whether internal or external consumers rely on this endpoint before making changes."
       );
-
-      // 4. Recommended next action
-      expect(md).toContain(
-        "Recommended Action:** Check if an external consumer (mobile client, public API caller, webhook caller, or microservice) consumes this endpoint."
-      );
+      expect(md).not.toContain("7.");
 
       // 5. Navigation to the Integration Report
       expect(md).toContain("command:undrift.showReport");
+      expect(md).toContain("Open full Resolution Guidance in Integration Report");
       expect(hover.contents[0].isTrusted).toBe(true);
     });
   });
 
   describe("UND110 Integration Report", () => {
-    it("renders Resolution Guidance inside the finding, starts collapsed, and keeps proposals distinct", () => {
+    it("renders Resolution Guidance inside the finding, starts collapsed, and keeps proposals distinct without duplication", () => {
       const html = renderReportHtml({
         workspaceId: "/test/workspace",
         workspaceLabel: "Expense Tracker",
@@ -230,8 +231,12 @@ describe("Extension Development Host & UX Manual Verification", () => {
         proposalsByFinding: new Map([[sampleUnd110.id, []]])
       });
 
-      // Resolution Guidance appears inside finding
-      expect(html).toContain("Resolution Guidance: Unmapped Backend Route");
+      // Summary counter uses Unmapped Provider Endpoints, NOT Missing Endpoint
+      expect(html).toContain("Unmapped Provider Endpoints:");
+      expect(html).not.toContain("Missing Endpoint:");
+
+      // Resolution Guidance appears inside finding with canonical title
+      expect(html).toContain("Resolution Guidance: Provider has no known consumer");
 
       // Guidance starts collapsed (does NOT have 'open' attribute)
       expect(html).toContain('<details class="guidance-details">');
@@ -250,7 +255,7 @@ describe("Extension Development Host & UX Manual Verification", () => {
         '<div class="guidance-heading">Why automated repair is unavailable</div>'
       );
       expect(html).toContain('<div class="guidance-heading">Suggested Resolution Steps</div>');
-      expect(html).toContain("Check if an external consumer");
+      expect(html).toContain("Verify whether internal or external consumers rely on this endpoint");
       expect(html).toContain("dynamic route invocations");
       expect(html).toContain("work-in-progress or planned endpoint");
       expect(html).toContain("decommissioning or archiving");
@@ -258,16 +263,17 @@ describe("Extension Development Host & UX Manual Verification", () => {
       expect(html).toContain("unsupported client library");
       expect(html).toContain("path and method spelling");
 
-      // Candidate repair proposals section remains distinct
+      // Candidate repair proposals section displays short status without duplicate explanation
       expect(html).toContain("Candidate Repair Proposals");
-      expect(html).toContain(
-        "Automated repair proposals are not supported for rule <code>UND110</code>. Manual resolution is required."
+      expect(html).toContain("No deterministic code modification is available for this finding.");
+      expect(html).not.toContain(
+        "Automated repair proposals are not supported for rule <code>UND110</code>."
       );
     });
   });
 
   describe("PARTIAL_SHAPE diagnostic", () => {
-    it("provides reason-specific title, accurate no-fix explanation, and relevant suggested steps", () => {
+    it("provides reason-specific title, accurate no-fix explanation, and non-restructuring suggested steps", () => {
       // Reason: explicit-unknown-type
       const unknownGuidance = getWarningGuidance("PARTIAL_SHAPE", "explicit-unknown-type");
       expect(unknownGuidance.title).toBe("Explicit Unknown Type");
@@ -308,8 +314,14 @@ describe("Extension Development Host & UX Manual Verification", () => {
         "multipart-no-construction-evidence"
       );
       expect(multipartGuidance.title).toBe("FormData Construction Not Found");
-      expect(multipartGuidance.whyNoAutomatedFix).toContain(
-        "Multipart field names and file keys cannot be guessed safely."
+      expect(multipartGuidance.suggestedSteps[0]).toContain(
+        "Trace this FormData parameter through its callers and locate where the instance is created and populated."
+      );
+      expect(multipartGuidance.suggestedSteps[0]).toContain(
+        "UNDRIFT could not establish the multipart payload from the available source evidence."
+      );
+      expect(multipartGuidance.suggestedSteps[0]).not.toContain(
+        "Ensure FormData mutations occur in the same scope"
       );
     });
   });

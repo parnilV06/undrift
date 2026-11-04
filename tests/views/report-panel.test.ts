@@ -532,6 +532,26 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("Response Shape:");
       expect(html).toContain("Route Parameter:");
       expect(html).toContain("Type Mismatch:");
+      expect(html).not.toContain("Missing Endpoint:");
+    });
+
+    it("renders unmapped provider endpoint summary pill and does not use missing endpoint label", () => {
+      const findings = [
+        createSampleFinding("1", { severity: "info", ruleId: "UND110", category: "existence" })
+      ];
+
+      const html = renderReportHtml({
+        workspaceId: "/test/workspace",
+        status: "freshly-verified",
+        timestamp: "2026-10-23T04:15:00.000Z",
+        findings,
+        history: [],
+        warnings: []
+      });
+
+      expect(html).toContain("Unmapped Provider Endpoints:");
+      expect(html).toContain('<span class="category-pill-count">1</span>');
+      expect(html).not.toContain("Missing Endpoint:");
     });
 
     it("renders full finding details honestly without fabricating missing fields", () => {
@@ -1383,11 +1403,9 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
         ])
       });
 
-      expect(html).toContain(
-        "No automated safe repair proposals are available for this finding. Method evidence could not be determined conservatively without ambiguity. Manual inspection and repair is required."
-      );
-      expect(html).toContain(
-        "Automated repair proposals are not supported for rule <code>UND200</code>. Manual resolution is required."
+      expect(html).toContain("No deterministic code modification is available for this finding.");
+      expect(html).not.toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>."
       );
     });
 
@@ -1487,7 +1505,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
         warnings: []
       });
 
-      expect(html).toContain("Resolution Guidance: Unmapped Backend Route");
+      expect(html).toContain("Resolution Guidance: Provider has no known consumer");
       expect(html).toContain('<details class="guidance-details">');
       expect(html).not.toContain('<details class="guidance-details" open>');
       expect(html).toContain('<div class="guidance-heading">What this means</div>');
@@ -1496,7 +1514,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
         '<div class="guidance-heading">Why automated repair is unavailable</div>'
       );
       expect(html).toContain('<div class="guidance-heading">Suggested Resolution Steps</div>');
-      expect(html).toContain("Check if an external consumer");
+      expect(html).toContain("Verify whether internal or external consumers rely on this endpoint");
       expect(html).toContain("dynamic route invocations");
       expect(html).toContain("work-in-progress or planned endpoint");
       expect(html).toContain("decommissioning or archiving");
@@ -1505,7 +1523,7 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
       expect(html).toContain("path and method spelling");
     });
 
-    it("renders rich rationale in proposals section and Resolution Guidance column in warnings table", () => {
+    it("renders concise status in proposals section and Resolution Guidance column in warnings table", () => {
       const und200Finding = createSampleFinding("und200:card", {
         ruleId: "UND200",
         targetKey: "price"
@@ -1534,11 +1552,10 @@ describe("Chunk 4.7: Integration Report & Finding Details", () => {
         proposalsByFinding: new Map([[und200Finding.id, []]])
       });
 
-      expect(html).toContain(
-        "Automated repair proposals are not supported for rule <code>UND200</code>. Manual resolution is required."
-      );
-      expect(html).toContain(
-        "Automatically inserting a field into the frontend payload requires knowing the business domain value"
+      // Proposals section has concise status, no duplicate whyNoAutomatedFix
+      expect(html).toContain("No deterministic code modification is available for this finding.");
+      expect(html).not.toContain(
+        "Automated repair proposals are not supported for rule <code>UND200</code>."
       );
 
       // Warnings table Resolution Guidance column

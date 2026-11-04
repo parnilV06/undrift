@@ -199,26 +199,35 @@ export class DriftHoverProvider implements vscode.HoverProvider {
       md.isTrusted = true;
       md.supportHtml = true;
 
-      md.appendMarkdown(`### UNDRIFT: [${finding.ruleId}] ${guidance.title}\n\n`);
-      md.appendMarkdown(`${guidance.whatItMeans}\n\n`);
+      // 1. Canonical rule title and code
+      md.appendMarkdown(`**UNDRIFT: ${finding.ruleId} — ${guidance.title}**\n\n`);
 
+      // 2. Short explanation of what was detected
+      const explanation = guidance.conciseExplanation ?? guidance.whatDetected;
+      md.appendMarkdown(`${explanation}\n\n`);
+
+      // 3. Concise explanation of why an automatic fix is unavailable
       if (hasProposals) {
         md.appendMarkdown(
-          `$(tools) **Automatic Fix:** Candidate repair proposals available via Quick Fix (\`Ctrl+.\` / \`Cmd+.\`) or Integration Report.\n\n`
+          `**Automatic Fix:** Candidate repair proposals available via Quick Fix (\`Ctrl+.\` / \`Cmd+.\`) or Integration Report.\n\n`
         );
-      } else if (guidance.whyNoAutomatedFix) {
-        md.appendMarkdown(`$(info) **Automatic Fix:** ${guidance.whyNoAutomatedFix}\n\n`);
+      } else {
+        const noFixReason =
+          guidance.conciseFixUnavailableReason ??
+          guidance.whyNoAutomatedFix ??
+          "No automated safe repair proposals are available for this finding.";
+        md.appendMarkdown(`**Why no automatic fix?**\n\n${noFixReason}\n\n`);
       }
 
+      // 4. One recommended next action
       if (guidance.suggestedSteps.length > 0) {
-        md.appendMarkdown(
-          `$(arrow-right) **Recommended Action:** ${guidance.suggestedSteps[0]}\n\n`
-        );
+        md.appendMarkdown(`**Recommended Action:** ${guidance.suggestedSteps[0]}\n\n`);
       }
 
+      // 5. Link to the full Resolution Guidance in the Integration Report
       const reportArgs = encodeURIComponent(JSON.stringify([finding.id]));
       md.appendMarkdown(
-        `[$(book) Open Resolution Guidance in Integration Report](command:undrift.showReport?${reportArgs})`
+        `[Open full Resolution Guidance in Integration Report](command:undrift.showReport?${reportArgs})`
       );
 
       contents.push(md);

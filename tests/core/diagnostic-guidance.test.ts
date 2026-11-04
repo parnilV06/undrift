@@ -43,7 +43,7 @@ describe("Diagnostic Explanation & Resolution Guidance Registry", () => {
       const guidance = getDiagnosticGuidance({ ruleId: "UND110" });
 
       expect(guidance.ruleCode).toBe("UND110");
-      expect(guidance.title).toBe("Unmapped Backend Route");
+      expect(guidance.title).toBe("Provider has no known consumer");
       expect(guidance.resolutionMode).toBe("investigation");
 
       // Clarifies that unmapped does NOT mean confirmed dead code
@@ -54,9 +54,15 @@ describe("Diagnostic Explanation & Resolution Guidance Registry", () => {
       expect(guidance.whyNoAutomatedFix).toContain("deleting unmapped routes");
       expect(guidance.whyNoAutomatedFix).toContain("unsafe");
 
+      // Concise fields for compact presentation
+      expect(guidance.conciseExplanation).toContain("This does not necessarily indicate dead code");
+      expect(guidance.conciseFixUnavailableReason).toContain(
+        "cannot determine whether this endpoint should be deleted"
+      );
+
       // Exact 7 actionable resolution steps
       expect(guidance.suggestedSteps).toHaveLength(7);
-      expect(guidance.suggestedSteps[0]).toContain("external consumer");
+      expect(guidance.suggestedSteps[0]).toContain("internal or external consumers");
       expect(guidance.suggestedSteps[1]).toContain("dynamic route invocations");
       expect(guidance.suggestedSteps[2]).toContain("work-in-progress or planned endpoint");
       expect(guidance.suggestedSteps[3]).toContain("decommissioning or archiving");
