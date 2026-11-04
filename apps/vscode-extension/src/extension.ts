@@ -177,7 +177,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // 11b. Instantiate and register persistent sidebar overview provider
   overviewProvider = new OverviewViewProvider({
     coordinator,
-    logger
+    logger,
+    extensionUri: context.extensionUri
   });
   if (typeof vscode.window.registerWebviewViewProvider === "function") {
     context.subscriptions.push(
@@ -204,7 +205,8 @@ export function activate(context: vscode.ExtensionContext): void {
   reportPanelManager = new ReportPanelManager({
     coordinator,
     fixService,
-    logger
+    logger,
+    extensionUri: context.extensionUri
   });
   context.subscriptions.push(reportPanelManager);
 

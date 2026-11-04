@@ -26,6 +26,9 @@ import type { DiagnosticFindingSource } from "../diagnostics";
 import type { FixProposalService } from "../fixes/fix-service";
 import type { ExtensionLogger } from "../logging/output-channel";
 import { openFindingLocation, type VerificationState } from "./findings-tree";
+import { type BrandLogoUris, DEFAULT_BRAND_LOGO_URIS } from "./overview-view";
+
+export { type BrandLogoUris, DEFAULT_BRAND_LOGO_URIS } from "./overview-view";
 
 /**
  * Presentation view model consumed by the Integration Report Webview.
@@ -73,6 +76,7 @@ export interface ReportPanelManagerOptions {
   fixService?: FixProposalService;
   vscodeModule?: typeof vscode;
   logger?: ExtensionLogger;
+  extensionUri?: vscode.Uri;
 }
 
 interface WorkspaceReportState {
@@ -163,7 +167,12 @@ export function generateNonce(): string {
  * Pure function rendering the complete, self-contained HTML for the Integration Report Webview.
  * Fully decoupled from VS Code APIs for fast, deterministic unit testing.
  */
-export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()): string {
+export function renderReportHtml(
+  model: ReportViewModel,
+  nonce = generateNonce(),
+  logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS,
+  cspSource = "'self' vscode-resource: https:"
+): string {
   const activeFindings = model.findings.filter((f) => f.state !== "resolved");
   const activeDriftFindings = activeFindings.filter((f) => f.ruleId !== "UND110");
   const unmappedProviderFindings = activeFindings.filter((f) => f.ruleId === "UND110");
@@ -262,7 +271,7 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UNDRIFT Integration Report</title>
   <style>
@@ -328,6 +337,50 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
       display: flex;
       align-items: center;
       gap: 10px;
+    }
+    .report-brand-logo-container {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .report-brand-logo {
+      height: 24px;
+      width: auto;
+      max-width: 30px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+    .brand-logo-light {
+      display: inline-block;
+    }
+    .brand-logo-dark {
+      display: none;
+    }
+    body.vscode-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-light .brand-logo-dark {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-high-contrast .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-dark {
+      display: inline-block !important;
     }
     .header-meta {
       display: flex;
@@ -983,7 +1036,13 @@ export function renderReportHtml(model: ReportViewModel, nonce = generateNonce()
 <body>
   <div class="header-bar">
     <div class="header-titles">
-      <h1>UNDRIFT Integration Report</h1>
+      <h1>
+        <span class="report-brand-logo-container" title="UNDRIFT">
+          <img class="report-brand-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+          <img class="report-brand-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+        </span>
+        <span>UNDRIFT Integration Report</span>
+      </h1>
       <div class="header-meta">
         <span>Workspace: <strong>${escapeHtml(model.workspaceLabel)}</strong></span>
         <span>•</span>
@@ -1798,6 +1857,7 @@ export class ReportPanelManager implements vscode.Disposable {
   private readonly workspaceStates = new Map<WorkspaceId, WorkspaceReportState>();
   private readonly vscodeModule?: typeof vscode;
   private readonly logger?: ExtensionLogger;
+  private readonly extensionUri?: vscode.Uri;
   private disposed = false;
 
   constructor(optionsOrCoordinator?: ReportPanelManagerOptions | AnalysisCoordinator) {
@@ -1811,6 +1871,7 @@ export class ReportPanelManager implements vscode.Disposable {
       this.vscodeModule = options.vscodeModule;
       this.logger = options.logger;
       this.fixService = options.fixService;
+      this.extensionUri = options.extensionUri;
 
       if (options.coordinator) {
         this.setCoordinator(options.coordinator);
@@ -1903,13 +1964,22 @@ export class ReportPanelManager implements vscode.Disposable {
       return;
     }
 
+    const localResourceRoots: vscode.Uri[] = [];
+    if (this.extensionUri && vs?.Uri?.joinPath) {
+      localResourceRoots.push(
+        vs.Uri.joinPath(this.extensionUri, "resources"),
+        vs.Uri.joinPath(this.extensionUri, "dist")
+      );
+    }
+
     const panel = vs.window.createWebviewPanel(
       "undrift.report",
       "UNDRIFT Integration Report",
       vs.ViewColumn?.One ?? 1,
       {
         enableScripts: true,
-        retainContextWhenHidden: true
+        retainContextWhenHidden: true,
+        localResourceRoots: localResourceRoots.length > 0 ? localResourceRoots : undefined
       }
     );
 
@@ -2231,7 +2301,29 @@ export class ReportPanelManager implements vscode.Disposable {
       proposalsByFinding
     };
 
-    this.currentPanel.webview.html = renderReportHtml(model);
+    let logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS;
+    const vs = this.getVsCode();
+    if (
+      this.extensionUri &&
+      vs?.Uri?.joinPath &&
+      typeof this.currentPanel.webview.asWebviewUri === "function"
+    ) {
+      logoUris = {
+        light: this.currentPanel.webview
+          .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-light.png"))
+          .toString(),
+        dark: this.currentPanel.webview
+          .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-dark.png"))
+          .toString()
+      };
+    }
+
+    this.currentPanel.webview.html = renderReportHtml(
+      model,
+      generateNonce(),
+      logoUris,
+      this.currentPanel.webview.cspSource
+    );
   }
 
   private getCurrentState(): WorkspaceReportState | undefined {

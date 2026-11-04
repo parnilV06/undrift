@@ -45,12 +45,26 @@ export type OverviewWebviewMessage =
   | { readonly command: "refresh" };
 
 /**
+ * Theme-aware URIs for official brand logo assets rendered in Webviews.
+ */
+export interface BrandLogoUris {
+  readonly light: string;
+  readonly dark: string;
+}
+
+export const DEFAULT_BRAND_LOGO_URIS: BrandLogoUris = {
+  light: "resources/undrift-light.png",
+  dark: "resources/undrift-dark.png"
+};
+
+/**
  * Options for configuring OverviewViewProvider.
  */
 export interface OverviewViewProviderOptions {
   coordinator?: AnalysisCoordinator;
   vscodeModule?: typeof vscode;
   logger?: ExtensionLogger;
+  extensionUri?: vscode.Uri;
 }
 
 /**
@@ -102,7 +116,12 @@ function renderSidebarStatusBadge(status: VerificationState): string {
  * Pure function rendering the complete, self-contained HTML for the UNDRIFT Sidebar Overview.
  * Fully decoupled from VS Code APIs for fast, deterministic unit testing.
  */
-export function renderOverviewHtml(model: OverviewViewModel, nonce = generateNonce()): string {
+export function renderOverviewHtml(
+  model: OverviewViewModel,
+  nonce = generateNonce(),
+  logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS,
+  cspSource = "'self' vscode-resource: https:"
+): string {
   const activeFindings = model.findings.filter((f) => f.state !== "resolved");
   const errorCount = activeFindings.filter((f) => f.severity === "error").length;
   const warningCount = activeFindings.filter((f) => f.severity === "warning").length;
@@ -113,7 +132,7 @@ export function renderOverviewHtml(model: OverviewViewModel, nonce = generateNon
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UNDRIFT Overview</title>
   <style>
@@ -175,13 +194,68 @@ export function renderOverviewHtml(model: OverviewViewModel, nonce = generateNon
       margin-bottom: 4px;
     }
     .app-title {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
       letter-spacing: 0.5px;
       color: var(--vscode-sideBarTitle-foreground, var(--vscode-editor-foreground, #ffffff));
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 7px;
+    }
+    .brand-logo-container {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .brand-logo {
+      height: 18px;
+      width: auto;
+      max-width: 22px;
+      object-fit: contain;
+      vertical-align: middle;
+    }
+    .brand-logo-light {
+      display: inline-block;
+    }
+    .brand-logo-dark {
+      display: none;
+    }
+    body.vscode-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-light .brand-logo-dark {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-dark .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast .brand-logo-light {
+      display: inline-block !important;
+    }
+    body.vscode-high-contrast .brand-logo-dark {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-light {
+      display: none !important;
+    }
+    body.vscode-high-contrast-light .brand-logo-dark {
+      display: inline-block !important;
+    }
+    .empty-state-brand {
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: center;
+    }
+    .empty-state-logo {
+      height: 28px;
+      width: auto;
+      max-width: 34px;
+      opacity: 0.85;
     }
     .status-badge {
       display: inline-block;
@@ -432,7 +506,13 @@ export function renderOverviewHtml(model: OverviewViewModel, nonce = generateNon
 <body>
   <div class="overview-header">
     <div class="header-top">
-      <div class="app-title">UNDRIFT</div>
+      <div class="app-title">
+        <span class="brand-logo-container" title="UNDRIFT">
+          <img class="brand-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+          <img class="brand-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+        </span>
+        <span class="app-title-text">UNDRIFT</span>
+      </div>
       ${renderSidebarStatusBadge(model.status)}
     </div>
     <div class="workspace-meta">
@@ -530,23 +610,39 @@ export function renderOverviewHtml(model: OverviewViewModel, nonce = generateNon
       : model.status === "no-workspace"
         ? `
   <div class="empty-state">
+    <div class="empty-state-brand">
+      <img class="brand-logo empty-state-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+      <img class="brand-logo empty-state-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+    </div>
     <div class="empty-state-title">No Workspace Open</div>
     <div>Open a workspace folder in VS Code to analyze API contracts.</div>
   </div>`
         : model.status === "no-analysis"
           ? `
   <div class="empty-state">
+    <div class="empty-state-brand">
+      <img class="brand-logo empty-state-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+      <img class="brand-logo empty-state-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+    </div>
     <div class="empty-state-title">Not Scanned Yet</div>
     <div>Click <strong>Scan Workspace</strong> above to analyze frontend and backend API contracts.</div>
   </div>`
           : model.status === "analysis-failed"
             ? `
   <div class="empty-state" style="border-left: 3px solid var(--color-error);">
+    <div class="empty-state-brand">
+      <img class="brand-logo empty-state-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+      <img class="brand-logo empty-state-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+    </div>
     <div class="empty-state-title" style="color: var(--color-error)">Analysis Failed</div>
     <div>${escapeHtml(model.statusMessage ?? "Scan encountered an error. Click Scan Workspace to retry.")}</div>
   </div>`
             : `
   <div class="empty-state" style="border-left: 3px solid var(--color-success);">
+    <div class="empty-state-brand">
+      <img class="brand-logo empty-state-logo brand-logo-light" src="${escapeHtml(logoUris.light)}" alt="UNDRIFT" />
+      <img class="brand-logo empty-state-logo brand-logo-dark" src="${escapeHtml(logoUris.dark)}" alt="UNDRIFT" />
+    </div>
     <div class="empty-state-title" style="color: var(--color-success)">No Contract Drift Detected</div>
     <div>All analyzed frontend consumers and backend providers are in sync.</div>
   </div>`
@@ -618,6 +714,7 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
   private coordinatorSubscription?: { dispose(): void };
   private readonly vscodeModule?: typeof vscode;
   private readonly logger?: ExtensionLogger;
+  private readonly extensionUri?: vscode.Uri;
   private currentModel?: OverviewViewModel;
   private disposed = false;
 
@@ -625,6 +722,7 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
     this.coordinator = options.coordinator;
     this.vscodeModule = options.vscodeModule;
     this.logger = options.logger;
+    this.extensionUri = options.extensionUri;
 
     if (this.coordinator) {
       this.coordinatorSubscription = this.coordinator.onAnalysisCompleted((outcome) => {
@@ -663,8 +761,18 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
     if (this.disposed) return;
     this.view = webviewView;
 
+    const vs = this.getVsCode();
+    const localResourceRoots: vscode.Uri[] = [];
+    if (this.extensionUri && vs?.Uri?.joinPath) {
+      localResourceRoots.push(
+        vs.Uri.joinPath(this.extensionUri, "resources"),
+        vs.Uri.joinPath(this.extensionUri, "dist")
+      );
+    }
+
     webviewView.webview.options = {
-      enableScripts: true
+      enableScripts: true,
+      localResourceRoots: localResourceRoots.length > 0 ? localResourceRoots : undefined
     };
 
     webviewView.webview.onDidReceiveMessage((message: OverviewWebviewMessage) => {
@@ -854,7 +962,28 @@ export class OverviewViewProvider implements vscode.WebviewViewProvider, vscode.
     this.updateBadge();
 
     if (this.view) {
-      this.view.webview.html = renderOverviewHtml(this.currentModel);
+      const vs = this.getVsCode();
+      let logoUris: BrandLogoUris = DEFAULT_BRAND_LOGO_URIS;
+      if (
+        this.extensionUri &&
+        vs?.Uri?.joinPath &&
+        typeof this.view.webview.asWebviewUri === "function"
+      ) {
+        logoUris = {
+          light: this.view.webview
+            .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-light.png"))
+            .toString(),
+          dark: this.view.webview
+            .asWebviewUri(vs.Uri.joinPath(this.extensionUri, "resources", "undrift-dark.png"))
+            .toString()
+        };
+      }
+      this.view.webview.html = renderOverviewHtml(
+        this.currentModel,
+        generateNonce(),
+        logoUris,
+        this.view.webview.cspSource
+      );
     }
   }
 
