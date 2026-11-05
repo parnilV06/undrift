@@ -125,9 +125,25 @@ describe("Brand Identity Integration: Official UNDRIFT Logo", () => {
   });
 
   describe("B. Extension Manifest Registration", () => {
-    it("configures official extension icon in package.json", () => {
+    it("configures official extension icon in package.json and verifies icon asset", () => {
       const pkg = JSON.parse(fs.readFileSync(path.join(extDir, "package.json"), "utf8"));
-      expect(pkg.icon).toBe("resources/undrift-icon.png");
+      expect(pkg.icon).toBe("icon.png");
+
+      const iconPath = path.join(extDir, pkg.icon);
+      expect(fs.existsSync(iconPath)).toBe(true);
+
+      const buf = fs.readFileSync(iconPath);
+      // Verify PNG magic bytes: 0x89 0x50 0x4E 0x47
+      expect(buf[0]).toBe(0x89);
+      expect(buf[1]).toBe(0x50);
+      expect(buf[2]).toBe(0x4e);
+      expect(buf[3]).toBe(0x47);
+
+      // Read width and height from IHDR chunk
+      const width = buf.readUInt32BE(16);
+      const height = buf.readUInt32BE(20);
+      expect(width).toBe(512);
+      expect(height).toBe(512);
     });
 
     it("configures official SVG icon for viewsContainers.activitybar", () => {
