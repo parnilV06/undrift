@@ -1,491 +1,697 @@
+<div align="center">
+
 # UNDRIFT
 
-> **Live frontend-backend API contract intelligence inside the developer workspace.**
+### Live frontend–backend API contract intelligence inside your developer workspace.
 
-[![Language](https://img.shields.io/badge/Language-TypeScript_5.9-blue.svg)](packages/core)
-[![Runtime](https://img.shields.io/badge/Runtime-Node.js_%3E%3D_18.0.0-green.svg)](package.json)
-[![Parser](https://img.shields.io/badge/Parser-Web--Tree--sitter_WASM-orange.svg)](packages/parser-tree-sitter)
-[![Tests](https://img.shields.io/badge/Tests-1058_passed-brightgreen.svg)](tests)
-[![Architecture](https://img.shields.io/badge/Architecture-Local--First_Monorepo-purple.svg)](docs/HLD.md)
-[![Status](https://img.shields.io/badge/Status-Phase_6_Completed_V1_Ready-brightgreen.svg)](docs/LLD.md)
+**Detect contract drift. Understand the evidence. Fix it where you code.**
 
-UNDRIFT is an IDE-first developer tool engineered to discover integration contracts between connected parts of an application, detect when those contracts drift, explain discrepancies using source-linked evidence, and prepare reviewable repairs directly where developers write code.
+<p>
+  <a href="https://github.com/parnilV06/undrift">
+    <img src="https://img.shields.io/badge/Project-UNDRIFT-101820?style=for-the-badge&logo=github&logoColor=white" alt="UNDRIFT project" />
+  </a>
+  <a href="https://www.typescriptlang.org/">
+    <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5.9" />
+  </a>
+  <a href="https://tree-sitter.github.io/tree-sitter/">
+    <img src="https://img.shields.io/badge/Parser-Tree--sitter%20WASM-E58A2B?style=for-the-badge" alt="Tree-sitter WASM" />
+  </a>
+  <a href="https://code.visualstudio.com/api">
+    <img src="https://img.shields.io/badge/Editor-VS%20Code-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-GPL--3.0--only-blue.svg?style=for-the-badge" alt="GNU GPL v3.0-only" />
+  </a>
+</p>
 
-Connected application layers frequently evolve at different paces: a frontend client call and a backend route handler can each be locally well-typed and syntactically valid while disagreeing completely at the integration boundary. UNDRIFT addresses this gap through static source-code analysis. By combining Web-Tree-sitter Abstract Syntax Tree (AST) parsing with language-specific contract extractors and same-document constant resolution, UNDRIFT models integration contracts deterministically, preserving qualitative evidence and uncertainty without sending code to cloud services or executing application runtimes.
+<p>
+  <img src="https://img.shields.io/badge/V1-Feature%20Complete-16A34A?style=flat-square" alt="V1 feature complete" />
+  <img src="https://img.shields.io/badge/Release-Preparation%20In%20Progress-D97706?style=flat-square" alt="Release preparation in progress" />
+  <img src="https://img.shields.io/badge/Tests-1%2C058%20Passing-16A34A?style=flat-square" alt="1,058 tests passing" />
+  <img src="https://img.shields.io/badge/Architecture-Local--First-7C3AED?style=flat-square" alt="Local-first architecture" />
+</p>
+
+<p>
+  <a href="#what-is-undrift">Overview</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#capabilities-and-project-status">Capabilities</a> ·
+  <a href="#getting-started">Get started</a> ·
+  <a href="#roadmap-and-release-status">Roadmap</a>
+</p>
+
+</div>
 
 ---
 
+> [!IMPORTANT]
+> **Current project status — November 2026:** UNDRIFT V1 implementation is feature-complete across Phases 1–6. Automated regression checks and isolated synthetic-fixture component-integration acceptance scenarios have passed. The project is in final release preparation. The VS Code Marketplace release and landing-page deployment have **not** happened yet. A final manual acceptance pass through the live Extension Development Host remains a separate validation step.
+
 ## Table of Contents
 
+<details open>
+<summary><strong>Open navigation</strong></summary>
+
 - [What Is UNDRIFT?](#what-is-undrift)
-- [The Problem and Motivation](#the-problem-and-motivation)
-- [Project Status and Current Capabilities](#project-status-and-current-capabilities)
-- [Core Workflow](#core-workflow)
-- [Architecture Overview](#architecture-overview)
-- [Observation and Data Model](#observation-and-data-model)
+- [The Problem](#the-problem)
+- [How It Works](#how-it-works)
+- [What UNDRIFT Detects](#what-undrift-detects)
+- [Capabilities and Project Status](#capabilities-and-project-status)
 - [Supported Extraction Patterns](#supported-extraction-patterns)
+- [Workbench Experience](#workbench-experience)
+- [Architecture Overview](#architecture-overview)
+- [Analysis Model and Evidence](#analysis-model-and-evidence)
 - [Technology Stack](#technology-stack)
 - [Repository Structure](#repository-structure)
 - [Getting Started](#getting-started)
-- [Developer Workflow and Quality Checks](#developer-workflow-and-quality-checks)
 - [Configuration](#configuration)
-- [Design Decisions and Engineering Principles](#design-decisions-and-engineering-principles)
+- [Validation and Quality](#validation-and-quality)
+- [Design Principles](#design-principles)
 - [Current Limitations](#current-limitations)
-- [Roadmap](#roadmap)
-- [Documentation Guide](#documentation-guide)
-- [Contributing and Development Notes](#contributing-and-development-notes)
-- [License and Project Links](#license-and-project-links)
+- [Roadmap and Release Status](#roadmap-and-release-status)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License and Links](#license-and-links)
+
+</details>
 
 ---
 
 ## What Is UNDRIFT?
 
-In full-stack and distributed web applications, frontend user interfaces and backend services are routinely authored across different files, folders, or repositories—often by different developers, distinct teams, or generative AI coding assistants.
+UNDRIFT is a **local-first, IDE-native API contract analysis tool** that detects mismatches between frontend API consumers and backend route providers.
 
-Each component appears valid in isolation:
+It statically analyzes a JavaScript/TypeScript workspace, extracts API contracts from recognizable source patterns, correlates the consumer and provider sides, and reports discrepancies with source-linked evidence. Findings are surfaced directly in the editor through diagnostics, a dedicated sidebar, an Activity Bar badge, and an integration report.
 
-- A frontend client call compiles cleanly under TypeScript or bundles without JavaScript syntax errors.
-- A backend route handler starts up, parses requests, and compiles without warnings.
+The defining idea is simple:
 
-Yet at the integration seam, their implicit assumptions can quietly diverge. A backend route might rename an identifier (`userName` to `user_name`), restructure an object into a nested payload, alter a route parameter, or change an HTTP method from `POST` to `PATCH`. Because compile-time checks traditionally terminate at process and network boundaries unless strict, end-to-end type generation is enforced, these mismatches escape to runtime—surfacing as `undefined` UI states, HTTP 404/405 errors, broken user flows, and costly debugging sessions.
+**An API integration can be broken even when both sides are valid on their own.**
 
-### The UNDRIFT Approach
+A frontend call can compile. A backend route can run. Yet the two can disagree about the URL, HTTP method, request body, or response shape. Those disagreements often remain invisible until a user hits the affected flow at runtime.
 
-UNDRIFT bridges this gap directly inside the developer's local development environment:
+UNDRIFT brings that integration boundary into the developer workspace.
 
-1. **Local-First Static Analysis:** Analyzes source text directly within the workspace using [Web-Tree-sitter](https://github.com/tree-sitter/tree-sitter) WebAssembly (WASM) grammars. Analysis requires zero external network calls, zero cloud services, zero external databases, and zero LLM API keys for standard contract discovery.
-2. **Deterministic Extraction:** Scans consumer calls (such as `fetch()` and `axios`) and provider handlers (such as Express `app.get()` or `router.post()`) into structured, language-neutral API observations.
-3. **Evidence-Backed Modeling:** Every extracted HTTP method, route pattern, status code, and payload shape is anchored to exact UTF-16 source spans and qualitative evidence classifications (`direct`, `resolved`, `inferred`, or `unknown`).
-4. **Uncertainty Preservation:** When dynamic initializers, complex expressions, or unresolved imports prevent exact deduction, UNDRIFT explicitly records uncertainty rather than guessing or generating false-positive warnings.
+### At a glance
 
-> **V1 Production Ready:**  
-> UNDRIFT has completed **Phases 1 through 6**: Workspace Discovery & WASM Parsing (Phase 1), Analyzer Contracts & Extractors (Phase 2), Route & Shape Normalization and Candidate Matching (Phase 3), Deterministic Drift Rules & Explanations (Phase 4), Crash-Safe State Persistence & Session Reconciliation (Phase 5), and Workbench Integration, Diagnostic Guidance, Activity Bar & Sidebar Overview, Theme-Aware Integration Report, and Continuous Workspace Analysis with Live In-Memory Buffer Monitoring (Phase 6).
+| | |
+|---|---|
+| **Product** | IDE-first frontend–backend API contract intelligence |
+| **V1 editor target** | Visual Studio Code |
+| **Analysis approach** | Static source analysis; no application execution |
+| **Parser** | Web-Tree-sitter with WebAssembly grammars |
+| **V1 language scope** | JavaScript and TypeScript, including JSX/TSX |
+| **Consumer patterns** | Standard `fetch()` and Axios method calls |
+| **Provider patterns** | Express route declarations and supported Next.js route-handler patterns |
+| **Core architecture** | Editor-independent analysis core with a VS Code host adapter |
+| **Privacy model** | Local-first; source code is analyzed on the developer's machine |
+| **Current milestone** | V1 feature-complete; release preparation in progress |
 
 ---
 
-## The Problem and Motivation
+## The Problem
 
-Consider a typical web application feature connecting a TypeScript React client to an Express server:
+A typical full-stack feature crosses an API boundary:
 
-### Frontend Consumer (`src/client/users.ts`)
+- The frontend assumes a method, route, request payload, and response structure.
+- The backend implements a route, validates a request, and returns a response.
+- Neither side necessarily has a direct compile-time relationship with the other.
+
+Consider a frontend consumer:
 
 ```ts
-// Developer expects a User object with a camelCase property:
-interface UserProfile {
+// Frontend: the UI expects a camelCase property.
+type UserProfile = {
   id: string;
   userName: string;
-}
+};
 
-export async function fetchUserProfile(userId: string): Promise<UserProfile> {
+export async function getUser(userId: string): Promise<UserProfile> {
   const response = await fetch(`/api/users/${userId}`);
   return response.json();
 }
 ```
 
-### Backend Provider (`src/server/routes.ts`)
+And a backend provider:
 
 ```ts
-// Backend endpoint returns snake_case database columns:
+// Backend: the route returns a snake_case property.
 app.get("/api/users/:id", (req, res) => {
   res.json({
     id: req.params.id,
     user_name: "Ada Lovelace",
-    status: "active"
+    status: "active",
   });
 });
 ```
 
-### What Happens Today vs. What UNDRIFT Observes
+Both files can be syntactically valid. The frontend type annotation does not prove that the server actually returns `userName`.
 
-- **Without UNDRIFT:** The frontend compiles without error because `response.json()` returns `any` or casts to `UserProfile`. At runtime, UI code reading `data.userName` renders `undefined` or crashes. The developer must manually trace network tabs, log statements, and backend route code to find the mismatch.
-- **Under UNDRIFT's Current Phase 2 Extraction:**
-  - The **Fetch extractor** identifies the client call, parses the static route `/api/users/`, flags the dynamic segment `${userId}` as a parameter segment, sets the HTTP method to `GET` (via standard fetch conventions), and records the source location.
-  - The **Express extractor** identifies the route registration `app.get`, extracts the route pattern `/api/users/:id` with parameter segment `id`, records the default 200 status code, and extracts the inline response object shape containing properties `id`, `user_name`, and `status`.
-  - Both observations are recorded as normalized `ApiObservation` structures with precise source spans and content hashes.
-- **Under Future Matching and Drift Rules (Phase 3 & Phase 4):**
-  - The **Matching Engine** correlates the two endpoints based on structural route compatibility (`/api/users/:param` ↔ `/api/users/:param`) and identical HTTP `GET` methods.
-  - The **Drift Engine** evaluates response shape compatibility (Rule `UND300` / `UND310`), detecting that the consumer expects property `userName` while the provider returns `user_name`.
-  - An in-editor diagnostic and reviewable Quick Fix proposal pinpoint both files with line-level evidence.
+### Without UNDRIFT
 
-_Note: The cross-component comparison and drift diagnostic described above represent documented future capabilities; the current codebase extracts and indexes both sides but does not yet execute matching or drift rules._
+```mermaid
+flowchart LR
+    A["Frontend call"] --> B["Frontend compiles"]
+    C["Backend route"] --> D["Backend runs"]
+    B --> E["Mismatch stays hidden"]
+    D --> E
+    E --> F["Runtime failure"]
+    style E fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style F fill:#450a0a,stroke:#ef4444,color:#fff
+```
 
----
+The mismatch can surface as an `undefined` UI value, an HTTP 404/405, a rejected request, or a broken user journey. Developers then have to trace the client call and server implementation manually.
 
-## Project Status and Current Capabilities
+### With UNDRIFT
 
-The following table reflects the verified status of the codebase across automated tests and source implementations:
+```mermaid
+flowchart LR
+    A["Frontend consumer"] --> C["UNDRIFT analysis"]
+    B["Backend provider"] --> C
+    C --> D["Normalized contract comparison"]
+    D --> E["Evidence-backed finding"]
+    E --> F["Diagnostic + guidance"]
+    F --> G["Developer reviews and fixes"]
+    G --> H["Automatic re-analysis"]
+    style C fill:#172554,stroke:#60a5fa,color:#fff
+    style E fill:#713f12,stroke:#f59e0b,color:#fff
+    style H fill:#14532d,stroke:#22c55e,color:#fff
+```
 
-| Capability                            | Status          | What Is Supported Today                                                                                                                                                                                                                                                    | Known Boundaries & Deferred Behavior                                                                                                                     |
-| ------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Workspace Source Discovery**        | **Implemented** | Recursive discovery of `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx` files; built-in exclusion glob filtering (`node_modules`, `.git`, `dist`, `build`, etc.); editor buffer priority over disk; deterministic SHA-256 snapshot hashing.                                    | Multi-root workspace discovery is coordinated through `WorkspaceSourceSnapshotProvider`; non-standard file extensions are ignored.                       |
-| **Tree-sitter Parser Foundation**     | **Implemented** | `web-tree-sitter` WebAssembly runtime; grammar registry caching WASM binaries for JavaScript, TypeScript, and TSX; `PositionMapper` with bidirectional UTF-16 code unit and byte offset mapping; `SyntaxNodeFacade` navigation.                                            | WASM binaries are loaded from disk or bundled extension assets; incremental re-parsing across text edits is scaffolded behind the facade.                |
-| **Analyzer Domain Contracts & Ports** | **Implemented** | Standardized language-neutral domain contracts (`ApiObservation`, `EndpointObservation`, `RoutePattern`, `ObservedValue<T>`, `TypeShape`, `EvidenceRef`, `AnalysisWarning`); port definitions for parsers, analyzers, and resolvers.                                       | Domain contracts are decoupled from editor APIs and compiler internals.                                                                                  |
-| **Analyzer Registry**                 | **Implemented** | Deterministic analyzer registration, deduplication, lookup, and dispatch based on document URI and language ID (`AnalyzerRegistry`, `JsTsAnalyzer`).                                                                                                                       | Dynamic plugin loading from external npm packages is deferred.                                                                                           |
-| **Standard Fetch Extraction**         | **Implemented** | Direct `fetch("/url")` and `fetch(url, options)` calls; default `GET` method; explicit uppercase and lowercase HTTP methods; static template literals; parameter colon syntax; JSON request payload shapes via object literals; trailing slash and query string exclusion. | Generic wrapper functions require explicit configuration or resolution; dynamic URL concatenation without literals is marked `unknown`.                  |
-| **Axios Method Call Extraction**      | **Implemented** | Method invocations (`axios.get`, `axios.post`, `axios.put`, `axios.delete`, `axios.patch`); request body object literals; TypeScript response type arguments (`axios.get<User>(...)`); static and template literal paths.                                                  | Custom Axios instance creators (`axios.create()`) and base URLs require cross-file declaration resolution.                                               |
-| **Express Route Extraction**          | **Implemented** | `app.<method>` and `router.<method>` declarations for `get`, `post`, `put`, `delete`, `patch`; path literals and parameter segments (`:id`); chained `res.status().json()` and direct `res.json()`; inline response object shapes.                                         | Router mount prefixes (`app.use('/api', router)`) require cross-file resolution; regex routes and dynamic route factories emit `DYNAMIC_ROUTE` warnings. |
-| **Local Declaration Indexing**        | **Implemented** | Single-document indexing of variable declarations (`const`, `let`, `var`), functions, type aliases, interfaces, and imports (`import`, `require`).                                                                                                                         | Symbol indexing is scoped per-document snapshot; project-wide cross-file symbol indexing is a Phase 3 gate.                                              |
-| **Same-Document Constant Resolution** | **Implemented** | Evaluates identifier references to same-document `const` declarations (strings, numbers, booleans, null); attaches `resolved` evidence; marks mutable (`let`/`var`), dynamic, or ambiguous bindings as `unresolved`/`unknown`.                                             | Import declarations and cross-file references are identified and explicitly classified as `unsupported` (deferred POC Gates).                            |
-| **Consumer-Provider Matching**        | **Implemented** | Algorithmic candidate matching (Exact route/method, Method conflict, Suspected route mismatch) with static route helpers and cross-module tracking.                                                                                                                        | Deterministic heuristic matching across frontend consumers and backend route providers.                                                                  |
-| **Deterministic Drift Rules**         | **Implemented** | Rule catalog covering protocol and shape drift (`UND100`, `UND110`, `UND120`, `UND130`, `UND200`, `UND210`, `UND300`, `UND310`, `UND400`).                                                                                                                                 | Conservative coverage gating ensures incomplete scans withhold absence findings rather than producing false positives.                                   |
-| **Explanation & Repair Proposals**    | **Implemented** | Rule-aware diagnostic guidance with "What this means", "Why it matters", and suggested steps; reviewable Quick Fix proposals with post-edit re-analysis.                                                                                                                   | Multi-role repairs for consumer and provider sides; mechanical fixes require freshness verification.                                                     |
-| **Session State Persistence**         | **Implemented** | Crash-safe workspace storage persistence (`storageUri` / `workspaceState`) and finding lifecycle tracking (`detected`, `changed`, `resolved`, `reintroduced`).                                                                                                             | Atomic write-replace semantics; corrupted snapshots are quarantined with clean baselines.                                                                |
-| **Workbench UI & Brand Integration**  | **Implemented** | Dedicated UNDRIFT Activity Bar item, persistent sidebar overview, findings tree view, theme-aware Integration Report webview, and official brand logo.                                                                                                                     | Dynamic active-finding badge count on extension icon; theme-adaptive light and dark visual styling.                                                      |
-| **Continuous Workspace Analysis**     | **Implemented** | Automatic background analysis on workspace open; live debounced monitoring of in-memory editor buffers; automatic drift detection and resolution.                                                                                                                          | Unsaved editor buffers take precedence over disk; configurable `autoRun`, `debounceMs` (default 800ms), and `runOnStartup`.                              |
+UNDRIFT does not need to execute the application to identify statically discoverable integration disagreements. It reasons from source patterns and preserves uncertainty wherever the source does not provide enough evidence.
 
 ---
 
-## Core Workflow
+## How It Works
 
-The end-to-end design of UNDRIFT follows a 10-stage unidirectional pipeline. Stages 1 through 6 represent the verified implementation boundary of Phases 1 and 2, while Stages 7 through 10 represent the downstream architecture planned for Phases 3 through 6.
+UNDRIFT follows a deterministic analysis pipeline. The extension watches the workspace, obtains the latest source snapshots, and passes them through the editor-independent analysis packages. Accepted results are then reconciled and published to the VS Code workbench.
 
 ```mermaid
 flowchart TD
-    subgraph Implemented ["Phases 1 & 2: Implemented & Verified Foundation"]
-        A["1. Workspace Source Discovery<br/><code>WorkspaceSourceSnapshotProvider</code><br/><i>Discovers files, applies globs, hashes content</i>"]
-        B["2. Tree-sitter AST Parsing<br/><code>TreeSitterParserAdapter</code><br/><i>Loads WASM grammars, parses syntax nodes</i>"]
-        C["3. AST Feature Extraction<br/><code>FetchExtractor</code> / <code>AxiosExtractor</code> / <code>ExpressExtractor</code><br/><i>Extracts methods, routes, and literal shapes</i>"]
-        D["4. Local Declaration Indexing<br/><code>LocalDeclarationIndex</code><br/><i>Indexes same-document variables, functions, types</i>"]
-        E["5. Same-Document Constant Resolution<br/><code>LocalReferenceResolver</code><br/><i>Resolves const identifiers to static literal values</i>"]
-        F["6. Normalized API Observations<br/><code>ApiObservation</code> Domain Objects<br/><i>Carries UTF-16 spans, evidence kind & strength</i>"]
+    A["1. Workspace activity<br/>Open, edit, save, create, delete, rename"] --> B["2. Snapshot acquisition<br/>Dirty editor buffers take priority"]
+    B --> C["3. Tree-sitter parsing<br/>JavaScript / TypeScript / TSX"]
+    C --> D["4. Contract extraction<br/>fetch · Axios · Express · Next.js"]
+    D --> E["5. Normalization and matching<br/>Routes · methods · shapes"]
+    E --> F["6. Deterministic drift rules<br/>Protocol · request · response"]
+    F --> G["7. Finding and guidance generation<br/>Source evidence · suggested action"]
+    G --> H["8. Session reconciliation<br/>Detected · changed · resolved · reintroduced"]
+    H --> I["9. Workbench publication<br/>Diagnostics · Sidebar · Badge · Report"]
+    I --> J["10. Developer edits source"]
+    J --> A
 
-        A --> B
-        B --> C
-        C --> D
-        D --> E
-        E --> F
-    end
-
-    subgraph Planned ["Phases 3–6: Planned Downstream Pipeline"]
-        G["7. Protocol & Shape Normalization<br/><code>RouteNormalizer</code> & <code>TypeNormalizer</code><br/><i>Canonicalizes segments, primitives, and nullability</i>"]
-        H["8. Consumer-Provider Matching<br/><code>CandidateMatcher</code><br/><i>Exact match, method conflict, suspected route drift</i>"]
-        I["9. Deterministic Drift Detection<br/>Rule Catalog <code>UND100</code>–<code>UND920</code><br/><i>Evaluates route, method, request, and response drift</i>"]
-        J["10. Explanation & Fix Generation<br/><code>ExplanationEngine</code> & <code>FixGenerator</code><br/><i>Produces structured findings and reviewable edits</i>"]
-        K["11. Session State Reconciliation<br/><code>StateReconciliationManager</code><br/><i>Derives lifecycle events: detected, changed, resolved</i>"]
-        L["12. IDE Presentation & Verification<br/>VS Code Diagnostics, Views & Reports<br/><i>In-editor squiggles, sidebar tree, re-analysis</i>"]
-
-        F -.-> G
-        G -.-> H
-        H -.-> I
-        I -.-> J
-        J -.-> K
-        K -.-> L
-    end
-
-    style Implemented fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc
-    style Planned fill:#0b0f19,stroke:#64748b,stroke-width:2px,stroke-dasharray: 5 5,color:#94a3b8
+    style A fill:#172554,stroke:#60a5fa,color:#fff
+    style F fill:#422006,stroke:#f59e0b,color:#fff
+    style I fill:#052e16,stroke:#22c55e,color:#fff
 ```
 
-### Stage Explanations
+### The continuous-analysis loop
 
-1. **Workspace Source Discovery:** Collects all supported JavaScript/TypeScript source files within active workspace folders, prioritizing dirty in-memory editor buffers over stale disk files, and fingerprints each document with a SHA-256 hash.
-2. **Tree-sitter AST Parsing:** Translates source text into structured syntax trees via `web-tree-sitter` WebAssembly grammars, mapping byte positions to UTF-16 editor ranges via `PositionMapper`.
-3. **AST Feature Extraction:** AST extractors locate invocation and route patterns matching the canonical support matrix, extracting raw methods, paths, and payload literals.
-4. **Local Declaration Indexing:** Catalogs declaration identifiers within the document snapshot to identify constants, variables, imports, and type definitions.
-5. **Same-Document Constant Resolution:** Evaluates references (e.g., `fetch(API_ROUTE)`) against declared constants, promoting static string/numeric literals to resolved values with provenance evidence.
-6. **Normalized API Observations:** Emits immutable `ApiObservation` objects containing endpoint metadata, source spans, and analysis limitations.
-7. **Protocol & Shape Normalization (Planned):** Normalizes route paths (handling slashes, parameters, and casing) and maps type structures to a common type system.
-8. **Consumer-Provider Matching (Planned):** Generates candidate pairs between frontend consumers and backend providers using exact route equivalence, method mismatches, or conservative single-segment divergence heuristics.
-9. **Deterministic Drift Detection (Planned):** Executes compatibility rules against candidate relationships to identify missing providers, method conflicts, or payload shape mismatches.
-10. **Explanation & Fix Generation (Planned):** Generates human-readable explanations linking both source locations and constructs reviewable workspace edit proposals.
-11. **Session State Reconciliation (Planned):** Reconciles newly produced findings against the last known complete analysis snapshot, emitting lifecycle transitions (`detected`, `changed`, `resolved`, `reintroduced`).
-12. **IDE Presentation & Verification (Planned):** Publishes findings to VS Code's `DiagnosticCollection`, updates the explorer tree view, and re-analyzes source code after edits are applied to verify resolutions.
+The V1 workflow is designed around normal development activity—not a manual scan after every change.
+
+1. **Open a workspace.** UNDRIFT can run its initial analysis automatically.
+2. **Work normally.** The extension observes relevant editor and workspace file events.
+3. **Change a contract.** A dirty editor buffer can be analyzed before the file is saved.
+4. **See the drift.** Findings flow into diagnostics and the UNDRIFT workbench surfaces.
+5. **Resolve the mismatch.** The developer edits the consumer or provider.
+6. **See the result update.** A new analysis reconciles the latest state and clears resolved findings.
+
+### Scheduling and stale-result safety
+
+Continuous analysis uses a configurable debounce interval and coalesces bursts of changes. When a newer analysis supersedes an in-flight run, an older result must not overwrite the newer workspace state.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Dev as Developer
+    participant Editor as VS Code Editor
+    participant Scheduler as Analysis Scheduler
+    participant Coordinator as Analysis Coordinator
+    participant Engine as Analysis Engine
+    participant UI as UNDRIFT UI
+
+    Dev->>Editor: Edit API consumer (unsaved)
+    Editor->>Scheduler: Document-change event
+    Scheduler->>Scheduler: Debounce / coalesce
+    Scheduler->>Coordinator: Schedule analysis generation N
+    Coordinator->>Engine: Analyze latest workspace snapshot
+    Engine-->>Coordinator: Analysis result N
+    Coordinator->>Coordinator: Validate generation and completeness
+    Coordinator->>UI: Publish accepted result
+    UI-->>Dev: Diagnostic, badge, sidebar and report update
+    Dev->>Editor: Correct the contract
+    Editor->>Scheduler: New document-change event
+    Scheduler->>Coordinator: Schedule generation N+1
+    Coordinator->>Engine: Re-analyze workspace
+    Engine-->>Coordinator: Result without previous drift
+    Coordinator->>UI: Reconcile and clear resolved finding
+    UI-->>Dev: Clean state displayed
+```
+
+> [!NOTE]
+> The scheduler coalesces workspace events; it does not imply that every keystroke causes a separate full scan. Dirty editor buffers are preferred over stale disk contents. Superseded results are rejected before publication.
 
 ---
 
-## Architecture Overview
+## What UNDRIFT Detects
 
-UNDRIFT is structured as an npm workspaces monorepo separating editor presentation, language parsing, syntax extraction, and core domain intelligence into independent packages:
+UNDRIFT builds relationships between API consumers and providers, then evaluates the evidence available for each relationship.
 
-```mermaid
-graph TD
-    subgraph AppLayer ["Application Host Layer"]
-        VSC["apps/vscode-extension<br/><code>undrift-vscode</code><br/>• Extension Activation & Commands (undrift.scanWorkspace)<br/>• WorkspaceSourceSnapshotProvider & WorkspaceManager<br/>• (Future: DiagnosticCollection, TreeView, Webview Panel)"]
-    end
+| Contract dimension | Example disagreement | What UNDRIFT can report |
+|---|---|---|
+| **Route** | Consumer calls `/api/users` while provider exposes a different route | Suspected or unmatched route relationship, subject to coverage |
+| **HTTP method** | Consumer sends `POST`, provider exposes `GET` | Method conflict |
+| **Request shape** | Consumer omits a provider-required field or sends an incompatible shape | Request contract mismatch where sufficient shape evidence exists |
+| **Response shape** | Provider returns a field or structure that does not satisfy the consumer expectation | Response contract mismatch where sufficient shape evidence exists |
+| **Provider coverage** | A provider has no known consumer | Informational coverage finding; not proof that the endpoint is dead |
+| **Analysis coverage** | Dynamic or unsupported code prevents a reliable conclusion | Explicit warning or partial-coverage explanation |
 
-    subgraph AdapterLayer ["Syntax & Language Adapters"]
-        PTS["packages/parser-tree-sitter<br/><code>@undrift/parser-tree-sitter</code><br/>• ParserRuntime (Web-Tree-sitter WASM)<br/>• GrammarRegistry (JS, TS, TSX grammars)<br/>• PositionMapper (UTF-16 & Byte coordinate conversions)<br/>• SyntaxNodeFacade (Language-neutral AST wrapper)"]
+### Findings are evidence-aware
 
-        AJT["packages/analyzer-js-ts<br/><code>@undrift/analyzer-js-ts</code><br/>• JsTsAnalyzer & AnalyzerRegistry<br/>• FetchExtractor & AxiosExtractor<br/>• ExpressExtractor<br/>• LocalDeclarationIndex<br/>• LocalReferenceResolver"]
-    end
+UNDRIFT distinguishes a confirmed mismatch from a lack of static evidence.
 
-    subgraph CoreLayer ["Domain & Analysis Core"]
-        CORE["packages/core<br/><code>@undrift/core</code><br/>• Domain Models (ApiObservation, EndpointObservation, RoutePattern)<br/>• Evidence & Provenance Contracts (ObservedValue, EvidenceRef)<br/>• Port Interfaces (ParserPort, LanguageAnalyzerPort, ResolverPort)<br/>• Warning & Finding Contracts (AnalysisWarning, WarningCode)<br/>• (Future: Matching Engine, Drift Rule Catalog UND100–UND920)"]
-    end
+- **Known values** are extracted directly or resolved from supported static declarations.
+- **Inferred values** are retained with their evidence classification.
+- **Unknown or dynamic values** remain uncertain instead of being guessed.
+- **Incomplete scans** are treated conservatively; missing evidence is not automatically interpreted as proof of missing functionality.
 
-    VSC --> AJT
-    VSC --> PTS
-    VSC --> CORE
-    AJT --> PTS
-    AJT --> CORE
-    PTS --> CORE
-```
-
-### Component Responsibility Table
-
-| Component / Package               | Responsibility                                                                                                                                 | Current Status                                                | Relevant Source                                                                        |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **`@undrift/core`**               | Language-neutral domain contracts, ports, uncertainty models, evidence provenance, and rule definitions. Never imports VS Code or Tree-sitter. | **Implemented** (contracts & ports); matching & rules planned | [`packages/core/src/index.ts`](packages/core/src/index.ts)                             |
-| **`@undrift/parser-tree-sitter`** | Lifecycle management for Web-Tree-sitter WASM runtimes, grammar loading, AST facades, and UTF-16 code-unit coordinate mapping.                 | **Implemented**                                               | [`packages/parser-tree-sitter/src/index.ts`](packages/parser-tree-sitter/src/index.ts) |
-| **`@undrift/analyzer-js-ts`**     | JavaScript/TypeScript API extraction (`fetch`, `axios`, `express`), local declaration indexing, and same-document constant resolution.         | **Implemented**                                               | [`packages/analyzer-js-ts/src/index.ts`](packages/analyzer-js-ts/src/index.ts)         |
-| **`undrift-vscode`**              | VS Code extension host adapter, workspace source discovery, document tracking, command registration, and future UI presentation.               | **Implemented** (workspace discovery); UI planned             | [`apps/vscode-extension/src/extension.ts`](apps/vscode-extension/src/extension.ts)     |
+For example, `UND110` indicates that a provider has no known consumer in the analyzed scope. It is informational and should not be read as a confirmed dead-endpoint diagnosis. `UND120` identifies an HTTP method conflict.
 
 ---
 
-## Observation and Data Model
+## Capabilities and Project Status
 
-UNDRIFT's core analysis engine operates on language-neutral, evidence-backed observation contracts defined in `@undrift/core`.
+The table below reflects the V1 implementation state represented by the current project milestone and validation report.
 
-```mermaid
-classDiagram
-    class ApiObservation {
-        +string id
-        +ObservationRole role
-        +string languageId
-        +string framework
-        +string extractorId
-        +SourceSpan[] source
-        +SourceSnapshotRef snapshot
-        +EndpointObservation endpoint
-        +AnalysisWarning[] limitations
-    }
+| Capability | Status | Current behavior |
+|---|---|---|
+| Workspace source discovery | **Implemented** | Discovers supported JavaScript/TypeScript source files, applies exclusions, and creates deterministic snapshots. |
+| Dirty editor buffer support | **Implemented** | Uses unsaved editor contents in preference to the on-disk version. |
+| Tree-sitter WASM parsing | **Implemented** | Parses JavaScript, TypeScript, JSX, and TSX through WebAssembly grammars. |
+| API observation contracts | **Implemented** | Produces language-neutral consumer/provider observations with source evidence and coverage metadata. |
+| Fetch extraction | **Implemented** | Recognizes supported standard `fetch()` calls, methods, routes, and statically discoverable request payloads. |
+| Axios extraction | **Implemented** | Recognizes supported Axios method calls and statically discoverable request information. |
+| Express provider extraction | **Implemented** | Extracts supported `app.<method>()` and `router.<method>()` route declarations and response information. |
+| Next.js route extraction | **Implemented — bounded patterns** | Supports the implemented App Router and bounded Pages Router patterns, including dynamic route normalization. |
+| Cross-file and real-world scan hardening | **Implemented — bounded** | Includes supported route composition, helper argument, payload dataflow, and attribution improvements; unresolved cases remain explicit. |
+| Route and shape normalization | **Implemented** | Canonicalizes supported route and structural shape representations. |
+| Consumer/provider matching | **Implemented** | Builds candidate relationships using conservative route and method matching. |
+| Deterministic drift rules | **Implemented** | Evaluates supported protocol, route, request, and response compatibility rules. |
+| Evidence-backed diagnostics | **Implemented** | Associates findings with source locations and rule-specific explanations. |
+| Resolution guidance | **Implemented** | Provides rule- and warning-specific guidance in diagnostic hover and the Integration Report. |
+| Quick Fix proposals | **Implemented** | Exposes supported, reviewable editor actions; fixes are not silently applied. |
+| Session persistence | **Implemented** | Persists workspace analysis state and finding lifecycle information using VS Code-managed storage. |
+| Workbench UI and brand integration | **Implemented** | Includes the UNDRIFT Activity Bar entry, sidebar overview, findings view, theme-aware report, and official brand identity. |
+| Continuous workspace analysis | **Implemented** | Runs startup analysis and schedules re-analysis on relevant document and filesystem changes. |
+| Live drift resolution | **Implemented** | Reconciles findings when a mismatch is corrected, reverted, or discarded. |
+| AI-based automatic resolution | **Not in V1** | A future AI Resolution Layer is outside the current V1 implementation scope. |
+| VS Code Marketplace publication | **Pending** | Release packaging and publication are part of the remaining release workflow. |
+| Public landing page | **In progress** | Landing-page work is underway; deployment is a separate release activity. |
 
-    class EndpointObservation {
-        +ObservedValue~HttpMethod~ method
-        +ObservedValue~RoutePattern~ path
-        +RequestShapeObservation request
-        +ResponseShapeObservation[] responses
-    }
+### Phase 6 implementation breakdown
 
-    class RoutePattern {
-        +RouteSegment[] segments
-        +string trailingSlash
-        +string queryHandling
-        +string rawPath
-    }
+Phase 6 was delivered through focused implementation chunks:
 
-    class RouteSegment {
-        +string kind
-        +string value
-        +string name
-        +string sourceText
-    }
-
-    class ObservedValue~T~ {
-        +string state
-        +T value
-        +EvidenceStrength strength
-        +string reason
-        +EvidenceRef[] evidence
-    }
-
-    class ShapeObservation {
-        +TypeShape shape
-        +CompletenessStatus completeness
-        +EvidenceRef[] evidence
-    }
-
-    class TypeShape {
-        +string kind
-        +PrimitiveTypeName name
-        +any value
-        +FieldShape[] properties
-        +TypeShape element
-        +TypeShape[] members
-    }
-
-    class FieldShape {
-        +string name
-        +TypeShape type
-        +string presence
-        +string nullable
-        +EvidenceRef[] evidence
-    }
-
-    class EvidenceRef {
-        +string id
-        +EvidenceSourceKind kind
-        +EvidenceStrength strength
-        +SourceSpan source
-        +string description
-    }
-
-    class AnalysisWarning {
-        +WarningCode code
-        +string message
-        +SourceSpan source
-        +string analyzerId
-        +boolean affectsCompleteness
-    }
-
-    ApiObservation *-- EndpointObservation : endpoint
-    ApiObservation *-- AnalysisWarning : limitations
-    EndpointObservation *-- ObservedValue : method
-    EndpointObservation *-- ObservedValue : path
-    EndpointObservation *-- ShapeObservation : request / responses
-    ShapeObservation *-- TypeShape : shape
-    TypeShape *-- FieldShape : properties
-    FieldShape *-- EvidenceRef : evidence
-    ObservedValue *-- EvidenceRef : evidence
-    ObservedValue *-- RoutePattern : path value
-    RoutePattern *-- RouteSegment : segments
-```
-
-### Key Domain Concepts
-
-- **`ApiObservation`:** Represents a single extracted API fact from source code, classified by role:
-  - `consumer`: A frontend client call expecting certain request and response behaviors.
-  - `provider`: A backend endpoint handler offering specific route and response behaviors.
-- **`ObservedValue<T>`:** A tagged union representing a value whose knowledge state matters for analysis decisions:
-  - `{ state: "known", value: T, strength, evidence }`: Deterministically known through direct syntax or resolved references.
-  - `{ state: "dynamic", expression, reason, evidence }`: Built from dynamic runtime expressions (e.g., function calls, arithmetic).
-  - `{ state: "unknown", reason, evidence }`: Unresolved or unanalyzable with current information.
-- **Evidence & Provenance:** Every observation retains `EvidenceRef` items pointing to exact `SourceSpan` coordinates, an `EvidenceSourceKind` (`literal-syntax`, `local-declaration`, `framework-convention`, etc.), and a qualitative `EvidenceStrength` (`direct`, `resolved`, `inferred`, `unknown`).
-- **`RoutePattern` & Segments:** Structured route representation breaking URLs into segments:
-  - `static`: Exact path string literal (e.g., `api`, `users`).
-  - `parameter`: Variable path parameter (e.g., `:id` in Express or `${id}` in template strings).
-  - `wildcard`: Catch-all wildcard segments (`*`).
-  - `unresolved`: Segments that cannot be statically determined.
-- **`TypeShape` Model:** A recursive, structural type representation supporting primitives (`string`, `number`, `boolean`, `null`, `undefined`), literals, arrays, objects with field-level presence (`required`, `optional`, `unknown`) and nullability (`yes`, `no`, `unknown`), unions, and named type references.
-- **Analysis Warnings (`AnalysisWarning`):** Non-fatal diagnostics (`PARSE_ERROR`, `UNSUPPORTED_PATTERN`, `UNRESOLVED_REFERENCE`, `DYNAMIC_ROUTE`, `PARTIAL_SHAPE`, `INCOMPLETE_SCOPE`) attached to observations. Warnings communicate boundaries and completeness limits without falsely classifying unsupported code as drift.
-
-> **In-Memory vs. Persisted Data Models:**  
-> The models above represent in-memory domain contracts produced during active analysis. The [ERD Specification](docs/ERD.md) additionally defines the logical model for multi-session persistence (`ANALYSIS_SNAPSHOT`, `FINDING_LIFECYCLE_EVENT`), which will be stored in VS Code-managed workspace storage in Phase 5 without creating repository-polluting `.undrift/` directories.
+| Chunk | Focus | Result |
+|---|---|---|
+| **6.1** | Workbench integration foundation | Extension-side analysis and workbench integration groundwork |
+| **6.2** | Real-world stack scanning hardening | Improved route resolution, composed API URLs, and Next.js scan reliability |
+| **6.3** | Analysis coverage improvements | Dynamic/nested route handling, static payload inference, helper arguments, FormData attribution, and supported cross-module payload dataflow |
+| **6.4** | Diagnostic guidance and resolution UX | Rule-specific guidance, compact hovers, clearer Integration Report recommendations, and warning explanations |
+| **6.5** | Workbench UI refresh and brand integration | Theme-aware workbench presentation and official UNDRIFT logo integration |
+| **6.6** | Continuous workspace analysis | Startup scanning, debounced background analysis, dirty-buffer monitoring, event coalescing, and live finding resolution |
 
 ---
 
 ## Supported Extraction Patterns
 
-UNDRIFT's JavaScript/TypeScript analyzer catalogs pattern recognition capabilities in [`support-matrix.ts`](packages/analyzer-js-ts/src/support-matrix.ts). All six canonical patterns are implemented and verified by automated tests:
+UNDRIFT's V1 extraction scope is intentionally bounded. The analyzer recognizes supported source patterns instead of attempting to execute application code or infer arbitrary runtime behavior.
 
-| Pattern ID | Role | Language | Framework | Supported Behaviors | Known Limitations & Boundaries | Verification Status |
-|---|---|---|---|---|---|
-| **`fetch-standard-call`** | Consumer | JavaScript | `fetch` | `fetch("/api/users")`<br/>`fetch("/api/users", { method: "POST", body: JSON.stringify({...}) })`<br/>Default `GET` method; static template literals; parameter colon syntax; query string stripping; trailing slash detection. | Dynamic URL variables without local constant resolution marked `unknown`; custom fetch wrapper functions require explicit support; request payload extraction limited to direct `JSON.stringify` object literals. | **Tested** (`fetch-extractor.test.ts`) |
-| **`fetch-standard-call-ts`** | Consumer | TypeScript | `fetch` | Same as JS plus TypeScript syntax, TSX source files, and TypeScript AST position mapping. | Generic fetch wrappers with complex return types require project-wide symbol resolution. | **Tested** (`fetch-extractor.test.ts`) |
-| **`axios-method-call`** | Consumer | JavaScript | `axios` | `axios.get("/api/users")`<br/>`axios.post("/api/users", payload)`<br/>Direct method calls (`get`, `post`, `put`, `delete`, `patch`); object literal request bodies. | Dynamic method invocation (`axios[method]()`) marked `unresolved`; custom Axios instance creators (`axios.create()`) and base URLs require cross-file resolution. | **Tested** (`axios-extractor.test.ts`) |
-| **`axios-method-call-ts`** | Consumer | TypeScript | `axios` | Same as JS plus generic type parameter extraction:<br/>`axios.get<User[]>("/api/users")`<br/>`axios.post<UserResponse>("/api/users", body)` | Mapped or conditional type parameters marked partial/unresolved. | **Tested** (`axios-extractor.test.ts`) |
-| **`express-route-declaration`** | Provider | JavaScript | Express | `app.get("/api/users", handler)`<br/>`router.post("/api/users", handler)`<br/>Direct `res.json(...)` and chained `res.status(200).json(...)`; inline response object shapes; route parameters (`:id`). | Router mount prefixes (`app.use('/api', router)`) require cross-file resolution; regex routes or array paths marked unsupported; dynamic route loops marked `DYNAMIC_ROUTE`. | **Tested** (`express-extractor.test.ts`) |
-| **`express-route-declaration-ts`** | Provider | TypeScript | Express | Same as JS plus TypeScript route handlers with explicit type annotations on request/response parameters (`req: Request, res: Response`). | External controller functions referenced across files require cross-file AST indexing. | **Tested** (`express-extractor.test.ts`) |
+### Consumer patterns
 
-### Same-Document Constant Resolution in Extractors
+| Consumer | Recognized pattern | Extracted information |
+|---|---|---|
+| Standard Fetch | `fetch("/api/tasks")` | Route and default `GET` method |
+| Fetch with options | `fetch(url, { method, body })` | Static method and supported request payload details |
+| Axios methods | `axios.get/post/put/patch/delete(...)` | Method, route, and supported request-body information |
+| Static constants | `const API = "/api/tasks"; fetch(API)` | Same-document static value resolution |
+| Supported helper patterns | Statically traceable helper arguments and payload flows | Resolved route or payload details where the implemented analysis can establish provenance |
 
-When an endpoint path references an identifier rather than an inline string literal, UNDRIFT's `LocalReferenceResolver` evaluates the symbol against the document's `LocalDeclarationIndex`:
+### Provider patterns
+
+| Provider | Recognized pattern | Extracted information |
+|---|---|---|
+| Express app routes | `app.get("/api/tasks", handler)` | HTTP method and route |
+| Express router routes | `router.post("/api/tasks", handler)` | HTTP method and route |
+| Express responses | `res.json(...)`, `res.status(...).json(...)` | Supported status and response-shape information |
+| Next.js App Router | Supported `app/**/route.ts` route-handler patterns | Route and exported HTTP-method handler information |
+| Next.js Pages Router | Bounded supported API route patterns | API route and statically discoverable handler information |
+
+### Analysis hardening included in V1
+
+The implementation evolved beyond isolated one-file extraction. The current analyzer includes bounded handling for:
+
+- Mounted Express routes and composed API URL patterns.
+- Next.js dynamic and nested dynamic route normalization.
+- Static request payload inference from supported expressions.
+- Statically traceable API helper route arguments.
+- Supported cross-module payload dataflow.
+- More accurate `FormData` construction and attribution.
+- Evidence-backed coverage diagnostics when analysis cannot confidently resolve a pattern.
+
+### Important extraction boundary
+
+A recognized syntax pattern is not the same as arbitrary semantic execution. Dynamic method dispatch, runtime-built URLs, complex wrapper chains, reflection, and unsupported module flows may remain unknown or partially understood. UNDRIFT reports these limitations rather than manufacturing a contract.
+
+---
+
+## Workbench Experience
+
+UNDRIFT is designed to keep findings close to the source code and make the current analysis state visible without requiring developers to leave their workspace.
+
+| Workbench surface | Purpose |
+|---|---|
+| **Activity Bar** | Dedicated UNDRIFT entry point and active-finding badge |
+| **Sidebar Overview** | High-level analysis state and finding summary |
+| **Findings Tree** | Navigable list of detected integration findings |
+| **Editor Diagnostics** | Source-linked diagnostics on relevant code |
+| **Diagnostic Hover** | Compact explanation and recommended next action |
+| **Quick Fix / Code Actions** | Reviewable fixes for supported mechanical cases |
+| **Integration Report** | Theme-aware workspace report with findings, coverage context, and resolution guidance |
+
+### The live feedback loop
+
+```mermaid
+stateDiagram-v2
+    [*] --> WorkspaceOpened
+    WorkspaceOpened --> Analyzing: Startup analysis
+    Analyzing --> Clean: No active findings
+    Analyzing --> DriftDetected: Findings discovered
+    Clean --> Analyzing: Workspace change
+    DriftDetected --> Analyzing: Workspace change
+    DriftDetected --> Clean: New result resolves findings
+    Clean --> DriftDetected: New result finds drift
+    Analyzing --> PreviousState: Incomplete / failed run
+    PreviousState --> Analyzing: Source repaired or retried
+```
+
+The last accepted analysis state is protected during incomplete or superseded runs. The UI is updated from accepted analysis state rather than allowing an obsolete run to publish stale findings.
+
+---
+
+## Architecture Overview
+
+UNDRIFT is organized as an npm workspaces monorepo. The analysis core remains independent of VS Code APIs, while the editor host adapts workspace events and presents analysis results.
+
+```mermaid
+flowchart TB
+    subgraph Host["VS Code Extension Host — apps/vscode-extension"]
+        WM["Workspace Manager<br/>Workspace lifecycle"]
+        SP["Source Snapshot Provider<br/>Files + dirty editor buffers"]
+        SCH["Analysis Scheduler<br/>Debounce + coalescing"]
+        CO["Analysis Coordinator<br/>Run lifecycle + stale-result protection"]
+        DP["Diagnostic Provider"]
+        VIEWS["Workbench Views<br/>Overview · Findings · Report"]
+        BADGE["Activity Bar Badge"]
+    end
+
+    subgraph Core["Editor-independent Core — packages/core"]
+        OBS["Domain Contracts<br/>ApiObservation · TypeShape · Evidence"]
+        NORM["Normalization"]
+        MATCH["Candidate Matching"]
+        RULES["Drift Rule Engine"]
+        GUIDANCE["Diagnostic Guidance"]
+        STATE["State Reconciliation"]
+    end
+
+    subgraph Adapters["Parsing and Language Adapters"]
+        PARSER["packages/parser-tree-sitter<br/>Tree-sitter WASM · AST facade · position mapping"]
+        ANALYZER["packages/analyzer-js-ts<br/>Fetch · Axios · Express · Next.js"]
+    end
+
+    WM --> SP
+    SP --> SCH
+    SCH --> CO
+    CO --> PARSER
+    PARSER --> ANALYZER
+    ANALYZER --> OBS
+    OBS --> NORM --> MATCH --> RULES
+    RULES --> GUIDANCE
+    GUIDANCE --> STATE
+    STATE --> CO
+    CO --> DP
+    CO --> VIEWS
+    CO --> BADGE
+
+    style Host fill:#111827,stroke:#60a5fa,color:#f9fafb
+    style Core fill:#172554,stroke:#818cf8,color:#f9fafb
+    style Adapters fill:#1c1917,stroke:#fb923c,color:#f9fafb
+```
+
+### Package responsibilities
+
+| Package / application | Responsibility | Architectural boundary |
+|---|---|---|
+| `apps/vscode-extension` | Activation, workspace events, scheduling, diagnostics, views, report, and editor commands | Owns VS Code integration; adapts editor APIs to the core |
+| `packages/core` | Language-neutral observations, route/shape normalization, matching, drift rules, guidance contracts, and state reconciliation | Must not depend on VS Code or Tree-sitter |
+| `packages/parser-tree-sitter` | Tree-sitter WASM runtime, grammar loading, syntax facade, and source-position mapping | Converts source text into syntax structures; has no API-contract policy |
+| `packages/analyzer-js-ts` | JavaScript/TypeScript consumer and provider extractors, indexes, resolvers, and analysis registry | Converts syntax into domain observations; does not own workbench presentation |
+
+### Architectural dependency direction
+
+```mermaid
+flowchart LR
+    EXT["VS Code Extension"] --> CORE["Core"]
+    EXT --> PARSER["Tree-sitter Adapter"]
+    EXT --> ANALYZER["JS/TS Analyzer"]
+    ANALYZER --> PARSER
+    ANALYZER --> CORE
+    PARSER --> CORE
+
+    CORE -. "No dependency on editor APIs" .-> RULE["Deterministic analysis"]
+    style CORE fill:#172554,stroke:#60a5fa,color:#fff
+```
+
+The core can be tested and reasoned about independently of the editor host. This separation is deliberate: future editor integrations should adapt the host layer rather than introduce VS Code dependencies into the analysis engine.
+
+---
+
+## Analysis Model and Evidence
+
+The analysis engine works with normalized, language-neutral observations. It does not make drift decisions directly from raw Tree-sitter nodes.
+
+### Conceptual model
+
+```mermaid
+classDiagram
+    class ApiObservation {
+        +id
+        +role
+        +languageId
+        +framework
+        +extractorId
+        +source[]
+        +endpoint
+        +limitations[]
+    }
+
+    class EndpointObservation {
+        +method
+        +path
+        +request
+        +responses[]
+    }
+
+    class ObservedValue {
+        +state
+        +value
+        +strength
+        +reason
+        +evidence[]
+    }
+
+    class RoutePattern {
+        +segments[]
+        +rawPath
+        +trailingSlash
+        +queryHandling
+    }
+
+    class ShapeObservation {
+        +shape
+        +completeness
+        +evidence[]
+    }
+
+    class TypeShape {
+        +kind
+        +name
+        +properties[]
+        +element
+        +members[]
+    }
+
+    class FieldShape {
+        +name
+        +type
+        +presence
+        +nullable
+        +evidence[]
+    }
+
+    class EvidenceRef {
+        +id
+        +kind
+        +strength
+        +sourceSpan
+        +description
+    }
+
+    class AnalysisWarning {
+        +code
+        +message
+        +source
+        +analyzerId
+        +affectsCompleteness
+    }
+
+    ApiObservation *-- EndpointObservation
+    ApiObservation *-- AnalysisWarning
+    EndpointObservation *-- ObservedValue : method
+    EndpointObservation *-- ObservedValue : path
+    EndpointObservation *-- ShapeObservation : request / response
+    ObservedValue *-- EvidenceRef
+    ObservedValue *-- RoutePattern
+    ShapeObservation *-- TypeShape
+    TypeShape *-- FieldShape
+    FieldShape *-- EvidenceRef
+```
+
+### Evidence and uncertainty
+
+Every extracted fact should carry enough context for the analysis engine to decide how strongly it can be used.
+
+| Evidence concept | Meaning |
+|---|---|
+| `direct` | Directly present in a recognized source construct |
+| `resolved` | Obtained by resolving a supported static declaration or reference |
+| `inferred` | Derived through a supported inference with traceable provenance |
+| `unknown` | The available source does not justify a reliable value |
+
+UNDRIFT uses explicit knowledge states rather than pretending every expression can be statically evaluated.
 
 ```ts
-// Successfully resolved to known path "/api/v1/users" with "resolved" evidence:
-const USERS_ENDPOINT = "/api/v1/users";
-fetch(USERS_ENDPOINT);
+// Direct evidence: a literal route.
+fetch("/api/tasks");
 
-// Evaluated as "unknown" with UNRESOLVED_REFERENCE warning:
-let dynamicEndpoint = "/api/v1/users"; // Mutable 'let' binding
-fetch(dynamicEndpoint);
+// Resolved evidence: a same-document static constant.
+const TASKS_API = "/api/tasks";
+fetch(TASKS_API);
 
-// Evaluated as "unsupported" (Deferred POC Gate):
-import { USERS_API } from "./config"; // Cross-file imported constant
-fetch(USERS_API);
+// Unknown or dynamic: runtime construction cannot be assumed.
+const endpoint = getEndpointFromRuntimeConfig();
+fetch(endpoint);
 ```
+
+### Coverage is part of the result
+
+Analysis coverage is not just a progress indicator. It affects whether the engine can responsibly conclude that a consumer or provider is absent. If a scan is incomplete or a relevant pattern is unsupported, UNDRIFT preserves that limitation so that absence is not misreported as confirmed drift.
 
 ---
 
 ## Technology Stack
 
-The UNDRIFT codebase is built exclusively with modern, standards-based developer tooling:
+| Category | Technology | Purpose |
+|---|---|---|
+| Language | TypeScript | Primary implementation language across the monorepo |
+| Runtime | Node.js | Package builds, tests, and extension development |
+| Monorepo | npm Workspaces | Package management and local workspace linking |
+| Parser | `web-tree-sitter` | WebAssembly-based Tree-sitter parsing |
+| Grammars | Tree-sitter JavaScript / TypeScript / TSX WASM grammars | Parsing supported source files |
+| Extension API | VS Code API | Workspace lifecycle, editor events, diagnostics, commands, and views |
+| Bundler | esbuild | Extension bundling and WASM asset packaging |
+| Testing | Vitest | Unit and component-integration tests |
+| Type checking | TypeScript compiler | Static type validation |
+| Linting | ESLint | Code-quality enforcement |
+| Formatting | Prettier | Consistent source formatting |
 
-| Category               | Technology                                                                                | Version      | Purpose in UNDRIFT                                                                                                          |
-| ---------------------- | ----------------------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| **Language & Runtime** | [TypeScript](https://www.typescriptlang.org/)                                             | `^5.9.3`     | Primary implementation language across all packages, compiler types, and domain contracts.                                  |
-| **Language & Runtime** | [Node.js](https://nodejs.org/)                                                            | `>= 18.0.0`  | Target execution environment for package builds, testing, and the VS Code Extension Host.                                   |
-| **Monorepo Tooling**   | [npm Workspaces](https://docs.npmjs.com/cli/using-npm/workspaces)                         | `>= 9.0.0`   | Monorepo package management, dependency hoisting, and cross-package workspace linking.                                      |
-| **Parsing Engine**     | [web-tree-sitter](https://github.com/tree-sitter/tree-sitter/tree/master/lib/binding_web) | `^0.20.8`    | WebAssembly-based Tree-sitter binding providing fast, incremental AST parsing without native C++ compilation.               |
-| **Grammar Binaries**   | [tree-sitter-wasms](https://github.com/GoldsteinE/tree-sitter-wasms)                      | `^0.1.13`    | Precompiled WebAssembly grammars for JavaScript, TypeScript, and TSX.                                                       |
-| **Extension Bundler**  | [esbuild](https://esbuild.github.io/)                                                     | `^0.25.12`   | High-speed bundler bundling the VS Code extension into a single distribution file (`extension.js`) and copying WASM assets. |
-| **Editor Host**        | [VS Code API](https://code.visualstudio.com/api)                                          | `>= 1.100.0` | Target editor host for workspace discovery, commands, diagnostics, and future views.                                        |
-| **Testing Framework**  | [Vitest](https://vitest.dev/)                                                             | `^3.2.7`     | Monorepo test runner executing 279 unit and integration tests across 16 test suites.                                        |
-| **Code Quality**       | [ESLint](https://eslint.org/)                                                             | `^10.12.0`   | Static code analysis and linting enforcing repository-wide coding standards.                                                |
-| **Code Formatter**     | [Prettier](https://prettier.io/)                                                          | `^3.9.10`    | Opinionated code formatting across all TypeScript, JavaScript, JSON, and Markdown files.                                    |
+> Exact dependency versions are defined by the workspace manifests and lockfile. The package manifests are the source of truth for version constraints.
 
 ---
 
 ## Repository Structure
 
+The repository separates the VS Code host, analysis packages, specifications, regression fixtures, and tests.
+
 ```text
-UNDRIFT-SourceCode/
+undrift/
 ├── apps/
-│   └── vscode-extension/              # VS Code extension application host
+│   └── vscode-extension/
 │       ├── src/
-│       │   ├── activation/            # Extension activation and lifecycle coordination
-│       │   ├── commands/              # VS Code command registrations (undrift.scanWorkspace)
-│       │   ├── diagnostics/           # In-editor diagnostic collections (stubs for Phase 6)
-│       │   ├── fixes/                 # Workspace edit appliers (stubs for Phase 6)
-│       │   ├── logging/               # Output channel and structured logging
-│       │   ├── views/                 # Findings tree view and report webview (stubs for Phase 6)
-│       │   ├── workspace/             # WorkspaceSourceSnapshotProvider & WorkspaceManager
-│       │   └── extension.ts           # Extension entry point
-│       ├── esbuild.config.mjs         # Bundler script copying WASM assets and producing dist/
-│       ├── package.json               # Extension manifest and contributions
-│       └── tsconfig.json
+│       │   ├── activation/          # Extension activation and lifecycle
+│       │   ├── commands/            # User-invokable commands
+│       │   ├── diagnostics/         # VS Code diagnostics and code actions
+│       │   ├── fixes/               # Reviewable workspace edit support
+│       │   ├── logging/             # Extension logging
+│       │   ├── views/               # Overview, findings, report, and UI providers
+│       │   ├── workspace/           # Workspace manager and source snapshots
+│       │   └── extension.ts         # Extension entry point
+│       ├── package.json             # Extension manifest
+│       └── esbuild.config.mjs       # Extension bundling and WASM assets
+│
 ├── packages/
-│   ├── core/                          # @undrift/core: Language-neutral domain contracts
+│   ├── core/
 │   │   ├── src/
-│   │   │   ├── config/                # ResolvedUndriftConfig schema contracts
-│   │   │   ├── domain/                # ApiObservation, EndpointObservation, TypeShape, EvidenceRef
-│   │   │   ├── explanations/          # Explanation data models (stubs for Phase 4)
-│   │   │   ├── fixes/                 # FixProposal contracts (stubs for Phase 4)
-│   │   │   ├── matching/              # Candidate relationship models (stubs for Phase 3)
-│   │   │   ├── normalization/         # Normalization port contracts (stubs for Phase 3)
-│   │   │   ├── pipeline/              # Analysis engine pipeline contracts (stubs for Phase 3)
-│   │   │   ├── ports/                 # ParserPort, LanguageAnalyzerPort, SemanticResolverPort
-│   │   │   ├── reporting/             # Integration report models (stubs for Phase 5)
-│   │   │   ├── rules/                 # Drift rule engine & catalog stubs (UND100–UND920)
-│   │   │   └── index.ts               # Core package exports
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   ├── parser-tree-sitter/            # @undrift/parser-tree-sitter: Tree-sitter WASM adapter
-│   │   ├── src/
-│   │   │   ├── grammar-registry/      # WASM grammar asset discovery and caching
-│   │   │   ├── runtime/               # Web-Tree-sitter lifecycle and memory management
-│   │   │   ├── syntax-view/           # SyntaxNodeFacade language-neutral AST wrapper
-│   │   │   ├── errors.ts              # Tree-sitter runtime and grammar errors
-│   │   │   ├── parser.ts              # TreeSitterParserAdapter implementing ParserPort
-│   │   │   ├── position-mapping.ts    # PositionMapper (UTF-16 code units ↔ byte offsets)
+│   │   │   ├── domain/              # Observations, findings, evidence, shapes
+│   │   │   ├── matching/            # Consumer/provider candidate matching
+│   │   │   ├── normalization/       # Route and type-shape normalization
+│   │   │   ├── rules/               # Deterministic drift rules
+│   │   │   ├── explanations/        # Rule-aware explanation and guidance
+│   │   │   ├── fixes/               # Fix proposal contracts and generation
+│   │   │   ├── reporting/           # Report and analysis result models
 │   │   │   └── index.ts
-│   │   ├── test/                      # Parser unit tests (runtime, mapping, facade)
-│   │   ├── package.json
-│   │   └── tsconfig.json
-│   └── analyzer-js-ts/                # @undrift/analyzer-js-ts: JS/TS contract extractors
+│   │   └── package.json
+│   │
+│   ├── parser-tree-sitter/
+│   │   ├── src/
+│   │   │   ├── grammar-registry/    # WASM grammar discovery and loading
+│   │   │   ├── runtime/             # Parser runtime lifecycle
+│   │   │   ├── syntax-view/         # Language-neutral syntax facade
+│   │   │   ├── position-mapping.ts  # UTF-16 and byte-offset mapping
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   └── analyzer-js-ts/
 │       ├── src/
-│       │   ├── backend/               # ExpressExtractor (Express route & response extraction)
-│       │   ├── frontend/              # FetchExtractor & AxiosExtractor (Client calls)
-│       │   ├── project-index/         # LocalDeclarationIndex & LocalReferenceResolver
-│       │   ├── registry/              # AnalyzerRegistry & JsTsAnalyzer
-│       │   ├── shapes/                # Type and shape extractors
-│       │   ├── support-matrix.ts      # Canonical pattern catalog and query APIs
+│       │   ├── frontend/            # Fetch and Axios extractors
+│       │   ├── backend/             # Express and Next.js provider extractors
+│       │   ├── project-index/       # Supported declaration and reference indexing
+│       │   ├── registry/            # Analyzer registration and dispatch
+│       │   ├── shapes/              # Request and response shape extraction
+│       │   ├── support-matrix.ts    # Supported-pattern catalog
 │       │   └── index.ts
-│       ├── package.json
-│       └── tsconfig.json
-├── docs/                              # Authoritative architecture and specifications
-│   ├── PRD.md                         # Product Requirements Document
-│   ├── TRD.md                         # Technical Requirements Document
-│   ├── ERD.md                         # Entity Relationship Diagram & Logical Model
-│   ├── HLD.md                         # High-Level Design
-│   ├── LLD.md                         # Low-Level Design
-│   └── DEVELOPMENT.md                 # Monorepo setup and developer workflow
-├── examples/                          # Reserved sample projects for drift demonstrations
-│   ├── api-drift-sample/              # Planned full-stack sample application
-│   └── ecommerce-demo/                # Planned e-commerce integration demo
-├── tests/                             # Test suites across monorepo packages
-│   ├── analyzer/                      # Extractor and resolver unit/integration tests
-│   ├── core/                          # Core domain contracts, ports, and registry tests
-│   ├── extension-host/                # Reserved for future VS Code extension host tests
-│   ├── fixtures/                      # Reserved for static source fixtures
-│   ├── integration/                   # Workspace and parser integration tests
-│   ├── scenarios/                     # Reserved for future end-to-end drift scenarios
-│   └── workspace/                     # WorkspaceSourceSnapshotProvider tests
-├── package.json                       # Monorepo root manifest, scripts, and devDependencies
-├── tsconfig.base.json                 # Shared base TypeScript configuration
-├── vitest.config.ts                   # Vitest root test configuration
-└── eslint.config.mjs                  # ESLint flat configuration
+│       └── package.json
+│
+├── docs/
+│   ├── PRD.md                      # Product Requirements Document
+│   ├── TRD.md                      # Technical Requirements Document
+│   ├── ERD.md                      # Entity Relationship / logical data model
+│   ├── HLD.md                      # High-Level Design
+│   ├── LLD.md                      # Low-Level Design
+│   └── DEVELOPMENT.md              # Development and debugging guide
+│
+├── examples/
+│   ├── Cubit/
+│   ├── Expense Tracker/
+│   ├── Fullstack Creators/
+│   └── SlotTrack/
+│
+├── tests/                          # Core, analyzer, integration, and regression tests
+├── package.json                    # Root scripts and npm workspace configuration
+├── package-lock.json
+├── tsconfig.base.json
+├── vitest.config.ts
+└── eslint.config.mjs
 ```
+
+The landing page is being developed as a separate workstream. Its final repository location and deployment configuration should be documented here once that integration is settled; it is not represented as a released part of the VS Code extension.
 
 ---
 
@@ -493,238 +699,392 @@ UNDRIFT-SourceCode/
 
 ### Prerequisites
 
-- **Node.js**: `>= 18.0.0` (Node.js 22 LTS recommended)
-- **npm**: `>= 9.0.0`
-- **VS Code**: `>= 1.100.0` (required for extension debugging)
+- **Node.js:** `>= 18.0.0` (use the version supported by the current workspace toolchain).
+- **npm:** `>= 9.0.0`.
+- **VS Code:** a version satisfying the extension manifest's `engines.vscode` requirement.
 
-### Installation & Setup
-
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/parnilV06/undrift.git
-   cd undrift
-   ```
-
-2. **Install monorepo dependencies:**
-
-   ```bash
-   npm install
-   ```
-
-3. **Typecheck all packages and applications:**
-
-   ```bash
-   npm run typecheck
-   ```
-
-4. **Build packages and bundle the VS Code extension:**
-
-   ```bash
-   npm run build
-   ```
-
-   _This compiles all TypeScript packages and bundles the VS Code extension via esbuild, copying required WebAssembly grammars (`tree-sitter.wasm`, `tree-sitter-javascript.wasm`, `tree-sitter-typescript.wasm`, and `tree-sitter-tsx.wasm`) into `apps/vscode-extension/dist/wasm/`._
-
-5. **Run the test suite:**
-   ```bash
-   npm test
-   ```
-
-### Launching the VS Code Extension (Development Mode)
-
-To launch an Extension Development Host instance:
-
-1. Open this repository folder in VS Code.
-2. Ensure you have run `npm run build`.
-3. Switch to the **Run and Debug** view (`Ctrl+Shift+D` / `Cmd+Shift+D`).
-4. Select **Launch Extension** from the dropdown and press `F5`.
-5. In the new Extension Host window, open any JavaScript/TypeScript workspace.
-6. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and execute:
-   ```text
-   UNDRIFT: Scan Workspace
-   ```
-   _The extension will discover all supported source files, acquire clean in-memory snapshots, compute content hashes, and display a notification with the file count and acquisition status._
-
----
-
-## Developer Workflow and Quality Checks
-
-UNDRIFT enforces strict type safety, linting, formatting, and test coverage across all packages. Contributors should use the following root package scripts:
-
-| Command                | Scope    | Description                                                         |
-| ---------------------- | -------- | ------------------------------------------------------------------- |
-| `npm test`             | Monorepo | Runs Vitest across all 16 test files (279 tests).                   |
-| `npm run typecheck`    | Monorepo | Runs `tsc -p tsconfig.json --noEmit` across all workspaces.         |
-| `npm run build`        | Monorepo | Compiles all packages and bundles `apps/vscode-extension`.          |
-| `npm run lint`         | Monorepo | Runs ESLint 10 with `typescript-eslint` across the entire codebase. |
-| `npm run format:check` | Monorepo | Validates formatting across all files using Prettier.               |
-
-### Running Checks for Specific Workspaces
-
-You can target individual workspaces using npm's `--workspace` flag:
+### Clone and install
 
 ```bash
-# Typecheck only @undrift/core
-npm run typecheck --workspace=@undrift/core
-
-# Typecheck only @undrift/analyzer-js-ts
-npm run typecheck --workspace=@undrift/analyzer-js-ts
-
-# Build only the VS Code extension
-npm run build --workspace=undrift-vscode
+git clone https://github.com/parnilV06/undrift.git
+cd undrift
+npm install
 ```
 
-### Test Suite Organization
+### Validate the repository
 
-- `tests/core/`: Validates domain contracts, port specifications, analyzer registry, and support matrix definitions.
-- `packages/parser-tree-sitter/test/`: Validates WASM runtime initialization, byte/UTF-16 position mapping, and AST facades.
-- `tests/workspace/`: Tests `WorkspaceSourceSnapshotProvider` file discovery, exclusion globs, and document hashing.
-- `tests/analyzer/`: Unit tests for Fetch, Axios, and Express extractors, local declaration indexing, and constant resolution.
-- `tests/integration/`: Validates workspace snapshots piped directly through the Tree-sitter parser and analyzer extractors.
+```bash
+# Run the full monorepo test suite
+npm test
+
+# Type-check all workspaces
+npm run typecheck
+
+# Run lint checks
+npm run lint
+
+# Check formatting
+npm run format:check
+
+# Build packages and the VS Code extension
+npm run build
+```
+
+### Launch the Extension Development Host
+
+1. Open the repository in VS Code.
+2. Install dependencies and build the monorepo.
+3. Open **Run and Debug**.
+4. Select the extension launch configuration.
+5. Press `F5` to launch the Extension Development Host.
+6. Open a JavaScript/TypeScript application workspace in the new window.
+7. Open the Command Palette and run **UNDRIFT: Scan Workspace** if you want to invoke a manual scan.
+
+With automatic analysis enabled, opening the workspace also triggers the configured startup analysis. The manual command remains available.
+
+> [!TIP]
+> To validate live behavior without modifying a real application, use a disposable synthetic React + Express fixture. Keep acceptance fixtures outside the UNDRIFT repository and do not use production or personal project folders as test sandboxes.
 
 ---
 
 ## Configuration
 
-Project configuration contracts are specified in [`packages/core/src/config/undrift-config.ts`](packages/core/src/config/undrift-config.ts) and described in [LLD Section 4.4 and Section 14](docs/LLD.md):
+UNDRIFT exposes analysis behavior through VS Code settings under the `undrift.analysis` namespace.
 
-```ts
-export interface ResolvedUndriftConfig {
-  readonly version?: number;
-  readonly include?: readonly string[];
-  readonly exclude?: readonly string[];
-  readonly analyzers?: {
-    readonly [name: string]: boolean | undefined;
-  };
-  readonly [key: string]: unknown;
+| Setting | Type | Default | Description |
+|---|---|---:|---|
+| `undrift.analysis.autoRun` | `boolean` | `true` | Enables or disables automatic background analysis after relevant workspace changes. |
+| `undrift.analysis.debounceMs` | `number` | `800` | Debounce delay, in milliseconds, before scheduled analysis runs. Supported range: `100`–`5000`. |
+| `undrift.analysis.runOnStartup` | `boolean` | `true` | Runs an initial workspace analysis when a workspace is opened. |
+
+Example `settings.json`:
+
+```json
+{
+  "undrift.analysis.autoRun": true,
+  "undrift.analysis.debounceMs": 800,
+  "undrift.analysis.runOnStartup": true
 }
 ```
 
-### VS Code Extension Configuration
+Settings are read by the extension configuration layer. Consult the extension manifest and current configuration implementation for the authoritative behavior of a particular build.
 
-UNDRIFT contributes standard settings under the `undrift.analysis` namespace in VS Code Settings (`settings.json`):
+### Workspace exclusions
 
-| Setting Key                     | Type      | Default | Description                                                                                                          |
-| ------------------------------- | --------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
-| `undrift.analysis.autoRun`      | `boolean` | `true`  | Automatically run background drift analysis when files are edited, created, or deleted.                              |
-| `undrift.analysis.debounceMs`   | `number`  | `800`   | Debounce delay in milliseconds (min 100, max 5000) before triggering background analysis following document changes. |
-| `undrift.analysis.runOnStartup` | `boolean` | `true`  | Automatically run an initial drift analysis when a workspace is opened.                                              |
+The source snapshot layer excludes common generated or dependency directories, including:
 
-Changes to these settings take effect dynamically without requiring an IDE window reload.
+- `node_modules`
+- `.git`
+- `dist`, `build`, and `out`
+- `coverage`
+- `.next`, `.nuxt`, and common framework caches
+- Minified JavaScript files
 
-### Workspace Exclusion Defaults
-
-- **Built-in Workspace Exclusion Defaults:** In the current phase, [`source-snapshot-provider.ts`](apps/vscode-extension/src/workspace/source-snapshot-provider.ts) enforces standard exclusion globs (`DEFAULT_EXCLUDE_GLOBS`) covering `node_modules`, `.git`, `dist`, `build`, `out`, `coverage`, `.turbo`, `.next`, `.nuxt`, `.cache`, and minified files (`*.min.js`).
-- **Configurable Analysis Policies:** Programmatic configuration via `ResolvedUndriftConfig` supports additional glob exclusions, analyzer enable/disable toggles, and coverage thresholds.
+The implementation's default exclusion list is the source of truth. Workspace discovery is designed to avoid scanning generated output and dependency trees as application source.
 
 ---
 
-## Design Decisions and Engineering Principles
+## Validation and Quality
 
-1. **Local-First Analysis:** All source code parsing and contract extraction execute locally within the developer's machine. No source code or derived contract models are uploaded to external services.
-2. **Parser and Analyzer Separation:** Web-Tree-sitter provides raw syntax parsing; it has no knowledge of HTTP routes, Express conventions, or API contracts. Language-specific analyzers translate raw syntax into normalized domain observations.
-3. **Language-Neutral Core:** Contract models (`ApiObservation`), candidate matching, drift rules, and fix proposals in `@undrift/core` are completely decoupled from Tree-sitter syntax nodes and TypeScript compiler types. Adding a new language or framework requires only an analyzer adapter, not changes to core matching algorithms.
-4. **Evidence Travels with Facts:** Every extracted property (method, path, body, status code) carries explicit `EvidenceRef` records, UTF-16 source ranges, and an `EvidenceStrength` rating (`direct`, `resolved`, `inferred`, or `unknown`).
-5. **Conservative Uncertainty ("Unknown Is Not False"):** When an extractor encounters dynamic code (e.g., dynamic URL concatenation, unresolvable variables), it marks the observation `unknown` or `dynamic` with an `AnalysisWarning`. UNDRIFT never treats an unresolvable value as proof of absence or drift.
-6. **Same-Document Constant Resolution vs. Cross-File Gates:** The system resolves same-document constant literals to handle real-world patterns like `const API = "/users"; fetch(API);`. Cross-file import dereferencing and module alias resolution are designated **POC Gates** in the TRD and are deliberately deferred to prevent unreliable approximations.
-7. **No Repository History Pollution:** Analysis state and finding lifecycle history are designed for VS Code-managed workspace storage (`storageUri` / `workspaceState`), not a `.undrift/` directory committed to the user's project git repository.
+UNDRIFT has completed its V1 automated regression and component-integration validation cycle.
+
+### Latest reported automated quality checks
+
+<p>
+  <img src="https://img.shields.io/badge/Test%20files-58%20passed-16A34A?style=flat-square" alt="58 test files passed" />
+  <img src="https://img.shields.io/badge/Tests-1%2C058%20passed-16A34A?style=flat-square" alt="1,058 tests passed" />
+  <img src="https://img.shields.io/badge/TypeScript-0%20errors-16A34A?style=flat-square" alt="Zero TypeScript errors" />
+  <img src="https://img.shields.io/badge/ESLint-0%20warnings-16A34A?style=flat-square" alt="Zero ESLint warnings" />
+  <img src="https://img.shields.io/badge/Build-Passing-16A34A?style=flat-square" alt="Build passing" />
+</p>
+
+| Check | Latest reported result |
+|---|---|
+| Monorepo tests | **1,058 passing tests across 58 test files** |
+| TypeScript typecheck | **Passed — zero errors** |
+| ESLint | **Passed — zero errors and warnings** |
+| Extension/package build | **Passed** |
+| Working tree after acceptance verification | **Clean** |
+| Sample project protection check | **No changes reported under `examples/`** |
+
+### Continuous-analysis acceptance coverage
+
+A separate acceptance exercise used isolated synthetic workspaces outside the repository. The scenarios were exercised through the component-integration harness, with the Extension Development Host launch also attempted for host-level checks.
+
+| Acceptance scenario | Result reported |
+|---|---|
+| Automatic startup analysis | **PASS** |
+| Unsaved frontend edit creates a method conflict | **PASS** |
+| Unsaved correction clears the finding | **PASS** |
+| Discarding an unsaved change returns to disk content | **PASS** |
+| Backend route change and restoration | **PASS** |
+| File create, delete, and rename lifecycle | **PASS** |
+| Burst edit coalescing | **PASS** |
+| Superseded in-flight result rejection | **PASS** |
+| Diagnostic, badge, sidebar, and report data synchronization in the integration harness | **PASS** |
+| Workspace switching isolation | **PASS** |
+| Settings behavior and manual scan override | **PASS** |
+| External filesystem change detection | **PASS** |
+| Incomplete analysis and recovery | **PASS** |
+
+> [!WARNING]
+> These results establish automated and component-integration behavior. They should not be interpreted as proof that every scenario has been manually demonstrated through the live VS Code/Antigravity Extension Development Host UI. A final hands-on IDE acceptance pass remains a release validation item.
+
+### Synthetic fixture performance observations
+
+The acceptance report recorded the following single-run measurements on synthetic JavaScript/TypeScript workspaces:
+
+| Supported source files | Observations (consumer / provider) | Reported full-scan duration | Reported edit duration |
+|---:|---:|---:|---:|
+| 4 | 1 / 1 | 38 ms | 18 ms |
+| 10 | 5 / 5 | 4 ms | 2 ms |
+| 50 | 25 / 25 | 9 ms | 5 ms |
+| 100 | 50 / 50 | 18 ms | 9 ms |
+
+These are **observations from the acceptance run, not formal benchmark guarantees**. Runtime warm-up, fixture shape, environment, and measurement method can affect results. Repeated controlled benchmarks are required before making comparative performance claims.
+
+---
+
+## Design Principles
+
+1. **Local-first by default.** Static source parsing and contract analysis run on the developer's machine. Standard contract discovery does not require a hosted service or LLM API key.
+2. **Editor-independent core.** The core analysis model and rule engine do not depend on VS Code or Tree-sitter implementation details.
+3. **Parser/analyzer separation.** Tree-sitter supplies syntax structure; framework-specific analyzers interpret supported API patterns.
+4. **Evidence travels with facts.** Extracted values retain source spans and evidence provenance so findings can be traced back to code.
+5. **Unknown is not false.** Dynamic or unsupported expressions remain uncertain. Lack of evidence is not treated as proof of a mismatch.
+6. **Conservative matching.** Candidate relationships and absence findings are gated by analysis coverage to reduce false positives.
+7. **Reviewable changes.** Quick Fix proposals remain visible to the developer; UNDRIFT does not silently rewrite application code.
+8. **Workspace hygiene.** Analysis state belongs in VS Code-managed storage rather than creating repository files in the user's application.
+9. **No application execution for static discovery.** Analyzers do not need to run user scripts or start application servers to extract supported contracts.
+10. **Incremental product scope.** New language or framework support should be added through explicit analyzer capability, tests, and documented coverage—not assumed from syntax similarity.
 
 ---
 
 ## Current Limitations
 
-UNDRIFT prioritizes technical honesty over exaggerated claims. The following limitations apply to the current implementation:
+UNDRIFT V1 is intentionally scoped. The following boundaries should be understood before relying on its findings.
 
-- **Language & Framework Scope:** Extraction is currently limited to JavaScript and TypeScript projects using standard `fetch()`, `axios`, or Express route handlers (`app.<method>`, `router.<method>`). Alternative frameworks (e.g., Fastify, NestJS, Next.js App Router, Koa) and other languages (Python, Go) are not yet supported.
-- **Syntactic Extraction Boundaries:** Extractors rely on recognizable AST patterns. Dynamic HTTP method dispatch (`axios[method]()`), dynamic route loops (`methods.forEach(...)`), regex route patterns, and complex custom wrapper functions without local literals are marked `unknown` or emit warnings.
-- **Local-Only Symbol Resolution:** Constant resolution operates exclusively within the same document snapshot. Imported constants (`import { API } from './config'`) and CommonJS `require()` bindings are recognized as imports but marked `unsupported` (deferred POC Gates).
-- **Matching & Drift Detection:** Candidate consumer-provider matching and drift detection rules (`UND100`–`UND920`) are designed in the specifications but are not executed in the current build.
-- **VS Code Extension UI:** The VS Code extension currently registers and executes the workspace scan command (`undrift.scanWorkspace`). Findings tree views, diagnostics markers in the Problems panel, integration webview reports, and Quick Fixes are stubbed for upcoming phases.
+<details>
+<summary><strong>Language and framework coverage</strong></summary>
+
+- The current analyzer focuses on JavaScript and TypeScript source.
+- Consumer extraction targets supported standard `fetch()` and Axios patterns.
+- Provider extraction targets supported Express and Next.js route patterns.
+- Fastify, NestJS, Koa, Django, Flask, Go HTTP frameworks, and other stacks are not represented as generally supported V1 analyzers.
+- Framework-specific conventions outside the implemented support matrix may not be discovered.
+
+</details>
+
+<details>
+<summary><strong>Static-analysis boundaries</strong></summary>
+
+- Runtime-generated URLs, computed methods, dynamic route registration, and complex wrapper functions may not be statically resolvable.
+- Complex import graphs, aliasing, and cross-module dataflow are supported only where explicitly implemented.
+- Some request or response shapes may be partial because the relevant construction or type information cannot be established.
+- Dynamic expressions are not executed to discover their runtime value.
+- A missing match is not automatically proof that an endpoint is unused or dead.
+
+</details>
+
+<details>
+<summary><strong>Findings and fixes</strong></summary>
+
+- Findings depend on the quality and completeness of statically extracted evidence.
+- A rule may be withheld when scan coverage is insufficient.
+- Quick Fixes are limited to supported mechanical edits and must remain reviewable.
+- The future AI Resolution Layer is not part of V1.
+- UNDRIFT does not automatically apply speculative fixes to user code.
+
+</details>
+
+<details>
+<summary><strong>Editor and release validation</strong></summary>
+
+- V1 targets Visual Studio Code. Compatibility with other VS Code-based IDEs requires separate testing.
+- Automated tests and component-integration acceptance do not replace manual Extension Development Host acceptance.
+- The VS Code Marketplace publication is pending.
+- The public landing page is under development and has not yet been deployed.
+
+</details>
 
 ---
 
-## Roadmap
+## Roadmap and Release Status
 
-UNDRIFT's phased implementation plan is governed by the [Product Requirements Document (PRD)](docs/PRD.md) and [Technical Requirements Document (TRD)](docs/TRD.md):
+UNDRIFT was developed through six implementation phases. The V1 engineering scope is now feature-complete; the remaining work is focused on release validation and distribution.
 
-```text
-Phase 1: Foundation (COMPLETED)
-├── Web-Tree-sitter WASM parser adapter and grammar registry (JS, TS, TSX)
-├── PositionMapper with bidirectional UTF-16 code unit and byte offset mapping
-├── WorkspaceSourceSnapshotProvider with default exclusion globs and SHA-256 fingerprinting
-└── VS Code extension entry point with 'undrift.scanWorkspace' command
+```mermaid
+flowchart TD
+    P1["Phase 1<br/>Parser & workspace foundation<br/>COMPLETE"] --> P2["Phase 2<br/>Analyzer contracts & extractors<br/>COMPLETE"]
+    P2 --> P3["Phase 3<br/>Normalization & matching<br/>COMPLETE"]
+    P3 --> P4["Phase 4<br/>Drift rules & explanations<br/>COMPLETE"]
+    P4 --> P5["Phase 5<br/>Persistence & reconciliation<br/>COMPLETE"]
+    P5 --> P6["Phase 6<br/>Workbench + live analysis<br/>COMPLETE"]
+    P6 --> R1["Final live IDE acceptance<br/>PENDING"]
+    R1 --> R2["GitHub README & release metadata<br/>IN PROGRESS"]
+    R2 --> R3["GitHub V1 release<br/>PENDING"]
+    R3 --> R4["VS Code Marketplace publication<br/>PENDING"]
+    R4 --> R5["Landing page deployment<br/>IN PROGRESS"]
 
-Phase 2: Analyzer Contracts, Registry & Extractors (COMPLETED)
-├── Core language-neutral domain contracts, ports, and evidence types
-├── AnalyzerRegistry with deterministic language-based dispatch
-├── FetchExtractor (standard Fetch calls, methods, static paths, request shapes)
-├── AxiosExtractor (Axios method calls, request payloads, generic response types)
-├── ExpressExtractor (Express app/router registrations, methods, paths, responses)
-├── LocalDeclarationIndex (single-document variable, function, type, and import indexing)
-└── LocalReferenceResolver (same-document const literal resolution with resolved evidence)
-
-Phase 3: Route Normalization & Candidate Matching (COMPLETED)
-├── RouteNormalizer (path separators, trailing slashes, parameter segment alignment)
-├── TypeNormalizer (structural primitive and field mapping)
-├── CandidateMatcher (Exact route/method, Method conflict, Suspected route mismatch heuristics)
-└── AnalysisCoverageSummary calculation and unmapped provider classification
-
-Phase 4: Deterministic Drift Engine & Explanation (COMPLETED)
-├── Drift rule engine implementing catalog rules UND100 through UND920
-├── Request shape comparator (directional provider-requirement vs consumer-payload)
-├── Response shape comparator (directional consumer-expectation vs provider-output)
-├── ExplanationEngine generating evidence-linked, human-readable diagnoses
-└── FixProposal generator with mechanical Level 1 workspace edits
-
-Phase 5: State Persistence & Session Reconciliation (COMPLETED)
-├── VS Code workspace-scoped storage adapter (storageUri & workspaceState)
-├── Snapshot-to-snapshot reconciliation algorithm
-├── Finding lifecycle state transitions (detected, changed, resolved, reintroduced)
-├── Retention pruning and crash-safe atomic persistence
-└── Analysis result re-verification after source code modifications
-
-Phase 6: Workbench Integration, Diagnostic Guidance & Continuous Analysis (COMPLETED)
-├── VS Code DiagnosticCollection mapping drift findings to in-editor squiggles
-├── Findings tree view in the VS Code Explorer sidebar
-├── Webview integration report panel
-├── CodeActionProvider exposing Quick Fixes directly on drifted lines
-├── Dedicated UNDRIFT Activity Bar item, persistent sidebar overview & badge count
-├── Theme-aware Integration Report webview with official UNDRIFT brand identity
-└── Continuous Workspace Analysis (startup scan, live debouncing, unsaved buffer monitoring)
+    style P1 fill:#14532d,stroke:#22c55e,color:#fff
+    style P2 fill:#14532d,stroke:#22c55e,color:#fff
+    style P3 fill:#14532d,stroke:#22c55e,color:#fff
+    style P4 fill:#14532d,stroke:#22c55e,color:#fff
+    style P5 fill:#14532d,stroke:#22c55e,color:#fff
+    style P6 fill:#14532d,stroke:#22c55e,color:#fff
+    style R1 fill:#713f12,stroke:#f59e0b,color:#fff
+    style R2 fill:#713f12,stroke:#f59e0b,color:#fff
+    style R3 fill:#1f2937,stroke:#9ca3af,color:#fff
+    style R4 fill:#1f2937,stroke:#9ca3af,color:#fff
+    style R5 fill:#713f12,stroke:#f59e0b,color:#fff
 ```
 
+### Completed implementation phases
+
+<details>
+<summary><strong>Phase 1 — Workspace and parser foundation</strong></summary>
+
+- Tree-sitter WebAssembly parser adapter and grammar registry.
+- JavaScript, TypeScript, and TSX parsing foundation.
+- UTF-16 and byte-offset position mapping.
+- Workspace source discovery and exclusion handling.
+- Snapshot hashing and extension activation foundation.
+
+</details>
+
+<details>
+<summary><strong>Phase 2 — Analyzer contracts, registry, and extractors</strong></summary>
+
+- Language-neutral API observation and evidence contracts.
+- Analyzer registry and deterministic dispatch.
+- Fetch and Axios consumer extraction.
+- Express provider extraction.
+- Local declaration indexing and same-document constant resolution.
+
+</details>
+
+<details>
+<summary><strong>Phase 3 — Normalization and candidate matching</strong></summary>
+
+- Route normalization and parameter alignment.
+- Structural request/response shape normalization.
+- Consumer/provider candidate matching.
+- Coverage summaries and conservative unmatched-provider classification.
+
+</details>
+
+<details>
+<summary><strong>Phase 4 — Deterministic drift engine and explanation</strong></summary>
+
+- Protocol, route, request-shape, and response-shape drift rules.
+- Directional shape comparison.
+- Evidence-linked findings and explanations.
+- Reviewable mechanical fix proposals.
+- Post-edit re-analysis support.
+
+</details>
+
+<details>
+<summary><strong>Phase 5 — Persistence and session reconciliation</strong></summary>
+
+- Workspace-scoped VS Code storage.
+- Snapshot-to-snapshot finding reconciliation.
+- Finding lifecycle transitions: detected, changed, resolved, and reintroduced.
+- Crash-safe persistence and retention handling.
+- Re-verification after source changes.
+
+</details>
+
+<details>
+<summary><strong>Phase 6 — Workbench integration and continuous analysis</strong></summary>
+
+- Diagnostics and editor code actions.
+- Findings tree and Integration Report.
+- Dedicated Activity Bar item, sidebar overview, and active-finding badge.
+- Rule-specific diagnostic guidance and report resolution recommendations.
+- Theme-aware workbench UI and official UNDRIFT identity.
+- Continuous startup and background workspace analysis.
+- Dirty editor-buffer monitoring.
+- Debounced/coalesced scheduling and stale-result protection.
+- Automatic finding resolution after source corrections.
+
+</details>
+
+### Release checklist
+
+| Release activity | Status |
+|---|---|
+| V1 implementation scope | **Complete** |
+| Automated regression suite | **Passed** |
+| Component-integration acceptance scenarios | **Passed** |
+| Manual live IDE acceptance | **Pending** |
+| Final GitHub engineering PR | **Opened — merge status not asserted here** |
+| Public README refresh | **Updated draft prepared; repository commit pending** |
+| GitHub V1 tag and release | **Pending** |
+| VS Code Marketplace package and publication | **Pending** |
+| Landing page implementation | **In progress** |
+| Landing page deployment | **Pending** |
+
+The roadmap above is a release-status snapshot, not a promise that pending distribution steps have already occurred.
+
 ---
 
-## Documentation Guide
+## Documentation
 
-For comprehensive technical specifications, refer to the authoritative documents in [`docs/`](docs/):
+The `docs/` directory contains the detailed product and engineering specifications.
 
-| Document                                                   | Purpose                                                                                                                         | Read It When                                                                                  |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| **[PRD — Product Requirements Document](docs/PRD.md)**     | Product vision, problem definition, target user personas, core use cases (UC-01–UC-12), repair levels, and acceptance outcomes. | You need to understand the product thesis, user workflows, or scope boundaries.               |
-| **[TRD — Technical Requirements Document](docs/TRD.md)**   | Technical baseline, locked technology decisions, proof-of-concept gates, performance budgets, and testing strategy.             | You want to understand technical constraints, performance goals, or architectural trade-offs. |
-| **[ERD — Entity Relationship Diagram](docs/ERD.md)**       | Logical entity relationship model, observation schemas, evidence structures, and storage boundaries.                            | You are working with domain models, observations, finding entities, or persistence.           |
-| **[HLD — High-Level Design](docs/HLD.md)**                 | System context, package deployment shape, core 10-stage data flow, orchestrator lifecycle, and session reconciliation.          | You want an architectural overview of how modules interact across the monorepo.               |
-| **[LLD — Low-Level Design](docs/LLD.md)**                  | Concrete TypeScript interfaces, port definitions, matching algorithms, rule catalog (`UND100`–`UND920`), and error handling.    | You are implementing or reviewing analyzers, extractors, rules, or resolvers.                 |
-| **[DEVELOPMENT — Development Guide](docs/DEVELOPMENT.md)** | Monorepo prerequisites, build scripts, debugging instructions, and extension development workflow.                              | You are setting up your local environment or debugging the VS Code extension.                 |
-
----
-
-## Contributing and Development Notes
-
-UNDRIFT is currently developed as a personal developer-tool project. Formal community contribution guidelines, issue templates, and code-of-conduct policies have not yet been established.
-
-Contributors working within the codebase should adhere to established architectural boundaries:
-
-- **Preserve Package Decoupling:** `@undrift/core` must never depend on Tree-sitter or the VS Code API.
-- **Maintain Determinism:** Analyzers must not make network requests, spawn background daemons, or execute user project scripts.
-- **Verify Quality Gates:** Ensure all changes pass `npm run typecheck`, `npm test`, `npm run lint`, and `npm run format:check`.
+| Document | What it covers |
+|---|---|
+| [PRD — Product Requirements Document](docs/PRD.md) | Product thesis, target users, workflows, functional requirements, and acceptance expectations |
+| [TRD — Technical Requirements Document](docs/TRD.md) | Technical constraints, technology decisions, supported scope, performance considerations, and validation strategy |
+| [ERD — Entity Relationship / Logical Model](docs/ERD.md) | Observation, evidence, finding, and persistence data structures |
+| [HLD — High-Level Design](docs/HLD.md) | System boundaries, package responsibilities, architecture, and end-to-end data flow |
+| [LLD — Low-Level Design](docs/LLD.md) | Concrete contracts, interfaces, analysis rules, extraction logic, and lifecycle details |
+| [DEVELOPMENT — Development Guide](docs/DEVELOPMENT.md) | Repository setup, build/test commands, extension debugging, and local development workflow |
 
 ---
 
-## License and Project Links
+## Contributing
 
-- **Repository:** [`https://github.com/parnilV06/undrift.git`](https://github.com/parnilV06/undrift.git)
-- **Active Branch:** `feat/phase-2-analyzer-contracts-and-registry`
-- **License:** All rights reserved. An open-source license has not yet been declared for this repository (`"private": true` in `package.json`).
+UNDRIFT is currently maintained as a personal developer-tool project. Contribution policies and community processes may evolve as the project moves through its public release.
+
+Before proposing a change:
+
+1. Read the relevant product and technical documentation.
+2. Keep `packages/core` independent of editor and parser implementation APIs.
+3. Add tests for new behavior and bug fixes.
+4. Preserve explicit uncertainty and evidence provenance.
+5. Update the support matrix and documentation when extraction coverage changes.
+6. Run the repository quality checks before opening a pull request.
+
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run format:check
+npm run build
+```
+
+Do not introduce framework or language support by silently broadening heuristics. New support should be backed by representative fixtures, tests, and explicit boundaries.
+
+---
+
+## License
+
+UNDRIFT is licensed under the [GNU General Public License v3.0 only](https://www.gnu.org/licenses/gpl-3.0.html) (`GPL-3.0-only`).
+
+## Project Links
+
+- **Repository:** [github.com/parnilV06/undrift](https://github.com/parnilV06/undrift)
+- **Issues:** [Report a bug or request a feature](https://github.com/parnilV06/undrift/issues)
+- **Documentation:** [`docs/`](docs/)
+
+---
+
+<div align="center">
+
+**UNDRIFT — Find the drift before your users do.**
+
+<sub>Built for developers who want their frontend and backend to agree.</sub>
+
+</div>
