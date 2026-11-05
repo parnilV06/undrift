@@ -1,0 +1,258 @@
+.undrift-vscode-3d {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 400px;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+}
+
+.undrift-vscode-3d__canvas-mount {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.undrift-vscode-3d__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.undrift-vscode-3d__card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: rgba(11, 11, 11, 0.92);
+  border: 1px solid #888888;
+  border-radius: 8px;
+  color: #f0f0f0;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(4px);
+  will-change: transform;
+}
+
+/* 1. Left Callout: YOUR CODE */
+.undrift-vscode-3d__card--your-code {
+  margin-left: -102px;
+  margin-top: -54px;
+  padding: 8px 14px;
+  min-width: 184px;
+}
+
+.undrift-vscode-3d__title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #ffffff;
+  margin-bottom: 2px;
+}
+
+.undrift-vscode-3d__subtitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: #b5b5b5;
+  line-height: 1.3;
+}
+
+/* 2. Top Brand Callout: VS Code Extension */
+.undrift-vscode-3d__card--extension {
+  margin-left: -128px;
+  margin-top: -56px;
+  padding: 9px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+  border-color: #999999;
+}
+
+.undrift-vscode-3d__vscode-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+/* 3. Foreground UNDRIFT Findings Summary Strip */
+.undrift-vscode-3d__card--findings {
+  margin-left: -145px;
+  margin-top: 8px;
+  width: 290px;
+  padding: 8px 12px;
+  border-color: #777777;
+  background: rgba(11, 11, 11, 0.94);
+}
+
+.undrift-vscode-3d__findings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 5px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid #2b2b2b;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #e5e5e5;
+}
+
+.undrift-vscode-3d__findings-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  padding: 2px 0;
+}
+
+.undrift-vscode-3d__findings-row--active {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.undrift-vscode-3d__findings-row--secondary {
+  color: #a8a8a8;
+}
+
+.undrift-vscode-3d__finding-code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 10px;
+  color: #cccccc;
+  background: #1a1a1a;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid #333333;
+}
+
+/* 4. Right Capability Callout Panel */
+.undrift-vscode-3d__card--capabilities {
+  margin-left: 4px;
+  margin-top: -54px;
+  padding: 10px 14px;
+  min-width: 192px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-color: #888888;
+}
+
+.undrift-vscode-3d__cap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f0f0f0;
+  white-space: nowrap;
+}
+
+.undrift-vscode-3d__cap-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  stroke: #e5e5e5;
+  fill: none;
+  stroke-width: 1.75;
+}
+
+@media (max-width: 768px) {
+  .undrift-vscode-3d {
+    min-height: 350px;
+  }
+  .undrift-vscode-3d__card--your-code {
+    min-width: 145px;
+    margin-left: -76px;
+    padding: 6px 10px;
+  }
+  .undrift-vscode-3d__card--extension {
+    margin-left: -105px;
+    padding: 6px 11px;
+    gap: 8px;
+  }
+  .undrift-vscode-3d__card--findings {
+    width: 235px;
+    margin-left: -118px;
+    padding: 6px 9px;
+  }
+  .undrift-vscode-3d__card--capabilities {
+    min-width: 155px;
+    padding: 7px 10px;
+    gap: 6px;
+  }
+  .undrift-vscode-3d__cap-row {
+    font-size: 10.5px;
+  }
+  .undrift-vscode-3d__title {
+    font-size: 11.5px;
+  }
+  .undrift-vscode-3d__subtitle {
+    font-size: 9.5px;
+  }
+}
+
+@media (max-width: 480px) {
+  .undrift-vscode-3d {
+    min-height: 320px;
+  }
+  .undrift-vscode-3d__card--your-code {
+    min-width: 130px;
+    margin-left: -68px;
+    padding: 5px 8px;
+  }
+  .undrift-vscode-3d__card--extension {
+    margin-left: -80px;
+    padding: 5px 9px;
+    gap: 6px;
+  }
+  .undrift-vscode-3d__vscode-icon {
+    width: 18px;
+    height: 18px;
+  }
+  .undrift-vscode-3d__card--findings {
+    width: 195px;
+    margin-left: -98px;
+    padding: 5px 8px;
+  }
+  .undrift-vscode-3d__findings-header {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    padding-bottom: 3px;
+    margin-bottom: 4px;
+  }
+  .undrift-vscode-3d__findings-row {
+    font-size: 9px;
+  }
+  .undrift-vscode-3d__finding-code {
+    font-size: 8.5px;
+    padding: 1px 4px;
+  }
+  .undrift-vscode-3d__card--capabilities {
+    min-width: 130px;
+    padding: 6px 8px;
+    gap: 5px;
+    margin-left: 2px;
+  }
+  .undrift-vscode-3d__cap-row {
+    font-size: 9.5px;
+    gap: 6px;
+  }
+  .undrift-vscode-3d__cap-icon {
+    width: 13px;
+    height: 13px;
+  }
+  .undrift-vscode-3d__title {
+    font-size: 10.5px;
+  }
+  .undrift-vscode-3d__subtitle {
+    font-size: 8.5px;
+  }
+}
