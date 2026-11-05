@@ -4,23 +4,43 @@ import { ArrowUpRight } from "lucide-react";
 const entries = [
   {
     title: "Getting Started",
-    description: "Install UNDRIFT and run your first analysis.",
+    description: "Prerequisites, repository setup, building from source, and running your first analysis.",
     to: "/docs/getting-started/installation",
   },
   {
     title: "Core Concepts",
-    description: "The ideas behind contract drift and how matches are made.",
+    description: "API contract drift, consumer and provider observations, normalization, and finding lifecycles.",
     to: "/docs/concepts/api-contract-drift",
   },
   {
-    title: "Drift Types",
-    description: "The categories of mismatch UNDRIFT reports.",
+    title: "Drift Types & Rules",
+    description: "Complete catalog of deterministic drift rules covering routes, methods, request shapes, and response shapes.",
     to: "/docs/drift-types",
   },
   {
     title: "Analysis Engine",
-    description: "How source code becomes comparable observations.",
+    description: "The 10-step static analysis pipeline, WebAssembly Tree-sitter parsing, and relationship matching.",
     to: "/docs/analysis-engine",
+  },
+  {
+    title: "Supported Technologies",
+    description: "Supported languages, Express.js and Next.js route extractors, Fetch, and Axios client patterns.",
+    to: "/docs/compatibility",
+  },
+  {
+    title: "VS Code Extension",
+    description: "Dedicated Activity Bar item, sidebar overview, editor diagnostics, and theme-aware Integration Report.",
+    to: "/docs/reference/vscode-extension",
+  },
+  {
+    title: "Configuration & Reference",
+    description: "Extension settings, default exclusions, palette commands, and system architecture.",
+    to: "/docs/reference/configuration",
+  },
+  {
+    title: "Roadmap & Release Status",
+    description: "Completed engineering phases, current V1 release checklist, and future AI layer scope.",
+    to: "/docs/reference/roadmap",
   },
 ];
 

@@ -1,9 +1,11 @@
 import { Link } from "react-router-dom";
+import { AlertCircle, AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { CodeBlock } from "@/components/docs/CodeBlock";
 import { DocsTableOfContents } from "@/components/docs/DocsTableOfContents";
 import {
   getAdjacentDocPages,
   getDocGroup,
+  type DocCallout,
   type DocPageDef,
   type DocSection,
 } from "@/lib/docs";
@@ -93,20 +95,97 @@ export default function DocPage({ page }: { page: DocPageDef }) {
   );
 }
 
+function CalloutBox({ callout }: { callout: DocCallout }) {
+  const styles = {
+    info: {
+      border: "border-blue-500/30 bg-blue-500/5 text-blue-200",
+      icon: <Info className="size-4 shrink-0 text-blue-400" />,
+      defaultTitle: "Note",
+    },
+    note: {
+      border: "border-border bg-surface/80 text-foreground",
+      icon: <Info className="size-4 shrink-0 text-subtle" />,
+      defaultTitle: "Note",
+    },
+    warning: {
+      border: "border-amber-500/30 bg-amber-500/5 text-amber-200",
+      icon: <AlertTriangle className="size-4 shrink-0 text-amber-400" />,
+      defaultTitle: "Important",
+    },
+    tip: {
+      border: "border-emerald-500/30 bg-emerald-500/5 text-emerald-200",
+      icon: <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />,
+      defaultTitle: "Tip",
+    },
+  }[callout.type];
+
+  return (
+    <div
+      className={`mt-6 rounded-md border p-4 text-sm leading-relaxed ${styles.border}`}
+    >
+      <div className="flex items-start gap-3">
+        {styles.icon}
+        <div className="space-y-1">
+          <p className="font-medium text-foreground">
+            {callout.title || styles.defaultTitle}
+          </p>
+          <p className="text-muted-foreground">{callout.text}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocSectionView({ section }: { section: DocSection }) {
   return (
     <section id={section.id} className="scroll-mt-24 pt-14">
       <h2 className="text-2xl font-medium tracking-[-0.02em] text-foreground">
         {section.title}
       </h2>
-      {section.body.map((paragraph) => (
+      {section.body.map((paragraph, index) => (
         <p
-          key={paragraph}
+          key={index}
           className="mt-4 leading-relaxed text-muted-foreground"
         >
           {paragraph}
         </p>
       ))}
+
+      {section.callout && <CalloutBox callout={section.callout} />}
+
+      {section.table && (
+        <div className="mt-6 overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-border bg-surface text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <tr>
+                {section.table.headers.map((header, i) => (
+                  <th key={i} className="px-4 py-3">
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {section.table.rows.map((row, rIdx) => (
+                <tr
+                  key={rIdx}
+                  className="transition-colors hover:bg-surface/50"
+                >
+                  {row.map((cell, cIdx) => (
+                    <td
+                      key={cIdx}
+                      className="px-4 py-3 align-top text-muted-foreground"
+                    >
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {section.list && (
         <ul className="mt-6 divide-y divide-border border-y border-border">
           {section.list.map((item) => (
@@ -121,9 +200,15 @@ function DocSectionView({ section }: { section: DocSection }) {
           ))}
         </ul>
       )}
+
       {section.code && (
         <CodeBlock title={section.code.title} source={section.code.source} />
       )}
+
+      {section.codes &&
+        section.codes.map((c, i) => (
+          <CodeBlock key={i} title={c.title} source={c.source} />
+        ))}
     </section>
   );
 }
