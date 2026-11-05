@@ -1,0 +1,12 @@
+.vscode/**
+.git/**
+node_modules/**
+src/**
+tsconfig.json
+esbuild.config.mjs
+**/*.map
+**/*.tsbuildinfo
+.DS_Store
+Thumbs.db
+dist/resources/**
+resources/undrift-master.png

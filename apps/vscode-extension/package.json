@@ -1,10 +1,24 @@
 {
-  "name": "undrift-vscode",
+  "name": "undrift",
   "displayName": "UNDRIFT",
-  "description": "Live frontend-backend API contract drift detection inside VS Code.",
-  "version": "0.1.0",
-  "icon": "resources/undrift-icon.png",
-  "publisher": "undrift",
+  "description": "Detect frontend-backend API contract drift directly in your VS Code workspace.",
+  "version": "1.0.0",
+  "icon": "icon.png",
+  "publisher": "ParnilVyawahare",
+  "pricing": "Free",
+  "homepage": "https://undrift-landing-website.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parnilV06/undrift"
+  },
+  "bugs": {
+    "url": "https://github.com/parnilV06/undrift/issues"
+  },
+  "license": "GPL-3.0-only",
+  "galleryBanner": {
+    "color": "#0c0c0c",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": ">=1.100.0"
   },
@@ -12,6 +26,22 @@
     "Linters",
     "Programming Languages",
     "Other"
+  ],
+  "keywords": [
+    "api",
+    "contract",
+    "drift",
+    "express",
+    "fetch",
+    "axios",
+    "nextjs",
+    "typescript",
+    "rest",
+    "linter"
+  ],
+  "extensionKind": [
+    "workspace",
+    "ui"
   ],
   "activationEvents": [
     "onStartupFinished"
