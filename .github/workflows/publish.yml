@@ -1,0 +1,68 @@
+name: Publish Extension to VS Code Marketplace
+
+"on":
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub release tag to publish"
+        required: true
+        default: "v1.0.0"
+        type: string
+
+jobs:
+  publish:
+    name: Publish to Marketplace
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install monorepo dependencies
+        run: npm ci
+
+      - name: Build complete UNDRIFT project
+        run: npm run build
+
+      - name: Run automated test suite
+        run: npm test
+
+      - name: Run TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Verify release version match
+        run: |
+          RELEASE_TAG="${{ github.event.inputs.release_tag || github.event.release.tag_name }}"
+          EXPECTED_VERSION="${RELEASE_TAG#v}"
+          PKG_VERSION=$(node -p "require('./apps/vscode-extension/package.json').version")
+
+          echo "Selected release tag: $RELEASE_TAG"
+          echo "Expected version:     $EXPECTED_VERSION"
+          echo "Extension version:    $PKG_VERSION"
+
+          if [ "$PKG_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::Version mismatch! Release tag '$RELEASE_TAG' expects extension version '$EXPECTED_VERSION', but apps/vscode-extension/package.json specifies '$PKG_VERSION'."
+            exit 1
+          fi
+
+          echo "Version match confirmed: $PKG_VERSION"
+
+      - name: Publish to VS Code Marketplace (OIDC Trusted Publishing)
+        working-directory: apps/vscode-extension
+        run: npx @vscode/vsce publish --oidc --no-dependencies
