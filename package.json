@@ -8,7 +8,8 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build:packages": "npm run build --workspace=@undrift/core && npm run build --workspace=@undrift/parser-tree-sitter && npm run build --workspace=@undrift/analyzer-js-ts",
+    "build": "npm run build:packages && npm run build --workspace=undrift",
     "test": "vitest run",
     "lint": "eslint .",
     "format:check": "prettier --check .",
