@@ -147,8 +147,8 @@ UNDRIFT provides the following configurable settings under `undrift.analysis.*`:
 
 ## Documentation & Community Links
 
-- **Landing Page & Overview:** [https://undrift-landing-website.vercel.app/](https://undrift-landing-website.vercel.app/)
-- **Documentation:** [https://undrift-landing-website.vercel.app/docs](https://undrift-landing-website.vercel.app/docs)
+- **Landing Page & Overview:** [https://undrift.pages.dev/](https://undrift.pages.dev/)
+- **Documentation:** [https://undrift.pages.dev/docs](https://undrift.pages.dev/docs)
 - **Source Repository:** [https://github.com/parnilV06/undrift](https://github.com/parnilV06/undrift)
 - **Issue Tracker:** [https://github.com/parnilV06/undrift/issues](https://github.com/parnilV06/undrift/issues)
 - **License:** GNU General Public License v3.0 ([GPL-3.0-only](LICENSE.md))

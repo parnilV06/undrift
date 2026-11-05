@@ -1,5 +1,4 @@
-// Replace these placeholders once the real destinations exist.
 export const siteConfig = {
-  githubUrl: "#replace-with-github-url",
-  extensionUrl: "#replace-with-vscode-marketplace-url",
+  githubUrl: "https://github.com/parnilV06/undrift",
+  extensionUrl: "https://marketplace.visualstudio.com/items?itemName=ParnilVyawahare.undrift",
 } as const;

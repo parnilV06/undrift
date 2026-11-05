@@ -1620,7 +1620,7 @@ npm run format:check`,
               "- Final Live IDE Acceptance Pass: Pending final validation in Extension Development Host.",
               "- GitHub Release & Repository Tag: Pending.",
               "- VS Code Marketplace Package & Publication: Pending.",
-              "- Public Landing Page Deployment: In progress.",
+              "- Public Landing Page & Documentation: https://undrift.pages.dev/.",
             ],
           },
           {
