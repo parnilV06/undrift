@@ -26,7 +26,7 @@
 
 <p>
   <img src="https://img.shields.io/badge/V1-Feature%20Complete-16A34A?style=flat-square" alt="V1 feature complete" />
-  <img src="https://img.shields.io/badge/Release-Preparation%20In%20Progress-D97706?style=flat-square" alt="Release preparation in progress" />
+  <img src="https://img.shields.io/badge/Release-Preparation%20In%20Progress-D97706?style=flat-square" alt="V1 Released on MarketPlace" />
   <img src="https://img.shields.io/badge/Tests-1%2C058%20Passing-16A34A?style=flat-square" alt="1,058 tests passing" />
   <img src="https://img.shields.io/badge/Architecture-Local--First-7C3AED?style=flat-square" alt="Local-first architecture" />
 </p>
@@ -1018,12 +1018,12 @@ flowchart TD
 | Automated regression suite | **Passed** |
 | Component-integration acceptance scenarios | **Passed** |
 | Manual live IDE acceptance | **Pending** |
-| Final GitHub engineering PR | **Opened — merge status not asserted here** |
-| Public README refresh | **Updated draft prepared; repository commit pending** |
-| GitHub V1 tag and release | **Pending** |
-| VS Code Marketplace package and publication | **Pending** |
-| Landing page implementation | **In progress** |
-| Landing page deployment | **Pending** |
+| Final GitHub engineering PR | **Merged into main** |
+| Public README refresh | **Commited and Updated** |
+| GitHub V1 tag and release | **Completed** |
+| VS Code Marketplace package and publication | **Published at VS Code MarketPlace** |
+| Landing page implementation | **Completed** |
+| Landing page deployment | **Deployed** |
 
 The roadmap above is a release-status snapshot, not a promise that pending distribution steps have already occurred.
 
@@ -1041,33 +1041,47 @@ The `docs/` directory contains the detailed product and engineering specificatio
 | [HLD — High-Level Design](docs/HLD.md) | System boundaries, package responsibilities, architecture, and end-to-end data flow |
 | [LLD — Low-Level Design](docs/LLD.md) | Concrete contracts, interfaces, analysis rules, extraction logic, and lifecycle details |
 | [DEVELOPMENT — Development Guide](docs/DEVELOPMENT.md) | Repository setup, build/test commands, extension debugging, and local development workflow |
+| [CONTRIBUTING — Open-Source Contribution Guide](CONTRIBUTING.md) | Guidlines on How to contribute to the project |
 
----
 
 ## Contributing
 
-UNDRIFT is currently maintained as a personal developer-tool project. Contribution policies and community processes may evolve as the project moves through its public release.
+UNDRIFT is an open-source project, and contributions are welcome!
 
-Before proposing a change:
+Whether you're fixing a bug, improving API extraction, strengthening the analysis engine, adding test coverage, improving the VS Code extension, or working on documentation, your contributions can help make UNDRIFT better.
 
-1. Read the relevant product and technical documentation.
-2. Keep `packages/core` independent of editor and parser implementation APIs.
-3. Add tests for new behavior and bug fixes.
-4. Preserve explicit uncertainty and evidence provenance.
-5. Update the support matrix and documentation when extraction coverage changes.
-6. Run the repository quality checks before opening a pull request.
+### Getting Started
 
-```bash
+Before contributing:
+
+1. Check the [existing issues](https://github.com/parnilV06/undrift/issues) to see whether the problem or feature has already been discussed.
+2. For larger changes or new functionality, open an issue first to discuss the proposed approach.
+3. Read the [Contributing Guide](CONTRIBUTING.md) to understand the repository structure, development setup, testing workflow, and pull request process.
+4. Refer to the technical documentation in [`docs/`](docs/) when working on specific components.
+
+### A Few Things to Keep in Mind
+
+- Keep `packages/core` independent of editor and parser implementation APIs.
+- Add appropriate tests for every new behavior and bug fix.
+- Preserve explicit uncertainty and evidence provenance in analysis results.
+- Update the support matrix, representative fixtures, and documentation when extraction coverage changes.
+- Avoid silently broadening extraction heuristics or introducing unsupported framework patterns without proper validation.
+
+### Running Project Checks
+
+Before submitting a pull request, run the repository quality checks:
+
+\`\`\`bash
 npm test
 npm run typecheck
 npm run lint
 npm run format:check
 npm run build
-```
+\`\`\`
 
-Do not introduce framework or language support by silently broadening heuristics. New support should be backed by representative fixtures, tests, and explicit boundaries.
+For detailed instructions, conventions, and contribution guidelines, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
----
+Have a question or found something that needs improvement? Open an issue in the [UNDRIFT repository](https://github.com/parnilV06/undrift/issues).
 
 ## License
 
@@ -1077,7 +1091,9 @@ UNDRIFT is licensed under the [GNU General Public License v3.0 only](https://www
 
 - **Repository:** [github.com/parnilV06/undrift](https://github.com/parnilV06/undrift)
 - **Issues:** [Report a bug or request a feature](https://github.com/parnilV06/undrift/issues)
-- **Documentation:** [`docs/`](docs/)
+- **Project Docs:** [`docs/`](docs/)
+- **Documentation Website :** [https://undrift.pages.dev/](https://undrift.pages.dev/)
+- **VS Code MarketPlace  :** [UNDRIFT on VS-Code MarketPlace](https://marketplace.visualstudio.com/items?itemName=ParnilVyawahare.undrift)
 
 ---
 
